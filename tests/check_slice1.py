@@ -142,12 +142,15 @@ def run_browser(state, original):
         changed["version"] += 1
         page.keyboard.press("Escape")
         page.mouse.click(box["x"] + 2, box["y"] + 2)  # 빈 곳 클릭으로 선택 해제 시도
+        if page.locator("#panel .back").count():
+            page.locator("#panel .back").click()  # 상세 화면이면 목록으로
         FACTORY.write_text(json.dumps(changed, ensure_ascii=False, indent=2), encoding="utf-8")
         t0 = time.time()
         seen = False
         while time.time() - t0 < 8:
-            lines = [l for l in page.locator("#panel").inner_text().splitlines() if target["name"] in l]
-            if any("불량" in l for l in lines):
+            # 목록은 줄(li.machine-row) 하나에 이름 span 과 상태 span 이 따로 있다. 줄 단위로 읽는다
+            rows = page.locator("#panel .machine-row").all_inner_texts()
+            if any(target["name"] in r and "불량" in r for r in rows):
                 seen = True
                 break
             page.wait_for_timeout(250)
