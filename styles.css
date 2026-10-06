@@ -190,9 +190,10 @@ body {
 .detail-name { margin: 0; font-size: var(--fs-title); font-weight: 700; }
 /* 한 행 = 한 줄. 열 사이 gap 을 두면 밑줄이 끊기므로 gap 0, 간격은 padding 으로 */
 .detail-table { display: grid; grid-template-columns: auto 1fr; gap: 0; margin: 0; }
-.detail-table dt, .detail-table dd { min-height: var(--s-5); margin: 0; padding: var(--s-2) 0; border-bottom: 1px solid var(--line); }
-.detail-table dt { padding-right: var(--s-4); font-size: var(--fs-cap); text-align: left; color: var(--muted); }
-.detail-table dd { font-size: var(--fs-body); text-align: right; font-weight: 700; }
+.detail-row { display: contents; }
+.detail-label, .detail-value { min-height: var(--s-5); margin: 0; padding: var(--s-2) 0; border-bottom: 1px solid var(--line); }
+.detail-label { padding-right: var(--s-4); font-size: var(--fs-cap); text-align: left; color: var(--muted); }
+.detail-value { font-size: var(--fs-body); text-align: right; font-weight: 700; }
 .detail-empty { margin: 0; font-size: var(--fs-cap); color: var(--muted); }
 .muted { margin: 0; color: var(--muted); }
 
