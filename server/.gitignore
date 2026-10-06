@@ -1,0 +1,11 @@
+/.bundle
+/vendor/bundle
+/log/*
+!/log/.keep
+/tmp/*
+!/tmp/.keep
+/storage/*
+/public/assets
+/config/master.key
+/config/credentials/*.key
+.env*
