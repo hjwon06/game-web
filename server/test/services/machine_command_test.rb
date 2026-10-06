@@ -62,6 +62,28 @@ class MachineCommandTest < ActiveSupport::TestCase
     assert_equal ["running", 1], [@m2.reload.state, @m2.version]
   end
 
+  test "이미 쓴 키를 없는 기계 코드로 재요청하면 404 가 아니라 422 다" do
+    key = SecureRandom.uuid
+    assert_equal 200, run_command(@m2, "start", key: key).status
+    stored = Command.find_by!(idempotency_key: key).attributes
+
+    result = MachineCommand.call(idempotency_key: key, machine_code: "M9", kind: "start", base_version: 0)
+
+    assert_equal 422, result.status
+    assert_nil result.machine
+    assert_equal stored, Command.find_by!(idempotency_key: key).attributes
+    assert_equal 1, Command.where(idempotency_key: key).count
+  end
+
+  test "이미 쓴 키를 같은 내용으로 재요청하면 기계가 있어도 저장된 결과를 재전송한다" do
+    key = SecureRandom.uuid
+    run_command(@m1, "stop", base_version: 5, key: key)
+    again = MachineCommand.call(idempotency_key: key, machine_code: "M1", kind: "stop", base_version: 5)
+
+    assert_equal 409, again.status
+    assert_equal @m1.id, again.machine.id
+  end
+
   test "이미 목표 상태면 200 no-op 이고 version 은 그대로다" do
     result = run_command(@m1, "start")
 

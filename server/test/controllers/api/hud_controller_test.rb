@@ -44,24 +44,34 @@ class HudControllerTest < ActionDispatch::IntegrationTest
     assert_in_delta 2.0 / 22, response.parsed_body["defect_ratio_10m"], 0.0001
   end
 
-  test "work_order 의 produced_qty 합은 production_events good_qty 합과 같다" do
-    tick = Simulation::Accumulator.new
+  test "사전 누적과 여러 이벤트가 있어도 여러 번 flush 한 뒤 지시별 produced_qty 는 good_qty 합과 같다" do
+    @m2.update!(state: "running")
+    @order.update!(target_qty: 10_000)
+    order2 = WorkOrder.create!(code: "WO-2", machine: @m2, product: "브래킷 B", target_qty: 10_000,
+                               status: "active")
+    add_event(NOW - 120, 12, 1)
+    add_event(NOW - 110, 18, 0)
+    assert_equal 30, @order.reload.produced_qty, "사전 누적은 기존 이벤트 합과 맞춰 둔다"
+
+    snapshot = [{ code: "M1", state: "running", version: 0 }, { code: "M2", state: "running", version: 0 }]
     rng = Random.new(1)
-    50.times do
-      break if tick.entry("M1")&.good_qty.to_i.positive?
-      tick.tick([{ code: "M1", state: "running", version: 0 }], rng)
+    flushed = 0
+    5.times do |i|
+      tick = Simulation::Accumulator.new
+      10.times { tick.tick(snapshot, rng) }
+      flushed += Simulation::Flusher.call(tick, NOW - 100 + (i * 10))
     end
-    assert tick.entry("M1").good_qty.positive?, "50틱 안에 생산이 있어야 한다"
-    @order.update!(produced_qty: 0)
+    assert_equal 10, flushed, "기계 2대 × 5구간이 모두 기록돼야 한다"
 
-    travel_to(NOW) do
-      Simulation::Flusher.call(tick, NOW - 10)
-      get "/api/hud"
+    travel_to(NOW) { get "/api/hud" }
+
+    [@order, order2].each do |order|
+      assert_equal ProductionEvent.where(work_order: order).sum(:good_qty), order.reload.produced_qty, order.code
     end
-
+    assert_operator @order.produced_qty, :>, 30
+    assert_operator order2.produced_qty, :>, 0
     shown = response.parsed_body["machines"].first["work_order"]["produced_qty"]
-    assert_equal ProductionEvent.where(work_order: @order).sum(:good_qty), shown
-    assert_operator shown, :>, 0
+    assert_equal @order.produced_qty, shown
   end
 
   test "같은 ETag 면 304 이고 데이터가 바뀌면 200 이다" do
