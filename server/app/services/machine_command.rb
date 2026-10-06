@@ -25,13 +25,24 @@ class MachineCommand
   def call
     return Result.new(status: 422, machine: nil) unless valid_input?
 
+    stored = Command.find_by(idempotency_key: @key) # 기계 조회보다 먼저: 같은 키·다른 내용은 없는 기계여도 422
+    return replay(Machine.find_by(code: @machine_code)&.id, stored) if stored
+
     machine = Machine.find_by(code: @machine_code)
-    return Result.new(status: 404, machine: nil) unless machine
+    return not_found unless machine
 
     Machine.transaction { run(machine.id) }
   end
 
   private
+
+  # 조회 직후 같은 키가 동시에 커밋됐을 수 있으므로 404 를 내기 전에 한 번 더 본다.
+  def not_found
+    stored = Command.find_by(idempotency_key: @key)
+    return replay(nil, stored) if stored
+
+    Result.new(status: 404, machine: nil)
+  end
 
   def run(machine_id)
     command_id = insert_command(machine_id)                       # ①
@@ -54,9 +65,8 @@ class MachineCommand
   end
 
   # 같은 키를 다른 내용으로 재사용하면 원래 결과를 돌려주지 않고 422 로 거절한다. 기존 행은 건드리지 않는다.
-  def replay(machine_id)
-    stored = Command.find_by!(idempotency_key: @key)
-    return Result.new(status: 422, machine: Machine.find(machine_id)) unless same_request?(stored, machine_id)
+  def replay(machine_id, stored = Command.find_by!(idempotency_key: @key))
+    return Result.new(status: 422, machine: machine_id && Machine.find(machine_id)) unless same_request?(stored, machine_id)
 
     Result.new(status: stored.result_status, machine: Machine.find(stored.machine_id))
   end

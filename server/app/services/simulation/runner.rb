@@ -1,8 +1,12 @@
 module Simulation
   # 1초마다 스냅샷을 읽어 tick 하고, 10초 경계에서 flush 한다. SIGTERM 에서는 마지막 flush 없이 끝난다.
   class Runner
-    def initialize(logger: Rails.logger)
+    MAX_FAILURES = 3
+
+    def initialize(logger: Rails.logger, flusher: Flusher)
       @logger = logger
+      @flusher = flusher
+      @pending = []
       @accumulator = Accumulator.new
       @rng = Random.new(Config::SEED)
       @stopped = false
@@ -34,11 +38,26 @@ module Simulation
       end
     end
 
+    # 롤백된 구간은 누적기째 보류 목록에 두고 같은 bucket_start 로 다음 경계에서 재시도한다.
+    # 새 틱은 새 누적기에 쌓이므로 두 구간이 합쳐지지 않는다. 중복 기록은 Flusher 의 ON CONFLICT 가 막는다.
     def flush(bucket)
-      Flusher.call(@accumulator, bucket)
+      current = @accumulator
+      @accumulator = Accumulator.new
+      @pending << { bucket: bucket, accumulator: current, failures: 0 }
+      @pending.reject! { |item| settled?(item) }
+    end
+
+    # 성공하면 true, 3회 연속 실패하면 폐기(true), 그 외에는 보류 유지(false).
+    def settled?(item)
+      @flusher.call(item[:accumulator], item[:bucket])
+      true
     rescue StandardError => e
-      @logger.error("sim flush failed: #{e.class} #{e.message}")
-      @accumulator.reset! # 유실 감수. 쌓아 두면 다음 구간에 두 구간이 합쳐진다.
+      item[:failures] += 1
+      @logger.error("sim flush failed (#{item[:failures]}/#{MAX_FAILURES}) #{item[:bucket]}: #{e.class} #{e.message}")
+      return false if item[:failures] < MAX_FAILURES
+
+      @logger.warn("sim flush dropped bucket #{item[:bucket]} after #{MAX_FAILURES} failures")
+      true
     end
 
     def bucket_of(epoch_seconds)
