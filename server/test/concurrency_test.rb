@@ -36,7 +36,8 @@ class ConcurrencyTest < ActiveSupport::TestCase
     )
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + WAIT_SECONDS
     while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
-      query = ActiveRecord::Base.connection.select_value(sql)
+      # 쿼리 캐시가 켜져 있으면 첫 결과(B 대기 전)를 계속 돌려주므로 캐시를 우회한다.
+      query = ActiveRecord::Base.uncached { ActiveRecord::Base.connection.select_value(sql) }
       return query if query
 
       sleep 0.02
