@@ -40,12 +40,26 @@ class MachineCommandTest < ActiveSupport::TestCase
   test "base_version 불일치는 409 이고 재시도도 409 다" do
     key = SecureRandom.uuid
     first = run_command(@m1, "stop", base_version: 5, key: key)
-    again = run_command(@m1, "stop", base_version: @m1.version, key: key)
+    again = run_command(@m1, "stop", base_version: 5, key: key)
 
     assert_equal [409, 409], [first.status, again.status]
     assert_equal 409, Command.find_by!(idempotency_key: key).result_status
     assert_equal ["running", 0], [@m1.reload.state, @m1.version]
     assert_equal 0, MachineStateEvent.count
+  end
+
+  test "같은 키를 다른 기계·명령·버전으로 쓰면 422 이고 기존 행은 그대로다" do
+    key = SecureRandom.uuid
+    assert_equal 200, run_command(@m2, "start", key: key).status
+    stored = Command.find_by!(idempotency_key: key).attributes
+
+    [[@m1, "start", 0], [@m2, "stop", 0], [@m2, "start", 7]].each do |machine, kind, version|
+      result = run_command(machine, kind, base_version: version, key: key)
+      assert_equal 422, result.status, [machine.code, kind, version].inspect
+    end
+    assert_equal stored, Command.find_by!(idempotency_key: key).attributes
+    assert_equal 1, Command.where(idempotency_key: key).count
+    assert_equal ["running", 1], [@m2.reload.state, @m2.version]
   end
 
   test "이미 목표 상태면 200 no-op 이고 version 은 그대로다" do
