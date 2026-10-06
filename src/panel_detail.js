@@ -42,13 +42,17 @@ export function renderDetail(section, state, machine) {
   const head = el('div', 'detail-head');
   head.append(icon, el('h3', 'detail-name', machine.name));
 
-  const table = el('dl', 'detail-table');
+  const table = el('div', 'detail-table');
   const rows = [
     ['상태', stateLabel(machine.state), `state-${machine.state}`],
     ['처리 수량', fmt(machine.processed), 'num'],
     ['위치', `x ${machine.x}, y ${machine.y}`, 'num'],
     ['들어오는 벨트 수', String(incomingBelts(state, machine.id)), 'num'],
   ];
-  rows.forEach(([k, v, cls]) => table.append(el('dt', null, k), el('dd', cls, v)));
+  rows.forEach(([k, v, cls]) => {
+    const row = el('div', 'detail-row');
+    row.append(el('span', 'detail-label', k), el('span', `detail-value ${cls}`, v));
+    table.append(row);
+  });
   section.replaceChildren(head, table);
 }

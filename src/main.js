@@ -28,7 +28,25 @@ async function boot() {
       scale: { mode: Phaser.Scale.NONE }, // FIT 금지: 정수 배율(타일 16px x 3) 고정
       scene,
     });
+    fitCanvas(game);
   };
+
+  // 내부 해상도는 그대로 두고 CSS 표시 크기만 줄인다. NONE 모드의 Phaser 는 표시 크기를
+  // 스스로 다시 재지 않으므로, 크기가 바뀔 때마다 refresh() 로 입력 좌표 보정값(displayScale)을 갱신한다.
+  function fitCanvas(g) {
+    const host = document.getElementById('game');
+    host.style.width = 'min(768px, 100%)';
+    host.style.height = 'auto';
+    host.style.aspectRatio = '768 / 480';
+    const cv = g.canvas;
+    cv.style.width = '100%';
+    cv.style.height = '100%';
+    cv.style.imageRendering = 'pixelated';
+    const refresh = () => g.scale.refresh();
+    window.addEventListener('resize', refresh);
+    new ResizeObserver(refresh).observe(host);
+    refresh();
+  }
 
   store.subscribe(({ state, error }) => {
     if (state && !game) startGame(state.grid);

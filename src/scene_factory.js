@@ -117,7 +117,7 @@ export class FactoryScene extends Phaser.Scene {
       if (!v) return;
       v.state = m.state;
       v.spr.setAlpha(m.state === 'stopped' ? STOPPED_ALPHA : 1);
-      v.tape.forEach((t) => t.setVisible(m.state === 'defect'));
+      v.dash.setVisible(m.state === 'defect');
       this.paintTint(v);
       drawBadge(v, m.state);
     });

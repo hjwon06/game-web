@@ -19,21 +19,23 @@
   <div class="layout">
     <section class="stage" aria-label="공장 화면">
       <div class="stage-area">
-        <div class="frame">
-          <div id="game"></div>
-          <i class="bracket bracket-tl" aria-hidden="true"></i>
-          <i class="bracket bracket-tr" aria-hidden="true"></i>
-          <i class="bracket bracket-bl" aria-hidden="true"></i>
-          <i class="bracket bracket-br" aria-hidden="true"></i>
+        <div class="stage-col">
+          <div class="frame">
+            <div id="game"></div>
+            <i class="bracket bracket-tl" aria-hidden="true"></i>
+            <i class="bracket bracket-tr" aria-hidden="true"></i>
+            <i class="bracket bracket-bl" aria-hidden="true"></i>
+            <i class="bracket bracket-br" aria-hidden="true"></i>
+          </div>
+          <ul id="legend" class="legend" aria-label="범례">
+            <li class="legend-item"><i class="dot dot-running" aria-hidden="true"></i>가동</li>
+            <li class="legend-item"><i class="dot dot-stopped" aria-hidden="true"></i>정지</li>
+            <li class="legend-item"><i class="dot dot-defect" aria-hidden="true"></i>불량</li>
+            <li class="legend-item legend-tile"><i class="tile-icon tile-icon-sm icon-machine" aria-hidden="true"></i>기계</li>
+            <li class="legend-item"><i class="tile-icon tile-icon-sm icon-box" aria-hidden="true"></i>제품 상자</li>
+          </ul>
         </div>
       </div>
-      <ul id="legend" class="legend" aria-label="범례">
-        <li class="legend-item"><i class="dot dot-running" aria-hidden="true"></i>가동</li>
-        <li class="legend-item"><i class="dot dot-stopped" aria-hidden="true"></i>정지</li>
-        <li class="legend-item"><i class="dot dot-defect" aria-hidden="true"></i>불량</li>
-        <li class="legend-item legend-tile"><i class="tile-icon tile-icon-sm icon-machine" aria-hidden="true"></i>기계</li>
-        <li class="legend-item"><i class="tile-icon tile-icon-sm icon-box" aria-hidden="true"></i>제품 상자</li>
-      </ul>
     </section>
     <aside id="panel" class="panel" aria-live="polite">
       <section id="panel-summary" class="summary" aria-label="요약"></section>

@@ -7,15 +7,29 @@ export const COLORS = {
   badge: { running: 0x0f766e, stopped: 0x64748b, defect: 0xb91c1c },
 };
 
+// 캔버스 안 바닥·격자·선택 색은 여기 한 곳에만 둔다.
+export const CANVAS_FLOOR = 0x2b3445; // #2B3445
+export const CANVAS_GRID = 0x34405a; // #34405A, 칸(48px)마다 1px
+export const CANVAS_SELECT = { inner: 0xf1f5f9, outer: 0x1e3a8a }; // 안 2px 실선 + 바깥 1px
+
 export const BOX_SCALE = 2;
 const BADGE_R = 6; // 12px 원
 const BADGE_INSET = 10;
-const OUTLINE = 2;
-
-const frameOf = (v) => (Array.isArray(v) ? v[0] : v);
+const DASH = 6;
+const DASH_GAP = 4;
 
 export function drawFloor(scene, grid, add) {
   const { floor } = scene.sp.tiles;
+  if (!floor || floor.length === 0) {
+    const w = grid.w * scene.cell;
+    const h = grid.h * scene.cell;
+    const g = add(scene.add.graphics().setDepth(0));
+    g.fillStyle(CANVAS_FLOOR, 1).fillRect(0, 0, w, h);
+    g.lineStyle(1, CANVAS_GRID, 1);
+    for (let x = 0; x <= w; x += scene.cell) g.lineBetween(x + 0.5, 0, x + 0.5, h);
+    for (let y = 0; y <= h; y += scene.cell) g.lineBetween(0, y + 0.5, w, y + 0.5);
+    return;
+  }
   for (let y = 0; y < grid.h; y++) {
     for (let x = 0; x < grid.w; x++) {
       const p = scene.px(x, y);
@@ -37,16 +51,24 @@ export function drawMachine(scene, m, add) {
   const spr = add(scene.add.image(cx, cy, 'tiles', scene.sp.tiles.machine[m.color]).setScale(scene.zoom * 2).setDepth(10));
   spr.setInteractive({ useHandCursor: true });
   const badge = add(scene.add.graphics().setDepth(15));
-  // 불량 경고띠: 기계 바로 아래 줄(2칸). 상태가 불량일 때만 보인다.
-  const tapeFrame = frameOf(scene.sp.tiles.warning);
-  const tape = [];
-  if (tapeFrame != null && m.y + 2 < scene.grid.h) {
-    for (let i = 0; i < 2; i++) {
-      const p = scene.px(m.x + i, m.y + 2);
-      tape.push(add(scene.add.image(p.x, p.y, 'tiles', tapeFrame).setScale(scene.zoom).setDepth(2).setVisible(false)));
+  // 불량 외곽선: 기계 둘레 2px 점선. 상태가 불량일 때만 보인다.
+  const dash = add(scene.add.graphics().setDepth(12).setVisible(false));
+  dash.lineStyle(2, COLORS.badge.defect, 1);
+  const { x, y, w, h } = r;
+  const edge = (x1, y1, x2, y2) => {
+    const len = Math.hypot(x2 - x1, y2 - y1);
+    const ux = (x2 - x1) / len;
+    const uy = (y2 - y1) / len;
+    for (let d = 0; d < len; d += DASH + DASH_GAP) {
+      const e = Math.min(d + DASH, len);
+      dash.lineBetween(x1 + ux * d, y1 + uy * d, x1 + ux * e, y1 + uy * e);
     }
-  }
-  return { spr, badge, tape, rect: r, cx, cy, state: null };
+  };
+  edge(x + 1, y + 1, x + w - 1, y + 1);
+  edge(x + w - 1, y + 1, x + w - 1, y + h - 1);
+  edge(x + w - 1, y + h - 1, x + 1, y + h - 1);
+  edge(x + 1, y + h - 1, x + 1, y + 1);
+  return { spr, badge, dash, rect: r, cx, cy, state: null };
 }
 
 // 상태 배지: 기계 오른쪽 위의 12px 원 + 흰 기호. 가동 = 채운 원, 정지 = 두 줄, 불량 = 느낌표
@@ -63,12 +85,17 @@ export function drawBadge(v, state) {
 }
 
 export function makeOutline(scene) {
-  return scene.add.rectangle(0, 0, 1, 1).setStrokeStyle(OUTLINE, COLORS.accent).setFillStyle().setDepth(30).setVisible(false);
+  return scene.add.graphics().setDepth(30).setVisible(false);
 }
 
+// 두 겹: 안쪽 2px 밝은 실선 + 바깥 1px 남색
 export function placeOutline(outline, v) {
+  outline.clear();
   if (!v) return outline.setVisible(false);
-  outline.setPosition(v.cx, v.cy).setSize(v.rect.w - OUTLINE, v.rect.h - OUTLINE).setVisible(true);
+  const { x, y, w, h } = v.rect;
+  outline.lineStyle(2, CANVAS_SELECT.inner, 1).strokeRect(x + 1, y + 1, w - 2, h - 2);
+  outline.lineStyle(1, CANVAS_SELECT.outer, 1).strokeRect(x - 0.5, y - 0.5, w + 1, h + 1);
+  return outline.setVisible(true);
 }
 
 // 벨트: 칸마다 타일을 깔고, 상자가 지나갈 경로(pts)는 마지막 칸에서 기계 가장자리까지 잇는다.

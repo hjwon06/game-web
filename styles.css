@@ -83,18 +83,19 @@ body {
 
 .stage { display: flex; flex-direction: column; min-width: 0; }
 
-.stage-area { display: flex; flex: 1; overflow: auto; padding: var(--s-5); }
+.stage-area { flex: 1; padding: var(--s-4) var(--s-5) var(--s-5); }
+
+/* 캔버스 프레임과 범례 바를 한 폭으로 묶는다. 위쪽 정렬, 좁은 화면에서는 100% 로 줄어든다 */
+.stage-col { width: min(calc(var(--w-canvas) + var(--frame) * 2), 100%); margin: 0 auto; }
 
 .frame {
   position: relative;
-  flex: none;
-  margin: auto; /* justify-content:center 와 달리 좁은 화면에서 왼쪽이 잘리지 않는다 */
-  width: calc(var(--w-canvas) + var(--frame) * 2);
-  height: calc(var(--h-canvas) + var(--frame) * 2);
+  width: 100%;
   border: var(--frame) solid var(--navy);
 }
-#game { width: var(--w-canvas); height: var(--h-canvas); }
-#game canvas { display: block; }
+/* 내부 해상도는 768x480 고정, CSS 표시 크기만 줄인다 */
+#game { width: 100%; aspect-ratio: 768 / 480; }
+#game canvas { display: block; width: 100% !important; height: 100% !important; image-rendering: pixelated; }
 
 .bracket { position: absolute; width: var(--bracket); height: var(--bracket); border: 0 solid var(--navy); }
 .bracket-tl { top: calc(var(--frame) * -1 - var(--bracket)); left: calc(var(--frame) * -1 - var(--bracket)); border-top-width: var(--frame); border-left-width: var(--frame); }
@@ -109,11 +110,11 @@ body {
   flex-wrap: wrap;
   gap: var(--s-4);
   min-height: var(--h-legend);
-  margin: 0;
+  margin: var(--s-3) 0 0;
   padding: 0 var(--s-4);
   list-style: none;
   background: var(--surface);
-  border-top: 1px solid var(--line);
+  border: 1px solid var(--line);
   font-size: var(--fs-cap);
 }
 .legend-item { display: flex; align-items: center; gap: var(--s-2); }
@@ -187,10 +188,11 @@ body {
 
 .detail-head { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-3); }
 .detail-name { margin: 0; font-size: var(--fs-title); font-weight: 700; }
-.detail-table { display: grid; grid-template-columns: auto 1fr; gap: 0 var(--s-4); margin: 0; }
-.detail-table dt, .detail-table dd { min-height: var(--s-5); margin: 0; padding: var(--s-1) 0; border-bottom: 1px solid var(--line); }
-.detail-table dt { color: var(--muted); }
-.detail-table dd { text-align: right; font-weight: 700; }
+/* 한 행 = 한 줄. 열 사이 gap 을 두면 밑줄이 끊기므로 gap 0, 간격은 padding 으로 */
+.detail-table { display: grid; grid-template-columns: auto 1fr; gap: 0; margin: 0; }
+.detail-table dt, .detail-table dd { min-height: var(--s-5); margin: 0; padding: var(--s-2) 0; border-bottom: 1px solid var(--line); }
+.detail-table dt { padding-right: var(--s-4); font-size: var(--fs-cap); text-align: left; color: var(--muted); }
+.detail-table dd { font-size: var(--fs-body); text-align: right; font-weight: 700; }
 .detail-empty { margin: 0; font-size: var(--fs-cap); color: var(--muted); }
 .muted { margin: 0; color: var(--muted); }
 
