@@ -46,7 +46,12 @@ class HudControllerTest < ActionDispatch::IntegrationTest
 
   test "work_order 의 produced_qty 합은 production_events good_qty 합과 같다" do
     tick = Simulation::Accumulator.new
-    tick.tick([{ code: "M1", state: "running", version: 0 }], Random.new(1)) while tick.entry("M1").nil? || tick.entry("M1").good_qty.zero?
+    rng = Random.new(1)
+    50.times do
+      break if tick.entry("M1")&.good_qty.to_i.positive?
+      tick.tick([{ code: "M1", state: "running", version: 0 }], rng)
+    end
+    assert tick.entry("M1").good_qty.positive?, "50틱 안에 생산이 있어야 한다"
     @order.update!(produced_qty: 0)
 
     travel_to(NOW) do
