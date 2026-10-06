@@ -1,0 +1,24 @@
+{
+  "sheet": {
+    "file": "assets/kenney-tiny-factory/Tilemap/tilemap_packed.png",
+    "tile": 16,
+    "cols": 12,
+    "rows": 11,
+    "spacing": 0
+  },
+  "scale": 3,
+  "tiles": {
+    "floor": [0, 1],
+    "belt_left": [25, 37],
+    "belt_mid": [26, 38],
+    "belt_right": [27, 39],
+    "box": 73,
+    "machine": {
+      "red": 75,
+      "yellow": 87,
+      "green": 99,
+      "blue": 111
+    },
+    "worker": 120
+  }
+}
