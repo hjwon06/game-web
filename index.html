@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>팩토리 시뮬 — 첫 조각</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="layout">
+    <section class="stage" aria-label="공장 화면">
+      <div id="game"></div>
+    </section>
+    <aside id="panel" class="panel" aria-live="polite">
+      <h1 id="panel-title" class="panel-title">기계 목록</h1>
+      <div id="panel-body" class="panel-body"></div>
+      <p id="panel-error" class="panel-error" hidden></p>
+    </aside>
+  </main>
+  <script src="vendor/phaser-3.90.0.min.js"></script>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
