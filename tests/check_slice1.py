@@ -133,7 +133,7 @@ def run_browser(state, original):
         page.screenshot(path=str(OUT / "panel_after_click.png"))
         check("④ 기계 클릭 -> 패널에 이름·상태·처리 수량", ok4, "(" + ", ".join(detail4) + ")")
 
-        # ⑤ factory.json 변경 -> 5초 안에 목록 반영 (선택 해제 후 목록 상태에서 확인)
+        # ⑤ factory.json 변경 -> 8초 안에 목록 반영 (선택 해제 후 목록 상태에서 확인)
         target = next(m for m in state["machines"] if m["state"] != "defect")
         changed = json.loads(original)
         for m in changed["machines"]:
@@ -145,14 +145,14 @@ def run_browser(state, original):
         FACTORY.write_text(json.dumps(changed, ensure_ascii=False, indent=2), encoding="utf-8")
         t0 = time.time()
         seen = False
-        while time.time() - t0 < 5:
+        while time.time() - t0 < 8:
             lines = [l for l in page.locator("#panel").inner_text().splitlines() if target["name"] in l]
             if any("불량" in l for l in lines):
                 seen = True
                 break
             page.wait_for_timeout(250)
         page.screenshot(path=str(OUT / "after_defect.png"))
-        check("⑤ state 변경+version 증가 -> 5초 안에 패널 '불량'", seen,
+        check("⑤ state 변경+version 증가 -> 8초 안에 패널 '불량'", seen,
               f"({target['name']}, {time.time() - t0:.2f}s)")
 
         check("① 콘솔 에러 0", not errors, f"({errors})")

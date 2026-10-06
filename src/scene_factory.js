@@ -1,8 +1,5 @@
 // 그리기와 입력만 한다. 상태의 원본은 data/factory.json 이고 여기서는 읽기만 한다.
-// 타일 번호는 data/sprites.json 에서만 온다 (sheet / floor / belt / box / machine / worker).
-const TILE = 16;
-const SCALE = 3;
-const CELL = TILE * SCALE;
+// 타일 번호·배율은 data/sprites.json 에서만 온다 (sheet / scale / tiles).
 const BOX_SCALE = 2;
 const BELT_SPEED = 1.2; // 칸/초
 const BOX_GAP = 1.5; // 상자 사이 간격(칸)
@@ -14,6 +11,8 @@ export class FactoryScene extends Phaser.Scene {
   constructor({ sprites, onSelect }) {
     super('factory');
     this.sp = sprites;
+    this.zoom = this.sp.scale; // this.scale 은 Phaser ScaleManager 라서 이름을 피한다
+    this.cell = this.sp.sheet.tile * this.zoom;
     this.onSelect = onSelect || (() => {});
     this.pending = null;
     this.built = false;
@@ -26,13 +25,13 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   preload() {
-    const { path, tile } = this.sp.sheet;
-    this.load.spritesheet('tiles', path, { frameWidth: tile || TILE, frameHeight: tile || TILE });
+    const tile = this.sp.sheet.tile;
+    this.load.spritesheet('tiles', this.sp.sheet.file, { frameWidth: tile, frameHeight: tile });
   }
 
   create() {
     this.cameras.main.setBackgroundColor('#F2F3F5');
-    this.marker = this.add.rectangle(0, 0, CELL, CELL).setStrokeStyle(3, 0x1a1a2e).setFillStyle().setDepth(30).setVisible(false);
+    this.marker = this.add.rectangle(0, 0, this.cell, this.cell).setStrokeStyle(3, 0x1a1a2e).setFillStyle().setDepth(30).setVisible(false);
     this.input.on('pointerdown', (_p, over) => {
       if (over.length === 0) this.select(null);
     });
@@ -63,7 +62,8 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   px(x, y) {
-    return { x: x * CELL + CELL / 2, y: y * CELL + CELL / 2 };
+    const c = this.cell;
+    return { x: x * c + c / 2, y: y * c + c / 2 };
   }
 
   track(obj) {
@@ -79,54 +79,54 @@ export class FactoryScene extends Phaser.Scene {
     this.objs = [];
     this.machines.clear();
     this.belts = [];
-    this.scale.setGameSize(f.grid.w * CELL, f.grid.h * CELL);
+    this.scale.setGameSize(f.grid.w * this.cell, f.grid.h * this.cell);
 
-    const { floor, belt, box, machine, worker } = this.sp;
+    const { floor, box, machine, worker } = this.sp.tiles;
     for (let y = 0; y < f.grid.h; y++) {
       for (let x = 0; x < f.grid.w; x++) {
         const p = this.px(x, y);
-        this.track(this.add.image(p.x, p.y, 'tiles', floor[(x + y) % floor.length]).setScale(SCALE).setDepth(0));
+        this.track(this.add.image(p.x, p.y, 'tiles', floor[(x + y) % floor.length]).setScale(this.zoom).setDepth(0));
       }
     }
-    f.conveyors.forEach((c) => this.buildBelt(c, f, belt, box));
+    f.conveyors.forEach((c) => this.buildBelt(c, f, this.sp.tiles, box));
     f.machines.forEach((m) => {
       const p = this.px(m.x, m.y);
-      const spr = this.track(this.add.image(p.x, p.y, 'tiles', machine[m.color]).setScale(SCALE).setDepth(10));
+      const spr = this.track(this.add.image(p.x, p.y, 'tiles', machine[m.color]).setScale(this.zoom).setDepth(10));
       spr.setInteractive({ useHandCursor: true });
       spr.on('pointerdown', () => this.select(m.id));
       this.machines.set(m.id, { spr, x: p.x, y: p.y, state: null });
     });
     f.workers.forEach((w) => {
       const p = this.px(w.x, w.y);
-      const spr = this.track(this.add.image(p.x, p.y, 'tiles', worker).setScale(SCALE).setDepth(20));
-      this.tweens.add({ targets: spr, y: p.y - SCALE * 2, duration: 450, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      const spr = this.track(this.add.image(p.x, p.y, 'tiles', worker).setScale(this.zoom).setDepth(20));
+      this.tweens.add({ targets: spr, y: p.y - this.zoom * 2, duration: 450, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     });
     if (this.selectedId && !this.machines.has(this.selectedId)) this.select(null);
     else this.placeMarker();
   }
 
-  buildBelt(c, f, beltSp, boxFrame) {
+  buildBelt(c, f, tiles, boxFrame) {
     const target = f.machines.find((m) => m.id === c.to);
     const pts = c.path.map(([x, y]) => this.px(x, y));
     if (target) pts.push(this.px(target.x, target.y));
     const cells = c.path.map(([x, y], i) => {
       const next = pts[i + 1];
       const cur = pts[i];
-      const key = c.path.length === 1 ? 'mid' : i === 0 ? 'start' : i === c.path.length - 1 ? 'end' : 'mid';
-      const spr = this.track(this.add.image(cur.x, cur.y, 'tiles', beltSp[key][0]).setScale(SCALE).setDepth(1));
+      const key = c.path.length === 1 ? 'belt_mid' : i === 0 ? 'belt_left' : i === c.path.length - 1 ? 'belt_right' : 'belt_mid';
+      const spr = this.track(this.add.image(cur.x, cur.y, 'tiles', tiles[key][0]).setScale(this.zoom).setDepth(1));
       if (next) spr.setAngle(next.x < cur.x ? 180 : next.y > cur.y ? 90 : next.y < cur.y ? -90 : 0);
-      return { spr, frames: beltSp[key] };
+      return { spr, frames: tiles[key] };
     });
     const cum = [0];
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
     const b = { id: c.id, to: c.to, pts, cum, total: cum[cum.length - 1], cells, boxes: [], running: false, phase: 0, sinceSpawn: 0, boxFrame };
     // 멈춘 벨트에서도 기계 앞 상자가 보이도록 미리 채워 둔다.
-    let s = b.total - CELL * 0.9;
+    let s = b.total - this.cell * 0.9;
     while (s >= 0) {
       this.addBox(b, s);
-      s -= BOX_GAP * CELL;
+      s -= BOX_GAP * this.cell;
     }
-    b.sinceSpawn = (s + BOX_GAP * CELL) / CELL;
+    b.sinceSpawn = (s + BOX_GAP * this.cell) / this.cell;
     this.belts.push(b);
   }
 
@@ -193,7 +193,7 @@ export class FactoryScene extends Phaser.Scene {
         this.addBox(b, 0);
       }
       b.boxes = b.boxes.filter((box) => {
-        box.s += BELT_SPEED * CELL * dt;
+        box.s += BELT_SPEED * this.cell * dt;
         if (box.s >= b.total) {
           box.spr.destroy();
           this.objs = this.objs.filter((o) => o !== box.spr);
