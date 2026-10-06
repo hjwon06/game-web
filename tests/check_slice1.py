@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """첫 조각 검사. 레포 루트에서: python3 tests/check_slice1.py
 
-가정(페이지 담당 cell 과 맞춰야 하는 선택자):
+선택자는 아래 SEL 한 곳에 모았다. 페이지 담당(cell)의 index.html/panel.js/topbar.js 가
+확정되면 이 표만 맞춘다. (작성 시점에 새 파일이 아직 없어 이름은 가정값이다.)
   - 게임 캔버스: 페이지의 첫 <canvas>
-  - 상태 패널: #panel  (기계 목록·상세 텍스트가 이 안에 들어간다)
   - 상태 라벨: 가동 / 정지 / 불량
 """
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import time
@@ -22,6 +23,14 @@ PORT = 8790
 URL = f"http://127.0.0.1:{PORT}/"
 LABEL = {"running": "가동", "stopped": "정지", "defect": "불량"}
 MAX_LINES = 300
+SEL = {
+    "panel": "#panel",
+    "row": "#panel .machine-row",          # 목록 행(버튼). 이름·상태·수량이 한 행 안에
+    "detail": "#panel .machine-detail",    # 선택 상세 영역
+    "topbar": "#topbar",
+    "summary_number": "#panel .summary-number",  # 대표 수치(가동 대수)
+}
+CANVAS_CSS = (768, 480)  # 16x10 격자 x 48px
 
 results = []
 
@@ -124,33 +133,60 @@ def run_browser(state, original):
         sy = box["height"] / grid["h"]
         ok4, detail4 = True, []
         for m in state["machines"]:
-            page.mouse.click(box["x"] + (m["x"] + 0.5) * sx, box["y"] + (m["y"] + 0.5) * sy)
+            # 기계는 2x2 칸 — 중심은 (x+1, y+1) 칸 모서리
+            page.mouse.click(box["x"] + (m["x"] + 1) * sx, box["y"] + (m["y"] + 1) * sy)
             page.wait_for_timeout(300)
-            txt = page.locator("#panel").inner_text()
+            txt = page.locator(SEL["panel"]).inner_text()
             hit = m["name"] in txt and str(m["processed"]) in txt and LABEL[m["state"]] in txt
             ok4 &= hit
             detail4.append(f"{m['name']}={'ok' if hit else 'miss'}")
         page.screenshot(path=str(OUT / "panel_after_click.png"))
         check("④ 기계 클릭 -> 패널에 이름·상태·처리 수량", ok4, "(" + ", ".join(detail4) + ")")
 
-        # ⑤ factory.json 변경 -> 8초 안에 목록 반영 (선택 해제 후 목록 상태에서 확인)
+        # ⑦ 목록 행 클릭 -> 상세에 그 기계 이름 (행마다, 직전 선택과 다른 기계 순서로)
+        rows = page.locator(SEL["row"])
+        n_rows = rows.count()
+        ok7, detail7 = n_rows == len(state["machines"]), []
+        for i, m in enumerate(state["machines"][:n_rows]):
+            rows.nth(i).click()
+            page.wait_for_timeout(300)
+            det = page.locator(SEL["detail"]).inner_text() if page.locator(SEL["detail"]).count() else ""
+            hit = m["name"] in det
+            ok7 &= hit
+            detail7.append(f"{m['name']}={'ok' if hit else 'miss'}")
+        page.screenshot(path=str(OUT / "detail_after_row_click.png"))
+        check("⑦ 목록 행 클릭 -> 상세에 그 기계 이름", ok7, f"(행 {n_rows}, " + ", ".join(detail7) + ")")
+
+        # ⑧ 상단 바 시각: 'YYYY.' 로 시작, ISO 'T' 없음
+        top = page.locator(SEL["topbar"]).inner_text() if page.locator(SEL["topbar"]).count() else ""
+        m8 = re.search(r"갱신\s*(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2})", top)
+        ok8 = bool(m8) and m8.group(1).startswith("2026.") and "T" not in m8.group(1)
+        check("⑧ 상단 바 시각이 '2026.' 으로 시작, 'T' 없음", ok8, f"(상단 바: {top!r})")
+
+        # ⑨ 요약 대표 수치 = factory.json 의 running 개수
+        want = sum(1 for m in state["machines"] if m["state"] == "running")
+        loc = page.locator(SEL["summary_number"])
+        got = loc.first.inner_text().strip() if loc.count() else None
+        check("⑨ 요약 대표 수치 = running 개수", got == str(want), f"(화면 {got!r}, 기대 {want})")
+
+        # ⑩ 캔버스 CSS 크기 768x480 (정수배 고정). 1280 뷰포트에서 FIT 으로 늘어나지 않아야 한다
+        css = (round(box["width"]), round(box["height"]))
+        check("⑩ 캔버스 CSS 크기 768x480", css == CANVAS_CSS, f"(실측 {css})")
+
+        # ⑤ factory.json 변경 -> 8초 안에 목록 반영 (목록은 항상 보인다)
         target = next(m for m in state["machines"] if m["state"] != "defect")
         changed = json.loads(original)
         for m in changed["machines"]:
             if m["id"] == target["id"]:
                 m["state"] = "defect"
         changed["version"] += 1
-        page.keyboard.press("Escape")
-        page.mouse.click(box["x"] + 2, box["y"] + 2)  # 빈 곳 클릭으로 선택 해제 시도
-        if page.locator("#panel .back").count():
-            page.locator("#panel .back").click()  # 상세 화면이면 목록으로
         FACTORY.write_text(json.dumps(changed, ensure_ascii=False, indent=2), encoding="utf-8")
         t0 = time.time()
         seen = False
         while time.time() - t0 < 8:
             # 목록은 줄(li.machine-row) 하나에 이름 span 과 상태 span 이 따로 있다. 줄 단위로 읽는다
-            rows = page.locator("#panel .machine-row").all_inner_texts()
-            if any(target["name"] in r and "불량" in r for r in rows):
+            texts = page.locator(SEL["row"]).all_inner_texts()
+            if any(target["name"] in r and "불량" in r for r in texts):
                 seen = True
                 break
             page.wait_for_timeout(250)

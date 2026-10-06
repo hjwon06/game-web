@@ -1,19 +1,21 @@
-// 그리기와 입력만 한다. 상태의 원본은 data/factory.json 이고 여기서는 읽기만 한다.
-// 타일 번호·배율은 data/sprites.json 에서만 온다 (sheet / scale / tiles).
-const BOX_SCALE = 2;
+// 상태·입력·애니메이션을 맡는다. 그리기 도구는 scene_draw.js.
+// 상태의 원본은 data/factory.json 이고 여기서는 읽기만 한다. 타일 번호·배율은 data/sprites.json 에서만 온다.
+import { COLORS, addBox, buildBelt, drawBadge, drawFloor, drawMachine, makeOutline, placeBox, placeOutline } from './scene_draw.js';
+
 const BELT_SPEED = 1.2; // 칸/초
 const BOX_GAP = 1.5; // 상자 사이 간격(칸)
 const BELT_FRAME_MS = 200;
 const BLINK_MS = 500;
-const DEFECT_TINT = 0xff5050;
+const STOPPED_ALPHA = 0.6;
 
 export class FactoryScene extends Phaser.Scene {
   constructor({ sprites, onSelect }) {
     super('factory');
     this.sp = sprites;
-    this.zoom = this.sp.scale; // this.scale 은 Phaser ScaleManager 라서 이름을 피한다
-    this.cell = this.sp.sheet.tile * this.zoom;
+    this.zoom = sprites.scale; // this.scale 은 Phaser ScaleManager 라서 이름을 피한다
+    this.cell = sprites.sheet.tile * this.zoom;
     this.onSelect = onSelect || (() => {});
+    this.grid = { w: 0, h: 0 };
     this.pending = null;
     this.built = false;
     this.signature = '';
@@ -22,6 +24,10 @@ export class FactoryScene extends Phaser.Scene {
     this.belts = [];
     this.selectedId = null;
     this.blinkOn = false;
+    this.track = (obj) => {
+      this.objs.push(obj);
+      return obj;
+    };
   }
 
   preload() {
@@ -30,14 +36,19 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   create() {
-    this.cameras.main.setBackgroundColor('#F2F3F5');
-    this.marker = this.add.rectangle(0, 0, this.cell, this.cell).setStrokeStyle(3, 0x1a1a2e).setFillStyle().setDepth(30).setVisible(false);
+    this.outline = makeOutline(this);
+    // 빈 곳을 누르면 선택 해제. 캔버스에서 일어난 선택이므로 onSelect 로 알린다.
     this.input.on('pointerdown', (_p, over) => {
-      if (over.length === 0) this.select(null);
+      if (over.length === 0 && this.selectedId) this.pick(null);
     });
     this.time.addEvent({ delay: BLINK_MS, loop: true, callback: () => this.blink() });
     this.built = true;
     if (this.pending) this.applyState(this.pending);
+  }
+
+  px(x, y) {
+    const c = this.cell;
+    return { x: x * c + c / 2, y: y * c + c / 2 };
   }
 
   // 외부(main.js)가 새 상태를 알릴 때 부른다. 읽기 전용으로 받아 그린다.
@@ -61,16 +72,6 @@ export class FactoryScene extends Phaser.Scene {
     ]);
   }
 
-  px(x, y) {
-    const c = this.cell;
-    return { x: x * c + c / 2, y: y * c + c / 2 };
-  }
-
-  track(obj) {
-    this.objs.push(obj);
-    return obj;
-  }
-
   rebuild(f) {
     this.objs.forEach((o) => {
       this.tweens.killTweensOf(o);
@@ -79,72 +80,35 @@ export class FactoryScene extends Phaser.Scene {
     this.objs = [];
     this.machines.clear();
     this.belts = [];
+    this.grid = f.grid;
     this.scale.setGameSize(f.grid.w * this.cell, f.grid.h * this.cell);
 
-    const { floor, box, machine, worker } = this.sp.tiles;
-    for (let y = 0; y < f.grid.h; y++) {
-      for (let x = 0; x < f.grid.w; x++) {
-        const p = this.px(x, y);
-        this.track(this.add.image(p.x, p.y, 'tiles', floor[(x + y) % floor.length]).setScale(this.zoom).setDepth(0));
-      }
-    }
-    f.conveyors.forEach((c) => this.buildBelt(c, f, this.sp.tiles, box));
+    drawFloor(this, f.grid, this.track);
+    f.conveyors.forEach((c) => this.addBelt(c, f));
     f.machines.forEach((m) => {
-      const p = this.px(m.x, m.y);
-      const spr = this.track(this.add.image(p.x, p.y, 'tiles', machine[m.color]).setScale(this.zoom).setDepth(10));
-      spr.setInteractive({ useHandCursor: true });
-      spr.on('pointerdown', () => this.select(m.id));
-      this.machines.set(m.id, { spr, x: p.x, y: p.y, state: null });
+      const v = drawMachine(this, m, this.track);
+      v.spr.on('pointerdown', () => this.pick(m.id));
+      this.machines.set(m.id, v);
     });
     f.workers.forEach((w) => {
       const p = this.px(w.x, w.y);
-      const spr = this.track(this.add.image(p.x, p.y, 'tiles', worker).setScale(this.zoom).setDepth(20));
+      const spr = this.track(this.add.image(p.x, p.y, 'tiles', this.sp.tiles.worker).setScale(this.zoom).setDepth(20));
       this.tweens.add({ targets: spr, y: p.y - this.zoom * 2, duration: 450, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     });
-    if (this.selectedId && !this.machines.has(this.selectedId)) this.select(null);
-    else this.placeMarker();
+    if (this.selectedId && !this.machines.has(this.selectedId)) this.selectedId = null;
+    placeOutline(this.outline, this.machines.get(this.selectedId));
   }
 
-  buildBelt(c, f, tiles, boxFrame) {
-    const target = f.machines.find((m) => m.id === c.to);
-    const pts = c.path.map(([x, y]) => this.px(x, y));
-    if (target) pts.push(this.px(target.x, target.y));
-    const cells = c.path.map(([x, y], i) => {
-      const next = pts[i + 1];
-      const cur = pts[i];
-      const key = c.path.length === 1 ? 'belt_mid' : i === 0 ? 'belt_left' : i === c.path.length - 1 ? 'belt_right' : 'belt_mid';
-      const spr = this.track(this.add.image(cur.x, cur.y, 'tiles', tiles[key][0]).setScale(this.zoom).setDepth(1));
-      if (next) spr.setAngle(next.x < cur.x ? 180 : next.y > cur.y ? 90 : next.y < cur.y ? -90 : 0);
-      return { spr, frames: tiles[key] };
-    });
-    const cum = [0];
-    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
-    const b = { id: c.id, to: c.to, pts, cum, total: cum[cum.length - 1], cells, boxes: [], running: false, phase: 0, sinceSpawn: 0, boxFrame };
+  addBelt(c, f) {
+    const b = buildBelt(this, c, f, this.track);
     // 멈춘 벨트에서도 기계 앞 상자가 보이도록 미리 채워 둔다.
-    let s = b.total - this.cell * 0.9;
+    let s = b.total - this.cell * 0.5;
     while (s >= 0) {
-      this.addBox(b, s);
+      addBox(this, b, s, this.track);
       s -= BOX_GAP * this.cell;
     }
     b.sinceSpawn = (s + BOX_GAP * this.cell) / this.cell;
     this.belts.push(b);
-  }
-
-  addBox(b, s) {
-    const spr = this.track(this.add.image(0, 0, 'tiles', b.boxFrame).setScale(BOX_SCALE).setDepth(5));
-    const box = { s, spr };
-    this.placeBox(b, box);
-    b.boxes.push(box);
-  }
-
-  placeBox(b, box) {
-    let i = 1;
-    while (i < b.cum.length - 1 && b.cum[i] < box.s) i++;
-    const a = b.pts[i - 1];
-    const z = b.pts[i];
-    const span = b.cum[i] - b.cum[i - 1] || 1;
-    const t = Math.min(1, (box.s - b.cum[i - 1]) / span);
-    box.spr.setPosition(a.x + (z.x - a.x) * t, a.y + (z.y - a.y) * t);
   }
 
   applyMachineStates(f) {
@@ -152,32 +116,36 @@ export class FactoryScene extends Phaser.Scene {
       const v = this.machines.get(m.id);
       if (!v) return;
       v.state = m.state;
-      v.spr.setAlpha(m.state === 'stopped' ? 0.5 : 1);
-      if (m.state !== 'defect') v.spr.clearTint();
-      else v.spr.setTint(this.blinkOn ? DEFECT_TINT : 0xffffff);
+      v.spr.setAlpha(m.state === 'stopped' ? STOPPED_ALPHA : 1);
+      v.dash.setVisible(m.state === 'defect');
+      this.paintTint(v);
+      drawBadge(v, m.state);
     });
     this.belts.forEach((b) => {
       b.running = this.machines.get(b.to)?.state === 'running';
     });
   }
 
-  blink() {
-    this.blinkOn = !this.blinkOn;
-    this.machines.forEach((v) => {
-      if (v.state === 'defect') v.spr.setTint(this.blinkOn ? DEFECT_TINT : 0xffffff);
-    });
+  paintTint(v) {
+    if (v.state === 'defect' && this.blinkOn) v.spr.setTint(COLORS.defectTint);
+    else v.spr.clearTint();
   }
 
-  select(id) {
-    this.selectedId = id;
-    this.placeMarker();
+  blink() {
+    this.blinkOn = !this.blinkOn;
+    this.machines.forEach((v) => this.paintTint(v));
+  }
+
+  // 캔버스를 눌러서 고른 경우: 안쪽 선택을 바꾸고 바깥(패널)에 알린다.
+  pick(id) {
+    this.select(id);
     this.onSelect(id);
   }
 
-  placeMarker() {
-    const v = this.selectedId && this.machines.get(this.selectedId);
-    if (!v) return this.marker.setVisible(false);
-    this.marker.setPosition(v.x, v.y).setVisible(true);
+  // 바깥(목록)이 고른 경우: 표시만 바꾼다. onSelect 를 부르지 않는다.
+  select(id) {
+    this.selectedId = id;
+    if (this.outline) placeOutline(this.outline, this.machines.get(id));
   }
 
   update(_time, delta) {
@@ -190,7 +158,7 @@ export class FactoryScene extends Phaser.Scene {
       b.sinceSpawn += BELT_SPEED * dt;
       if (b.sinceSpawn >= BOX_GAP) {
         b.sinceSpawn -= BOX_GAP;
-        this.addBox(b, 0);
+        addBox(this, b, 0, this.track);
       }
       b.boxes = b.boxes.filter((box) => {
         box.s += BELT_SPEED * this.cell * dt;
@@ -199,7 +167,7 @@ export class FactoryScene extends Phaser.Scene {
           this.objs = this.objs.filter((o) => o !== box.spr);
           return false;
         }
-        this.placeBox(b, box);
+        placeBox(b, box);
         return true;
       });
     });
