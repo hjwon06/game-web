@@ -1,0 +1,8 @@
+#!/usr/bin/env ruby
+# 시뮬레이션 데몬. SIGTERM/SIGINT 에서 마지막 flush 없이 종료한다.
+require_relative "../config/environment"
+
+$stdout.sync = true
+runner = Simulation::Runner.new(logger: Logger.new($stdout))
+%w[TERM INT].each { |signal| Signal.trap(signal) { runner.stop! } }
+runner.run

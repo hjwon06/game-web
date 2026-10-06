@@ -11,6 +11,7 @@ Rails.application.routes.draw do
 
   namespace :api do
     get "state", to: "state#show"
+    get "hud", to: "hud#show"
     post "commands", to: "commands#create"
   end
 

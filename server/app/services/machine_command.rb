@@ -35,7 +35,7 @@ class MachineCommand
 
   def run(machine_id)
     command_id = insert_command(machine_id)                       # ①
-    return replay unless command_id
+    return replay(machine_id) unless command_id
 
     machine = Machine.lock.find(machine_id)                       # ② FOR UPDATE
     return finish(command_id, machine, 409) if @base_version != machine.version # ③
@@ -53,9 +53,16 @@ class MachineCommand
     Command.insert(row, unique_by: :idempotency_key, returning: %w[id]).rows.dig(0, 0)
   end
 
-  def replay
+  # 같은 키를 다른 내용으로 재사용하면 원래 결과를 돌려주지 않고 422 로 거절한다. 기존 행은 건드리지 않는다.
+  def replay(machine_id)
     stored = Command.find_by!(idempotency_key: @key)
+    return Result.new(status: 422, machine: Machine.find(machine_id)) unless same_request?(stored, machine_id)
+
     Result.new(status: stored.result_status, machine: Machine.find(stored.machine_id))
+  end
+
+  def same_request?(stored, machine_id)
+    stored.machine_id == machine_id && stored.kind == @kind && stored.base_version == @base_version
   end
 
   def transition(command_id, machine)
