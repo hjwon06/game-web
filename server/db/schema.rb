@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_06_000005) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_07_000002) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -23,6 +23,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_06_000005) do
     t.datetime "created_at", null: false
     t.index ["idempotency_key"], name: "index_commands_on_idempotency_key", unique: true
     t.index ["machine_id"], name: "index_commands_on_machine_id"
+    t.check_constraint "base_version >= 0", name: "commands_base_version_check"
     t.check_constraint "kind::text = ANY (ARRAY['start'::character varying, 'stop'::character varying, 'break'::character varying, 'repair'::character varying]::text[])", name: "commands_kind_check"
   end
 
@@ -45,6 +46,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_06_000005) do
     t.datetime "updated_at", null: false
     t.index ["code"], name: "index_machines_on_code", unique: true
     t.check_constraint "state::text = ANY (ARRAY['running'::character varying, 'stopped'::character varying, 'broken'::character varying]::text[])", name: "machines_state_check"
+    t.check_constraint "version >= 0", name: "machines_version_check"
   end
 
   create_table "production_events", force: :cascade do |t|
@@ -57,6 +59,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_06_000005) do
     t.integer "machine_version", null: false
     t.index ["machine_id", "bucket_start"], name: "index_production_events_on_machine_id_and_bucket_start", unique: true
     t.check_constraint "good_qty >= 0 AND defect_qty >= 0", name: "production_events_qty_check"
+    t.check_constraint "machine_version >= 0", name: "production_events_machine_version_check"
   end
 
   create_table "work_orders", force: :cascade do |t|
@@ -71,7 +74,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_06_000005) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["code"], name: "index_work_orders_on_code", unique: true
+    t.index ["id", "machine_id"], name: "index_work_orders_on_id_and_machine_id", unique: true
     t.index ["machine_id"], name: "index_work_orders_one_active_per_machine", unique: true, where: "((status)::text = 'active'::text)"
+    t.check_constraint "produced_qty >= 0", name: "work_orders_produced_qty_check"
     t.check_constraint "status::text = ANY (ARRAY['queued'::character varying, 'active'::character varying, 'done'::character varying]::text[])", name: "work_orders_status_check"
     t.check_constraint "target_qty > 0", name: "work_orders_target_qty_check"
   end
@@ -81,5 +86,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_06_000005) do
   add_foreign_key "machine_state_events", "machines"
   add_foreign_key "production_events", "machines"
   add_foreign_key "production_events", "work_orders"
+  add_foreign_key "production_events", "work_orders", column: ["work_order_id", "machine_id"], primary_key: ["id", "machine_id"], name: "fk_production_events_work_order_machine"
   add_foreign_key "work_orders", "machines"
 end
