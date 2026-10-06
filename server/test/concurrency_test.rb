@@ -15,7 +15,9 @@ class ConcurrencyTest < ActiveSupport::TestCase
   teardown { wipe }
 
   def wipe
-    [MachineStateEvent, Command, ProductionEvent, WorkOrder, Machine].each(&:delete_all)
+    ActiveRecord::Base.connection.execute(
+      "TRUNCATE machine_state_events, production_events, commands, work_orders, machines RESTART IDENTITY CASCADE"
+    )
   end
 
   def stop(base_version)
@@ -43,9 +45,9 @@ class ConcurrencyTest < ActiveSupport::TestCase
   end
 
   # 스레드 A 는 명령을 처리한 뒤 커밋하지 않고 잠금을 쥔다. 그 사이 스레드 B 가 같은 기계를 요청한다.
-  # B 는 별도 커넥션에서 SELECT ... FOR UPDATE 에 걸려 A 가 커밋할 때까지 끝나지 않아야 한다.
-  # 잠금이 없으면 B 는 UPDATE 에서 막히거나 아예 통과하므로 대기 중인 SQL 이 FOR UPDATE 가 아니다.
-  test "A 가 잠금을 쥔 동안 B 는 FOR UPDATE 에서 대기하고 A 커밋 뒤 409 를 받는다" do
+  # B 는 별도 커넥션에서 version 을 읽기 전에 대기하다가 A 가 커밋한 뒤 409 를 받아야 한다.
+  # 잠금이 없으면 B 는 stale version 을 읽고 UPDATE "machines" 에서 대기한다. 구분 기준은 대기 SQL 이다.
+  test "A 가 잠금을 쥔 동안 B 는 version 을 읽기 전에 대기하고 A 커밋 뒤 409 를 받는다" do
     a_has_lock = Queue.new
     release_a = Queue.new
     pid_a = Queue.new
@@ -78,11 +80,19 @@ class ConcurrencyTest < ActiveSupport::TestCase
 
       query = blocked_query(b_pid)
       assert_not_nil query, "B 가 잠금 대기에 들어가지 않았다 — 잠금이 없다"
-      assert_match(/FOR UPDATE/i, query, "B 는 기계 행의 FOR UPDATE 에서 대기해야 한다")
+      # 잠금이 있으면 B 는 version 을 읽기 전에 대기한다. 보통 commands INSERT 의 FK 검사(FOR KEY SHARE)가
+      # A 가 쥔 machines FOR UPDATE 와 충돌해 INSERT 에서 멈추므로 대기 SQL 은 INSERT 이거나 FOR UPDATE 다.
+      assert_no_match(/UPDATE\s+"machines"/i, query, "B 가 stale version 을 읽고 UPDATE 에서 대기 — 잠금 없음")
+      assert_match(/FOR UPDATE|INSERT INTO "commands"/i, query, "B 는 version 을 읽기 전에 대기해야 한다")
       assert thread_b.alive?, "B 는 A 커밋 전에 끝나면 안 된다"
       assert_equal ["running", 0], [@machine.reload.state, @machine.version], "A 는 아직 커밋하지 않았다"
     ensure
       release_a << true
+      threads.each do |t|
+        t.join(15)
+      rescue StandardError
+        nil # 본 단언 실패를 가리지 않는다
+      end
     end
 
     results = threads.map { |t| t.join(15) ? t.value : flunk("스레드가 15초 안에 끝나지 않았다") }
