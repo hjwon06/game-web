@@ -8,7 +8,7 @@
   },
   "scale": 3,
   "tiles": {
-    "floor": [0, 1],
+    "floor": [33, 35],
     "belt_left": [25, 37],
     "belt_mid": [26, 38],
     "belt_right": [27, 39],
@@ -19,6 +19,7 @@
       "green": 99,
       "blue": 111
     },
-    "worker": 120
+    "worker": 120,
+    "warning": 118
   }
 }

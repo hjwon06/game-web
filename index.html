@@ -3,21 +3,48 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>팩토리 시뮬 — 첫 조각</title>
+  <title>1공장 — 공장 관제 화면</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700&display=swap">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <main class="layout">
+  <header id="topbar" class="topbar">
+    <h1 class="topbar-name">1공장</h1>
+    <span class="chip">샘플 데이터</span>
+    <span id="topbar-updated" class="topbar-updated num"></span>
+  </header>
+  <div class="layout">
     <section class="stage" aria-label="공장 화면">
-      <div id="game"></div>
+      <div class="stage-area">
+        <div class="frame">
+          <div id="game"></div>
+          <i class="bracket bracket-tl" aria-hidden="true"></i>
+          <i class="bracket bracket-tr" aria-hidden="true"></i>
+          <i class="bracket bracket-bl" aria-hidden="true"></i>
+          <i class="bracket bracket-br" aria-hidden="true"></i>
+        </div>
+      </div>
+      <ul id="legend" class="legend" aria-label="범례">
+        <li class="legend-item"><i class="dot dot-running" aria-hidden="true"></i>가동</li>
+        <li class="legend-item"><i class="dot dot-stopped" aria-hidden="true"></i>정지</li>
+        <li class="legend-item"><i class="dot dot-defect" aria-hidden="true"></i>불량</li>
+        <li class="legend-item legend-tile"><i class="tile-icon tile-icon-sm icon-machine" aria-hidden="true"></i>기계</li>
+        <li class="legend-item"><i class="tile-icon tile-icon-sm icon-box" aria-hidden="true"></i>제품 상자</li>
+      </ul>
     </section>
     <aside id="panel" class="panel" aria-live="polite">
-      <h1 id="panel-title" class="panel-title">기계 목록</h1>
-      <div id="panel-body" class="panel-body"></div>
-      <p id="panel-error" class="panel-error" hidden></p>
+      <section id="panel-summary" class="summary" aria-label="요약"></section>
+      <section id="panel-list" class="panel-section">
+        <h2 class="panel-title">기계 목록</h2>
+        <div id="panel-rows"></div>
+      </section>
+      <section id="panel-detail" class="panel-section"></section>
+      <p id="panel-error" class="panel-error" hidden>상태 파일을 읽지 못했습니다. 마지막 값을 보여주는 중입니다</p>
     </aside>
-  </main>
+  </div>
   <script src="vendor/phaser-3.90.0.min.js"></script>
   <script type="module" src="src/main.js"></script>
 </body>
