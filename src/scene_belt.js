@@ -58,10 +58,14 @@ export function buildBelt(scene, f, add) {
     const put = (dir, keep) => {
       const frames = belt[DIRS[dir]];
       const spr = add(scene.add.image(pts[i].x, pts[i].y, 'tiles', frames[0]).setScale(scene.zoom).setDepth(1));
-      if (keep) spr.setCrop(...keep);
+      if (keep) {
+        // 자른 반쪽은 프레임을 바꾸지 않는다(setFrame 뒤 crop 유지 여부에 기대지 않기 위해). 애니 목록에도 넣지 않는다.
+        spr.setCrop(...keep);
+        return;
+      }
       seg.cells.push({ spr, frames });
     };
-    // 꺾이는 칸: 코너 그림이 없어서(sprites.json belt.corner = null) 들어오는 쪽 반 칸 + 나가는 쪽 반 칸을 맞대 ㄱ 자로 잇는다.
+    // 꺾이는 칸: 코너 그림이 없어서(sprites.json belt.corner = null) 들어오는 쪽 반 칸 + 나가는 쪽 반 칸을 고정 프레임 2장으로 맞대 ㄱ 자로 잇는다.
     if (prev) {
       put(prev, HALF_IN[prev]);
       put(c.dir, HALF_OUT[c.dir]);
