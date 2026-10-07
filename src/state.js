@@ -75,7 +75,7 @@ function merge(api, hud) {
     const h = hudBy.get(l.id);
     const wo = h && h.work_order ? h.work_order : null;
     machines.push({
-      id: l.id, name: s.name, x: l.x, y: l.y, color: l.color,
+      id: l.id, name: s.name, x: l.x, y: l.y, kind: l.kind, zone: l.zone,
       state: s.state, version: s.version,
       processed: wo ? wo.produced_qty : 0,
       work_order: wo,
@@ -86,8 +86,8 @@ function merge(api, hud) {
     version: api.version,
     updated_at: new Date().toISOString(),
     grid: layout.grid,
-    conveyors: layout.conveyors,
-    workers: layout.workers,
+    zones: layout.zones || [],
+    belt: layout.belt,
     machines,
     hud: { defect_ratio_10m: hud.defect_ratio_10m ?? null, broken: hud.broken || [] },
   };
@@ -96,7 +96,7 @@ function merge(api, hud) {
 async function fetchAll() {
   if (!layout) {
     const l = await getJson(LAYOUT_URL);
-    if (!l || !l.grid || !Array.isArray(l.machines)) throw new Error('layout.json 모양이 맞지 않음');
+    if (!l || !l.grid || !l.belt || !Array.isArray(l.machines)) throw new Error('layout.json 모양이 맞지 않음');
     layout = l;
   }
   const [api, hud] = await Promise.all([getJson(STATE_URL), getJson(HUD_URL)]);

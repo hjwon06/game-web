@@ -1,35 +1,24 @@
 {
-  "grid": { "w": 17, "h": 9 },
+  "grid": { "w": 20, "h": 11 },
+  "zones": [
+    { "id": "in", "name": "입고", "x": 0, "y": 0, "w": 5, "h": 11, "tone": "#262F3D", "item": 0, "label": { "x": 0, "y": 0 } },
+    { "id": "proc", "name": "가공", "x": 5, "y": 0, "w": 15, "h": 7, "tone": "#2C3646", "item": 1, "label": { "x": 5, "y": 0 } },
+    { "id": "insp", "name": "검사", "x": 5, "y": 7, "w": 9, "h": 4, "tone": "#323D4F", "item": 2, "label": { "x": 7, "y": 7 } },
+    { "id": "out", "name": "출하", "x": 14, "y": 7, "w": 6, "h": 4, "tone": "#394559", "item": 2, "label": { "x": 14, "y": 7 } }
+  ],
+  "belt": { "route": [[0, 2], [18, 2], [18, 5], [6, 5], [6, 8], [19, 8]] },
   "machines": [
-    { "id": "M1", "x": 3, "y": 1, "color": "red" },
-    { "id": "M2", "x": 7, "y": 1, "color": "yellow" },
-    { "id": "M3", "x": 11, "y": 1, "color": "green" },
-    { "id": "M4", "x": 15, "y": 1, "color": "blue" },
-    { "id": "M5", "x": 3, "y": 4, "color": "red" },
-    { "id": "M6", "x": 7, "y": 4, "color": "yellow" },
-    { "id": "M7", "x": 11, "y": 4, "color": "green" },
-    { "id": "M8", "x": 15, "y": 4, "color": "blue" },
-    { "id": "M9", "x": 3, "y": 7, "color": "red" },
-    { "id": "M10", "x": 7, "y": 7, "color": "yellow" },
-    { "id": "M11", "x": 11, "y": 7, "color": "green" },
-    { "id": "M12", "x": 15, "y": 7, "color": "blue" }
-  ],
-  "conveyors": [
-    { "id": "C1", "to": "M1", "path": [[0, 1], [1, 1], [2, 1]] },
-    { "id": "C2", "to": "M2", "path": [[4, 1], [5, 1], [6, 1]] },
-    { "id": "C3", "to": "M3", "path": [[8, 1], [9, 1], [10, 1]] },
-    { "id": "C4", "to": "M4", "path": [[12, 1], [13, 1], [14, 1]] },
-    { "id": "C5", "to": "M5", "path": [[0, 4], [1, 4], [2, 4]] },
-    { "id": "C6", "to": "M6", "path": [[4, 4], [5, 4], [6, 4]] },
-    { "id": "C7", "to": "M7", "path": [[8, 4], [9, 4], [10, 4]] },
-    { "id": "C8", "to": "M8", "path": [[12, 4], [13, 4], [14, 4]] },
-    { "id": "C9", "to": "M9", "path": [[0, 7], [1, 7], [2, 7]] },
-    { "id": "C10", "to": "M10", "path": [[4, 7], [5, 7], [6, 7]] },
-    { "id": "C11", "to": "M11", "path": [[8, 7], [9, 7], [10, 7]] },
-    { "id": "C12", "to": "M12", "path": [[12, 7], [13, 7], [14, 7]] }
-  ],
-  "workers": [
-    { "id": "W1", "x": 9, "y": 3 },
-    { "id": "W2", "x": 13, "y": 6 }
+    { "id": "M1", "x": 1, "y": 2, "kind": "recycler", "zone": "in" },
+    { "id": "M2", "x": 3, "y": 2, "kind": "recycler", "zone": "in" },
+    { "id": "M3", "x": 8, "y": 2, "kind": "smelter", "zone": "proc" },
+    { "id": "M4", "x": 11, "y": 2, "kind": "fabrication", "zone": "proc" },
+    { "id": "M5", "x": 14, "y": 2, "kind": "smelter", "zone": "proc" },
+    { "id": "M6", "x": 14, "y": 5, "kind": "fabrication", "zone": "proc" },
+    { "id": "M7", "x": 10, "y": 5, "kind": "smelter", "zone": "proc" },
+    { "id": "M8", "x": 8, "y": 8, "kind": "cooler", "zone": "insp" },
+    { "id": "M9", "x": 10, "y": 8, "kind": "electrifier", "zone": "insp" },
+    { "id": "M10", "x": 12, "y": 8, "kind": "cooler", "zone": "insp" },
+    { "id": "M11", "x": 15, "y": 8, "kind": "randomizer", "zone": "out" },
+    { "id": "M12", "x": 17, "y": 8, "kind": "randomizer", "zone": "out" }
   ]
 }

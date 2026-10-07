@@ -28,19 +28,23 @@ export function el(tag, className, text) {
   return node;
 }
 
-// 시트 규격과 타일 칸 위치를 CSS 변수로 내보낸다. 타일 번호는 sprites.json 에서만 온다.
+// 시트 규격과 아이콘 잘라낼 위치를 CSS 변수로 내보낸다. 칸 번호·crop 은 sprites.json 에서만 온다.
+// 아이콘마다 정사각형 창(한 변 S = 그림의 긴 변)에 그림을 가운데 두고, 창 왼쪽 위(--ix/--iy, 시트 px)와 배율(--is = 1/S)을 정한다.
 export function exposeTiles(sprites) {
-  const { file, cols, rows } = sprites.sheet;
+  const { file, cols, tile, width, height } = sprites.sheet;
   const root = document.documentElement.style;
   root.setProperty('--sheet-url', `url("${file}")`);
-  root.setProperty('--sheet-cols', String(cols));
-  root.setProperty('--sheet-rows', String(rows));
-  const put = (name, frame) => {
-    root.setProperty(`--tc-${name}`, String(frame % cols));
-    root.setProperty(`--tr-${name}`, String(Math.floor(frame / cols)));
+  root.setProperty('--sheet-w', String(width));
+  root.setProperty('--sheet-h', String(height));
+  const put = (name, frame, dx, dy, w, h) => {
+    const s = Math.max(w, h);
+    root.setProperty(`--ix-${name}`, String((frame % cols) * tile + dx - (s - w) / 2));
+    root.setProperty(`--iy-${name}`, String(Math.floor(frame / cols) * tile + dy - (s - h) / 2));
+    root.setProperty(`--is-${name}`, String(1 / s));
   };
-  Object.entries(sprites.tiles.machine).forEach(([color, frame]) => put(color, frame));
-  put('box', sprites.tiles.box);
+  Object.entries(sprites.machines).forEach(([kind, d]) => put(kind, d.off, d.crop.dx, d.crop.dy, d.crop.w, d.crop.h));
+  const { crop, frames } = sprites.items;
+  put('box', frames[1], 0, 0, crop, crop);
 }
 
 // 3초마다 상세가 다시 그려져도 "처리 중"과 결과 문구가 남도록 모듈이 들고 있는다.
@@ -160,8 +164,7 @@ export function renderDetail(section, machine) {
   section.className = 'panel-section detail-slot machine-detail';
   const icon = el('i', 'tile-icon');
   icon.setAttribute('aria-hidden', 'true');
-  icon.style.setProperty('--tc', `var(--tc-${machine.color})`);
-  icon.style.setProperty('--tr', `var(--tr-${machine.color})`);
+  ['ix', 'iy', 'is'].forEach((p) => icon.style.setProperty(`--${p}`, `var(--${p}-${machine.kind})`));
   const state = el('p', `detail-state state-${machine.state}`, stateLabel(machine.state));
   state.dataset.field = 'state';
   const result = el('p', 'cmd-result', msg);

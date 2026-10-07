@@ -7,48 +7,63 @@ export const COLORS = {
   badge: { running: 0x0f766e, stopped: 0x64748b, broken: 0xb91c1c },
 };
 
-// 캔버스 안 바닥·격자·선택 색은 여기 한 곳에만 둔다.
-export const CANVAS_FLOOR = 0x2b3445; // #2B3445
-export const CANVAS_GRID = 0x34405a; // #34405A, 칸(48px)마다 1px
+// 캔버스 안 바닥·선택 색은 여기 한 곳에만 둔다. 구역 바닥 톤은 layout.json(zones[].tone)에서 온다.
+export const CANVAS_FLOOR = 0x262f3d;
+export const CANVAS_ZONE_EDGE = 0x1b2230; // 구역 경계 1px
 export const CANVAS_SELECT = { inner: 0xf1f5f9, outer: 0x1e3a8a }; // 안 2px 실선 + 바깥 1px
 
-export const BOX_SCALE = 2;
+const MACHINE_W = 44; // 기계 그림 폭(시트 px). 선택 테두리·고장 점선·배지 기준
 const BADGE_R = 6; // 12px 원
 const BADGE_INSET = 10;
 const DASH = 6;
 const DASH_GAP = 4;
 
-export function drawFloor(scene, grid, add) {
-  const { floor } = scene.sp.tiles;
-  if (!floor || floor.length === 0) {
-    const w = grid.w * scene.cell;
-    const h = grid.h * scene.cell;
-    const g = add(scene.add.graphics().setDepth(0));
-    g.fillStyle(CANVAS_FLOOR, 1).fillRect(0, 0, w, h);
-    g.lineStyle(1, CANVAS_GRID, 1);
-    for (let x = 0; x <= w; x += scene.cell) g.lineBetween(x + 0.5, 0, x + 0.5, h);
-    for (let y = 0; y <= h; y += scene.cell) g.lineBetween(0, y + 0.5, w, y + 0.5);
-    return;
-  }
-  for (let y = 0; y < grid.h; y++) {
-    for (let x = 0; x < grid.w; x++) {
-      const p = scene.px(x, y);
-      add(scene.add.image(p.x, p.y, 'tiles', floor[(x + y) % floor.length]).setScale(scene.zoom).setDepth(0));
-    }
-  }
+// 시트의 칸 번호(행×열수+열)를 시트 픽셀 좌표로.
+const cellOrigin = (sheet, n) => ({ x: (n % sheet.cols) * sheet.tile, y: Math.floor(n / sheet.cols) * sheet.tile });
+
+export const machineFrame = (kind, n) => `m:${kind}:${n}`;
+export const itemFrame = (n) => `i:${n}`;
+
+// 32px 칸보다 큰 기계·작은 아이템은 칸 번호 + crop 으로 이름 붙인 프레임을 만든다. 칸 번호가 곧 시트 위치다.
+export function registerFrames(scene) {
+  const tex = scene.textures.get('tiles');
+  const { sheet, machines, items } = scene.sp;
+  Object.entries(machines).forEach(([kind, d]) => {
+    const { dx, dy, w, h } = d.crop;
+    [d.off, ...d.on, ...d.working].forEach((n) => {
+      const o = cellOrigin(sheet, n);
+      if (!tex.has(machineFrame(kind, n))) tex.add(machineFrame(kind, n), 0, o.x + dx, o.y + dy, w, h);
+    });
+  });
+  items.frames.forEach((n) => {
+    const o = cellOrigin(sheet, n);
+    if (!tex.has(itemFrame(n))) tex.add(itemFrame(n), 0, o.x, o.y, items.crop, items.crop);
+  });
 }
 
-// 기계는 2x2 칸. (m.x, m.y) 가 왼쪽 위 칸이다.
+// 구역마다 바닥 톤을 한 단계씩 다르게 깔고 경계를 1px 로 긋는다.
+export function drawFloor(scene, f, add) {
+  const c = scene.cell;
+  const g = add(scene.add.graphics().setDepth(0));
+  g.fillStyle(CANVAS_FLOOR, 1).fillRect(0, 0, f.grid.w * c, f.grid.h * c);
+  f.zones.forEach((z) => {
+    g.fillStyle(Phaser.Display.Color.HexStringToColor(z.tone).color, 1).fillRect(z.x * c, z.y * c, z.w * c, z.h * c);
+    g.lineStyle(1, CANVAS_ZONE_EDGE, 1).strokeRect(z.x * c + 0.5, z.y * c + 0.5, z.w * c - 1, z.h * c - 1);
+  });
+}
+
+// 기계는 벨트 한 칸 위에 올라앉는다. (m.x, m.y) 가 그 칸이고, 선택·고장 표시용 사각형은 그림 폭 기준이다.
 export function machineRect(scene, m) {
   const c = scene.cell;
-  return { x: m.x * c, y: m.y * c, w: c * 2, h: c * 2 };
+  const w = MACHINE_W * scene.zoom;
+  return { x: m.x * c + (c - w) / 2, y: m.y * c, w, h: c };
 }
 
 export function drawMachine(scene, m, add) {
+  const def = scene.sp.machines[m.kind] || Object.values(scene.sp.machines)[0];
   const r = machineRect(scene, m);
   const cx = r.x + r.w / 2;
-  const cy = r.y + r.h / 2;
-  const spr = add(scene.add.image(cx, cy, 'tiles', scene.sp.tiles.machine[m.color]).setScale(scene.zoom * 2).setDepth(10));
+  const spr = add(scene.add.image(cx, r.y + r.h, 'tiles', machineFrame(m.kind, def.off)).setOrigin(0.5, 1).setScale(scene.zoom).setDepth(10));
   spr.setInteractive({ useHandCursor: true });
   const badge = add(scene.add.graphics().setDepth(15));
   // 고장 외곽선: 기계 둘레 2px 점선. 상태가 고장일 때만 보인다.
@@ -68,7 +83,7 @@ export function drawMachine(scene, m, add) {
   edge(x + w - 1, y + 1, x + w - 1, y + h - 1);
   edge(x + w - 1, y + h - 1, x + 1, y + h - 1);
   edge(x + 1, y + h - 1, x + 1, y + 1);
-  return { spr, badge, dash, rect: r, cx, cy, state: null };
+  return { id: m.id, spr, badge, dash, rect: r, cx, def, kind: m.kind, state: null, t: 0, frame: '', rampUntil: 0, fxBusy: false, fx: {} };
 }
 
 // 상태 배지: 기계 오른쪽 위의 12px 원 + 흰 기호. 가동 = 채운 원, 정지 = 두 줄, 고장 = 느낌표
@@ -96,44 +111,4 @@ export function placeOutline(outline, v) {
   outline.lineStyle(2, CANVAS_SELECT.inner, 1).strokeRect(x + 1, y + 1, w - 2, h - 2);
   outline.lineStyle(1, CANVAS_SELECT.outer, 1).strokeRect(x - 0.5, y - 0.5, w + 1, h + 1);
   return outline.setVisible(true);
-}
-
-// 벨트: 칸마다 타일을 깔고, 상자가 지나갈 경로(pts)는 마지막 칸에서 기계 가장자리까지 잇는다.
-export function buildBelt(scene, c, f, add) {
-  const { tiles } = scene.sp;
-  const target = f.machines.find((m) => m.id === c.to);
-  const pts = c.path.map(([x, y]) => scene.px(x, y));
-  if (target) {
-    const r = machineRect(scene, target);
-    const last = pts[pts.length - 1];
-    pts.push({ x: Math.min(Math.max(last.x, r.x), r.x + r.w), y: Math.min(Math.max(last.y, r.y), r.y + r.h) });
-  }
-  const cells = c.path.map((_p, i) => {
-    const cur = pts[i];
-    const next = pts[i + 1];
-    const key = c.path.length === 1 ? 'belt_mid' : i === 0 ? 'belt_left' : i === c.path.length - 1 ? 'belt_right' : 'belt_mid';
-    const spr = add(scene.add.image(cur.x, cur.y, 'tiles', tiles[key][0]).setScale(scene.zoom).setDepth(1));
-    if (next) spr.setAngle(next.x < cur.x ? 180 : next.y > cur.y ? 90 : next.y < cur.y ? -90 : 0);
-    return { spr, frames: tiles[key] };
-  });
-  const cum = [0];
-  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
-  return { id: c.id, to: c.to, pts, cum, total: cum[cum.length - 1], cells, boxes: [], running: false, phase: 0, sinceSpawn: 0, boxFrame: tiles.box };
-}
-
-export function addBox(scene, b, s, add) {
-  const spr = add(scene.add.image(0, 0, 'tiles', b.boxFrame).setScale(BOX_SCALE).setDepth(5));
-  const box = { s, spr };
-  placeBox(b, box);
-  b.boxes.push(box);
-}
-
-export function placeBox(b, box) {
-  let i = 1;
-  while (i < b.cum.length - 1 && b.cum[i] < box.s) i++;
-  const a = b.pts[i - 1];
-  const z = b.pts[i];
-  const span = b.cum[i] - b.cum[i - 1] || 1;
-  const t = Math.min(1, (box.s - b.cum[i - 1]) / span);
-  box.spr.setPosition(a.x + (z.x - a.x) * t, a.y + (z.y - a.y) * t);
 }

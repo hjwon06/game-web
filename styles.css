@@ -97,9 +97,20 @@ body {
 .stage-col { width: 100%; }
 
 .frame { position: relative; width: 100%; border: var(--frame) solid var(--navy); }
-/* 내부 해상도는 grid × cell(816x432) 고정, CSS 표시 크기만 바꾼다 */
-#game { width: 100%; aspect-ratio: 816 / 432; }
+/* 내부 해상도는 grid × cell(1280x704) 고정, CSS 표시 크기만 바꾼다 */
+#game { position: relative; width: 100%; aspect-ratio: 20 / 11; container-type: inline-size; }
 #game canvas { display: block; width: 100% !important; height: 100% !important; image-rendering: pixelated; }
+/* 구역 이름표: layout.json 의 칸 좌표를 % 로 얹는다. 클릭은 캔버스로 통과 */
+.zone-label {
+  position: absolute;
+  padding: 4px 8px;
+  font-size: max(13px, 1.3cqw);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #c9d3e3;
+  pointer-events: none;
+  word-break: keep-all;
+}
 
 .bracket { position: absolute; width: var(--bracket); height: var(--bracket); border: 0 solid var(--navy); }
 .bracket-tl { top: calc(var(--frame) * -1 - var(--bracket)); left: calc(var(--frame) * -1 - var(--bracket)); border-top-width: var(--frame); border-left-width: var(--frame); }
@@ -131,7 +142,7 @@ body {
 .state-broken { color: var(--broken); }
 .state-running, .state-stopped, .state-broken { font-weight: 600; }
 
-/* Kenney 시트에서 잘라 쓰는 아이콘. 칸 위치(--tc/--tr)와 시트 규격은 main.js 가 :root 에 넣는다 */
+/* Sierra 시트에서 잘라 쓰는 아이콘. 잘라낼 위치(--ix/--iy 시트 px, --is 배율)와 시트 규격(--sheet-w/h)은 exposeTiles 가 :root 에 넣는다 */
 .tile-icon {
   --size: var(--icon);
   display: inline-block;
@@ -140,13 +151,13 @@ body {
   height: var(--size);
   background-image: var(--sheet-url);
   background-repeat: no-repeat;
-  background-size: calc(var(--sheet-cols) * var(--size)) calc(var(--sheet-rows) * var(--size));
-  background-position: calc(var(--tc) * var(--size) * -1) calc(var(--tr) * var(--size) * -1);
+  background-size: calc(var(--sheet-w) * var(--is) * var(--size)) calc(var(--sheet-h) * var(--is) * var(--size));
+  background-position: calc(var(--ix) * var(--is) * var(--size) * -1) calc(var(--iy) * var(--is) * var(--size) * -1);
   image-rendering: pixelated;
 }
 .tile-icon-sm { --size: var(--icon-sm); }
-.icon-machine { --tc: var(--tc-blue); --tr: var(--tr-blue); }
-.icon-box { --tc: var(--tc-box); --tr: var(--tr-box); }
+.icon-machine { --ix: var(--ix-cooler); --iy: var(--iy-cooler); --is: var(--is-cooler); }
+.icon-box { --ix: var(--ix-box); --iy: var(--iy-box); --is: var(--is-box); }
 
 /* 오른쪽 패널: 요약 + 기계 목록 */
 .panel { min-width: 0; padding: var(--s-3); background: var(--surface); border-top: 1px solid var(--line); }
@@ -278,6 +289,6 @@ body {
   .panel { grid-area: side; min-height: 0; overflow-y: auto; border-top: 0; border-left: 1px solid var(--line); }
   /* 폭 = min(칸 폭, 칸 높이에서 범례를 뺀 만큼의 17:9). 남는 여백은 좌우로만 생긴다 */
   .stage-col {
-    width: min(100cqw - var(--pad-stage) * 2, (100cqh - var(--pad-stage) * 2 - var(--h-legend) - var(--frame) * 2) * 17 / 9 + var(--frame) * 2);
+    width: min(100cqw - var(--pad-stage) * 2, (100cqh - var(--pad-stage) * 2 - var(--h-legend) - var(--frame) * 2) * 20 / 11 + var(--frame) * 2);
   }
 }

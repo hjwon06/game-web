@@ -1,24 +1,67 @@
 {
   "sheet": {
-    "file": "assets/kenney-tiny-factory/Tilemap/tilemap_packed.png",
-    "tile": 16,
-    "cols": 12,
-    "rows": 11,
-    "spacing": 0
+    "file": "assets/sierra-automation/spritesheet.png",
+    "tile": 32,
+    "cols": 10,
+    "rows": 118,
+    "width": 320,
+    "height": 3776
   },
-  "scale": 3,
-  "tiles": {
-    "floor": [],
-    "belt_left": [25, 37],
-    "belt_mid": [26, 38],
-    "belt_right": [27, 39],
-    "box": 73,
-    "machine": {
-      "red": 75,
-      "yellow": 87,
-      "green": 99,
-      "blue": 111
+  "scale": 2,
+  "machines": {
+    "recycler": {
+      "crop": { "dx": -8, "dy": -10, "w": 48, "h": 42 },
+      "ms": 160,
+      "off": 671,
+      "on": [674, 677],
+      "working": [691, 694, 697, 711, 714, 717]
     },
-    "worker": 120
+    "smelter": {
+      "crop": { "dx": -8, "dy": -6, "w": 48, "h": 38 },
+      "ms": 140,
+      "off": 331,
+      "on": [334, 337, 351, 354, 357],
+      "working": [371, 374, 377, 391, 394, 397, 411]
+    },
+    "fabrication": {
+      "crop": { "dx": -8, "dy": -12, "w": 48, "h": 44 },
+      "ms": 130,
+      "off": 451,
+      "on": [454, 457, 471],
+      "working": [474, 477, 491, 494, 497, 511, 514, 517, 531, 534, 537, 551, 554]
+    },
+    "cooler": {
+      "crop": { "dx": -8, "dy": -4, "w": 48, "h": 36 },
+      "ms": 160,
+      "off": 151,
+      "on": [154],
+      "working": [157, 171, 174, 177, 191, 194, 197, 211]
+    },
+    "electrifier": {
+      "crop": { "dx": -8, "dy": -4, "w": 48, "h": 36 },
+      "ms": 110,
+      "off": 241,
+      "on": [244, 247, 251, 254, 257, 261, 264],
+      "working": [267, 271, 274, 277, 281, 284, 287, 291, 294, 297]
+    },
+    "randomizer": {
+      "crop": { "dx": -8, "dy": -4, "w": 48, "h": 36 },
+      "ms": 130,
+      "off": 731,
+      "on": [734, 737, 741],
+      "working": [744, 747, 751, 754, 757, 761, 764, 767, 771, 774, 777, 781, 784]
+    }
+  },
+  "belt": {
+    "ms": 120,
+    "right": [50, 51, 52, 53],
+    "left": [54, 55, 56, 57],
+    "down": [58, 59, 60, 61],
+    "up": [62, 63, 64, 65],
+    "corner": null
+  },
+  "items": {
+    "crop": 16,
+    "frames": [17, 18, 19]
   }
 }
