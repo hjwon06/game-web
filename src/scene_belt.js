@@ -4,7 +4,8 @@ import { itemFrame } from './scene_draw.js';
 
 const SPEED = 1.0; // 칸/초
 const GAP = 1.5; // 아이템 간격(칸)
-const DIRS = { right: 'right', left: 'left', down: 'down', up: 'up' };
+const BELT_ALPHA = 1; // T1: 목업의 .62 는 물 빠진 느낌이라 불투명 100%
+const DIRS ={ right: 'right', left: 'left', down: 'down', up: 'up' };
 
 // 꺾이는 칸에서 남기는 반쪽(프레임 안 x, y, w, h). 벨트 한 칸은 32px.
 const HALF = 16;
@@ -57,7 +58,7 @@ export function buildBelt(scene, f, add) {
     const prev = i > 0 && cells[i - 1].dir !== c.dir ? cells[i - 1].dir : null;
     const put = (dir, keep) => {
       const frames = belt[DIRS[dir]];
-      const spr = add(scene.add.image(pts[i].x, pts[i].y, 'tiles', frames[0]).setScale(scene.zoom).setDepth(1));
+      const spr = add(scene.add.image(pts[i].x, pts[i].y, 'tiles', frames[0]).setScale(scene.zoom).setAlpha(BELT_ALPHA).setDepth(1));
       if (keep) {
         // 자른 반쪽은 프레임을 바꾸지 않는다(setFrame 뒤 crop 유지 여부에 기대지 않기 위해). 애니 목록에도 넣지 않는다.
         spr.setCrop(...keep);

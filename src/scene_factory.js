@@ -5,6 +5,8 @@ import { buildBelt, destroyBelt, setBeltRunning, updateBelt } from './scene_belt
 import { Fx, staggerOf } from './fx.js';
 
 const BLINK_MS = 500;
+const HIT_MIN_PX = 44; // 히트박스 최소 크기(화면 픽셀)
+const PLATE_H = 5; // 기계 그림 아래 명판 높이(월드 px = 이 값 × 배율). 히트박스에 포함한다
 
 export class FactoryScene extends Phaser.Scene {
   constructor({ sprites, onSelect }) {
@@ -21,6 +23,7 @@ export class FactoryScene extends Phaser.Scene {
     this.belt = null;
     this.selectedId = null;
     this.blinkOn = false;
+    this.hitK = 0; // 마지막으로 히트박스를 맞출 때의 화면 배율(월드 px / 화면 px)
     this.now = 0; // 씬 시계(ms). fx.js 가 켜짐 프레임 구간을 잡을 때 읽는다
     this.track = (obj) => {
       this.objs.add(obj);
@@ -84,9 +87,12 @@ export class FactoryScene extends Phaser.Scene {
     f.machines.forEach((m) => {
       const v = drawMachine(this, m, this.track);
       v.t = staggerOf(m.id) * 3; // 기계마다 그림 박자가 어긋나게
-      v.spr.on('pointerdown', () => this.pick(m.id));
+      v.spr.disableInteractive(); // 클릭은 히트박스만 받는다. 그림이 작아도 44px 보장이 깨지지 않게
+      v.hit = this.track(this.add.zone(0, 0, 1, 1).setInteractive({ useHandCursor: true }).setDepth(20));
+      v.hit.on('pointerdown', () => this.pick(m.id));
       this.machines.set(m.id, v);
     });
+    this.fitHits(true);
     if (this.selectedId && !this.machines.has(this.selectedId)) this.selectedId = null;
     placeOutline(this.outline, this.machines.get(this.selectedId));
   }
@@ -123,13 +129,29 @@ export class FactoryScene extends Phaser.Scene {
     this.machines.forEach((v) => this.paintTint(v));
   }
 
-  // 캔버스를 눌러서 고른 경우: 안쪽 선택을 바꾸고 바깥(패널)에 알린다.
+  // 히트박스 = 그림 + 명판, 단 화면에서 44×44px 아래로는 줄지 않는다. 선택 테두리는 v.rect(그림 크기)라서 영향 없다.
+  // 캔버스 표시 배율이 바뀌면(리사이즈) 월드 크기를 다시 잡는다. 배율이 그대로면 아무것도 하지 않는다.
+  fitHits(force) {
+    const k = this.scale.displayScale.x || 1;
+    if (!force && k === this.hitK) return;
+    this.hitK = k;
+    const min = HIT_MIN_PX * k;
+    this.machines.forEach((v) => {
+      const r = v.rect;
+      const bottom = r.y + r.h + PLATE_H * this.zoom;
+      const w = Math.max(r.w, min);
+      const h = Math.max(bottom - r.y, min);
+      v.hit.setPosition(r.x + r.w / 2, bottom - h / 2).setSize(w, h);
+    });
+  }
+
+  // 캔버스가 눌렸을 때: 안쪽 선택을 바꾸고 콜백 하나(onSelect)로 바깥에 알린다.
   pick(id) {
     this.select(id);
     this.onSelect(id);
   }
 
-  // 바깥(목록)이 고른 경우: 표시만 바꾼다. onSelect 를 부르지 않는다.
+  // 바깥(고장 칩 등)이 고른 경우: 표시만 바꾼다. onSelect 를 부르지 않는다.
   select(id) {
     this.selectedId = id;
     if (this.outline) placeOutline(this.outline, this.machines.get(id));
@@ -137,6 +159,7 @@ export class FactoryScene extends Phaser.Scene {
 
   update(time, delta) {
     this.now = time;
+    this.fitHits(false);
     this.machines.forEach((v) => {
       if (v.state !== 'running') return;
       v.t += delta;

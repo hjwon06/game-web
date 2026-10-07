@@ -2,10 +2,7 @@
   "sheet": {
     "file": "assets/sierra-automation/spritesheet.png",
     "tile": 32,
-    "cols": 10,
-    "rows": 118,
-    "width": 320,
-    "height": 3776
+    "cols": 10
   },
   "scale": 2,
   "machines": {
