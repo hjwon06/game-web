@@ -1,10 +1,10 @@
 // 씬이 쓰는 그리기 도구. 상태는 갖지 않고, 만든 오브젝트를 돌려준다.
 // Phaser 는 숫자 색을 쓴다. 이 COLORS 가 캔버스 안 색의 유일한 원본이다 (값은 styles.css 토큰과 같게 유지).
 export const COLORS = {
-  defectTint: 0xff5050,
+  brokenTint: 0xff5050,
   clear: 0xffffff,
   accent: 0x1e3a8a,
-  badge: { running: 0x0f766e, stopped: 0x64748b, defect: 0xb91c1c },
+  badge: { running: 0x0f766e, stopped: 0x64748b, broken: 0xb91c1c },
 };
 
 // 캔버스 안 바닥·격자·선택 색은 여기 한 곳에만 둔다.
@@ -51,9 +51,9 @@ export function drawMachine(scene, m, add) {
   const spr = add(scene.add.image(cx, cy, 'tiles', scene.sp.tiles.machine[m.color]).setScale(scene.zoom * 2).setDepth(10));
   spr.setInteractive({ useHandCursor: true });
   const badge = add(scene.add.graphics().setDepth(15));
-  // 불량 외곽선: 기계 둘레 2px 점선. 상태가 불량일 때만 보인다.
+  // 고장 외곽선: 기계 둘레 2px 점선. 상태가 고장일 때만 보인다.
   const dash = add(scene.add.graphics().setDepth(12).setVisible(false));
-  dash.lineStyle(2, COLORS.badge.defect, 1);
+  dash.lineStyle(2, COLORS.badge.broken, 1);
   const { x, y, w, h } = r;
   const edge = (x1, y1, x2, y2) => {
     const len = Math.hypot(x2 - x1, y2 - y1);
@@ -71,7 +71,7 @@ export function drawMachine(scene, m, add) {
   return { spr, badge, dash, rect: r, cx, cy, state: null };
 }
 
-// 상태 배지: 기계 오른쪽 위의 12px 원 + 흰 기호. 가동 = 채운 원, 정지 = 두 줄, 불량 = 느낌표
+// 상태 배지: 기계 오른쪽 위의 12px 원 + 흰 기호. 가동 = 채운 원, 정지 = 두 줄, 고장 = 느낌표
 export function drawBadge(v, state) {
   const g = v.badge;
   const bx = v.rect.x + v.rect.w - BADGE_INSET;

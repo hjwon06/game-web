@@ -1,6 +1,5 @@
 // 오른쪽 패널: 요약 → 기계 목록 → 선택 상세. 받은 상태를 보여주기만 한다.
 // onSelect 는 목록 행을 눌렀을 때만 부른다. select() 는 바깥(캔버스)에서 온 선택이라 되부르지 않는다.
-import { summarize } from './format.js';
 import { el, fmt, stateLabel, renderDetail } from './panel_detail.js';
 
 export function createPanel(root, { onSelect }) {
@@ -15,10 +14,13 @@ export function createPanel(root, { onSelect }) {
   rowsEl.replaceChildren(el('p', 'muted', '상태를 불러오는 중입니다'));
 
   function renderSummary() {
-    const s = summarize(state);
+    const ms = state.machines;
+    const count = (s) => ms.filter((m) => m.state === s).length;
+    const ratio = state.hud && state.hud.defect_ratio_10m;
+    const ratioText = typeof ratio === 'number' ? `${(ratio * 100).toFixed(1)}%` : '—';
     const main = el('div', 'summary-main');
-    main.append(el('span', 'summary-number', String(s.running)), el('span', 'summary-caption', `${s.total}대 중 가동`));
-    const line = el('p', 'summary-line', `정지 ${s.stopped} · 불량 ${s.defect} · 처리 합계 ${fmt(s.processedSum)}개`);
+    main.append(el('span', 'summary-number', String(count('running'))), el('span', 'summary-caption', `/ ${ms.length} 가동`));
+    const line = el('p', 'summary-line', `정지 ${count('stopped')} · 고장 ${count('broken')} · 최근 10분 불량률 ${ratioText}`);
     summaryEl.replaceChildren(main, line);
   }
 
@@ -78,7 +80,7 @@ export function createPanel(root, { onSelect }) {
   function renderSelected() {
     const m = state && selectedId && state.machines.find((x) => x.id === selectedId);
     if (selectedId && state && !m) selectedId = null; // 새 상태에서 사라진 기계
-    renderDetail(detailEl, state, m || null);
+    renderDetail(detailEl, m || null);
   }
 
   return {

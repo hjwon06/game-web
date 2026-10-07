@@ -1,5 +1,5 @@
 // 상태·입력·애니메이션을 맡는다. 그리기 도구는 scene_draw.js.
-// 상태의 원본은 data/factory.json 이고 여기서는 읽기만 한다. 타일 번호·배율은 data/sprites.json 에서만 온다.
+// 상태의 원본은 서버(state.js 가 배치와 합쳐 준다)이고 여기서는 읽기만 한다. 타일 번호·배율은 data/sprites.json 에서만 온다.
 import { COLORS, addBox, buildBelt, drawBadge, drawFloor, drawMachine, makeOutline, placeBox, placeOutline } from './scene_draw.js';
 
 const BELT_SPEED = 1.2; // 칸/초
@@ -117,7 +117,7 @@ export class FactoryScene extends Phaser.Scene {
       if (!v) return;
       v.state = m.state;
       v.spr.setAlpha(m.state === 'stopped' ? STOPPED_ALPHA : 1);
-      v.dash.setVisible(m.state === 'defect');
+      v.dash.setVisible(m.state === 'broken');
       this.paintTint(v);
       drawBadge(v, m.state);
     });
@@ -127,7 +127,7 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   paintTint(v) {
-    if (v.state === 'defect' && this.blinkOn) v.spr.setTint(COLORS.defectTint);
+    if (v.state === 'broken' && this.blinkOn) v.spr.setTint(COLORS.brokenTint);
     else v.spr.clearTint();
   }
 
