@@ -136,10 +136,17 @@ def wait_state(page, code, state, ms=3500):
 
 
 def select(page, code):
-    click_machine(page, code)
-    page.wait_for_function(
-        "c => { const e = document.querySelector('.inspect'); return !!e && e.textContent.includes(c); }",
-        arg=code, timeout=3000)
+    # 새로고침 직후에는 Phaser 씬(히트박스)이 아직 안 깔렸을 수 있다. 짧게 여러 번 눌러 본다.
+    for _ in range(8):
+        click_machine(page, code)
+        try:
+            page.wait_for_function(
+                "c => { const e = document.querySelector('.inspect'); return !!e && e.textContent.includes(c); }",
+                arg=code, timeout=1500)
+            return
+        except Exception:
+            continue
+    raise AssertionError(f"{code} 선택 실패: 히트박스 클릭에 .inspect 가 반응하지 않음")
 
 
 def produced(page):
