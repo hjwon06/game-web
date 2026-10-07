@@ -167,9 +167,16 @@ export function renderDetail(section, machine) {
   const result = el('p', 'cmd-result', msg);
   result.setAttribute('role', 'status');
   section.replaceChildren(
-    column('dc-id', icon, column('dc-name', el('h3', 'detail-name', machine.name), state)),
-    column('dc-work', kv('작업지시', 'work_order', workOrderText(machine.work_order)), buildProgress(machine), kv('생산 수량', 'produced', fmt(producedOf(machine)), 'num')),
-    column('dc-stat', kv('최근 1분 생산', 'last_minute', fmt(machine.last_minute_good ?? 0), 'num'), kv('위치', 'pos', `x ${machine.x}, y ${machine.y}`, 'num')),
-    column('dc-act', buildActions(machine), result),
+    // 왼쪽 묶음(이름·작업지시·진행) / 오른쪽 묶음(최근 1분·위치·버튼). 데스크톱은 display: contents 로 4칸, 중간 폭은 2열
+    column(
+      'dc-left',
+      column('dc-id', icon, column('dc-name', el('h3', 'detail-name', machine.name), state)),
+      column('dc-work', kv('작업지시', 'work_order', workOrderText(machine.work_order)), buildProgress(machine), kv('생산 수량', 'produced', fmt(producedOf(machine)), 'num')),
+    ),
+    column(
+      'dc-right',
+      column('dc-stat', kv('최근 1분 생산', 'last_minute', fmt(machine.last_minute_good ?? 0), 'num'), kv('위치', 'pos', `x ${machine.x}, y ${machine.y}`, 'num')),
+      column('dc-act', buildActions(machine), result),
+    ),
   );
 }

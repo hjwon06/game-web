@@ -99,11 +99,13 @@ class AuthTest < ActionDispatch::IntegrationTest
     assert_response :unauthorized
   end
 
-  test "로그인 후 / 는 공장 화면 index.html 을 그대로 준다" do
+  test "로그인 후 / 는 base 태그만 더한 공장 화면 index.html 을 준다" do
     sign_in_as create_user
     get "/"
     assert_response :ok
     assert_equal "text/html", response.media_type
-    assert_equal File.binread(Rails.root.join("..", "index.html")), response.body.b
+    assert_match(%r{<base href="/v/\d+/">}, response.body)
+    stripped = response.body.b.sub(%r{\n  <base href="/v/\d+/">}n, "")
+    assert_equal File.binread(Rails.root.join("..", "index.html")), stripped
   end
 end

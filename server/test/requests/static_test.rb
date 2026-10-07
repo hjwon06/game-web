@@ -19,7 +19,7 @@ class StaticTest < ActionDispatch::IntegrationTest
   end
 
   test "ver 값은 검사하지 않는다" do
-    get "/v/아무거나/styles.css"
+    get "/v/anything-123/styles.css"
     assert_response :ok
   end
 

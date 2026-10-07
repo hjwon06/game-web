@@ -30,7 +30,6 @@
   --h-topbar: 56px;
   --h-legend: 36px;
   --h-row: 44px;
-  --h-detail: 120px;
   --w-panel: 360px;
   --h-touch: 44px;
   --h-progress: 8px;
@@ -108,7 +107,7 @@ body {
 .bracket-bl { bottom: calc(var(--frame) * -1 - var(--bracket)); left: calc(var(--frame) * -1 - var(--bracket)); border-bottom-width: var(--frame); border-left-width: var(--frame); }
 .bracket-br { bottom: calc(var(--frame) * -1 - var(--bracket)); right: calc(var(--frame) * -1 - var(--bracket)); border-bottom-width: var(--frame); border-right-width: var(--frame); }
 
-/* 범례: 캔버스 바로 아래 한 줄, 왼쪽 정렬 */
+/* 범례: 캔버스 바로 아래 한 줄, 왼쪽 정렬. 항목 사이 간격은 16px(--s-3) */
 .legend {
   display: flex;
   align-items: center;
@@ -171,6 +170,7 @@ body {
   border-radius: var(--r-1);
 }
 .stat-chip .num { font-size: var(--fs-num); font-weight: 700; color: var(--navy); }
+.stat-chip .num.state-broken { color: var(--broken); }
 
 .machine-list { margin: 0; padding: 0; list-style: none; }
 .machine-list > li { border-bottom: 1px solid var(--line); }
@@ -205,6 +205,7 @@ body {
   gap: var(--s-4);
 }
 .detail-slot > * { min-width: 0; }
+.dc-left, .dc-right { display: contents; }
 .dc-id { display: flex; align-items: center; gap: var(--s-3); }
 .detail-name { margin: 0; font-size: var(--fs-title); font-weight: 700; line-height: 1.2; }
 .detail-state { margin: 0; font-size: var(--fs-body); }
@@ -250,29 +251,33 @@ body {
   .stage-area { padding: var(--s-3) var(--s-3) var(--s-2); }
 }
 
-/* 중간(700~1099): 캔버스 전체 폭, 아래에 [상세 | 목록] 2열. 페이지 스크롤 허용 */
+/* 중간(700~1099): 캔버스 전체 폭 → 상세(전체 폭 가로형) → 목록(2열 6행). 페이지 스크롤 허용 */
 @media (min-width: 700px) and (max-width: 1099px) {
-  .layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "stage stage" "detail side"; }
+  .layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "stage" "detail" "side"; }
   .stage { grid-area: stage; }
-  .detail-slot { grid-area: detail; border-right: 1px solid var(--line); }
+  .detail-slot { grid-area: detail; align-self: start; }
   .panel { grid-area: side; }
-  .detail-slot.machine-detail { grid-template-columns: minmax(0, 1fr); align-items: start; gap: var(--s-3); }
+  .detail-slot.machine-detail { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: var(--s-4); }
+  .dc-left, .dc-right { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
+  .machine-list { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--s-4); }
 }
 
-/* 데스크톱(1100 이상): 페이지 전체가 100dvh 안. 왼쪽 = 캔버스 + 상세, 오른쪽 = 요약 + 목록(목록만 스크롤) */
+/* 데스크톱(1100 이상): 페이지 전체가 100dvh 안. 왼쪽 = 캔버스(남는 높이 전부) + 상세(내용 높이), 오른쪽 = 요약 + 목록(목록만 스크롤) */
 @media (min-width: 1100px) {
   .layout {
     grid-template-columns: minmax(0, 1fr) var(--w-panel);
-    grid-template-rows: auto minmax(var(--h-detail), 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
     grid-template-areas: "stage side" "detail side";
     height: calc(100dvh - var(--h-topbar));
     overflow: hidden;
   }
-  .stage { grid-area: stage; }
-  .detail-slot { grid-area: detail; min-height: var(--h-detail); }
+  /* 캔버스 칸 크기를 컨테이너 단위(cqw/cqh)로 재서 캔버스를 contain 으로 맞춘다 */
+  .stage { grid-area: stage; container-type: size; min-height: 0; }
+  .stage-area { height: 100%; display: flex; align-items: center; justify-content: center; }
+  .detail-slot { grid-area: detail; }
   .panel { grid-area: side; min-height: 0; overflow-y: auto; border-top: 0; border-left: 1px solid var(--line); }
-  /* 캔버스 폭 = 왼쪽 열 폭, 단 높이가 모자라면 17:9 비율로 줄인다. 상세 카드 최소 높이는 항상 남긴다 */
+  /* 폭 = min(칸 폭, 칸 높이에서 범례를 뺀 만큼의 17:9). 남는 여백은 좌우로만 생긴다 */
   .stage-col {
-    width: min(100%, calc((100dvh - var(--h-topbar) - var(--h-detail) - var(--h-legend) - var(--pad-stage) * 2 - var(--frame) * 2) * 17 / 9 + var(--frame) * 2));
+    width: min(100cqw - var(--pad-stage) * 2, (100cqh - var(--pad-stage) * 2 - var(--h-legend) - var(--frame) * 2) * 17 / 9 + var(--frame) * 2);
   }
 }

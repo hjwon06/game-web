@@ -2,6 +2,8 @@
 // onSelect 는 목록 행을 눌렀을 때만 부른다. select() 는 바깥(캔버스)에서 온 선택이라 되부르지 않는다.
 import { el, fmt, stateLabel, renderDetail } from './panel_detail.js';
 
+const DEFECT_WARN = 0.05; // 불량률 5% 이상이면 고장 색 글자
+
 export function createPanel(root, { onSelect }) {
   const summaryEl = root.querySelector('#panel-summary');
   const rowsEl = root.querySelector('#panel-rows');
@@ -25,16 +27,20 @@ export function createPanel(root, { onSelect }) {
     chips.append(
       chip('stopped', '정지', String(count('stopped'))),
       chip('broken', '고장', String(count('broken'))),
-      chip('stopped', '불량률(10분)', ratioText),
+      chip(null, '불량률(10분)', ratioText, typeof ratio === 'number' && ratio >= DEFECT_WARN ? 'state-broken' : ''),
     );
     summaryEl.replaceChildren(main, chips);
   }
 
-  function chip(kind, label, value) {
+  // kind 가 null 이면 점 없이 글자만. valueClass 로 값 글자 색을 바꾼다.
+  function chip(kind, label, value, valueClass = '') {
     const c = el('span', 'stat-chip');
-    const dot = el('i', `dot dot-${kind}`);
-    dot.setAttribute('aria-hidden', 'true');
-    c.append(dot, label, el('span', 'num', value));
+    if (kind) {
+      const dot = el('i', `dot dot-${kind}`);
+      dot.setAttribute('aria-hidden', 'true');
+      c.append(dot);
+    }
+    c.append(label, el('span', `num ${valueClass}`.trim(), value));
     return c;
   }
 
