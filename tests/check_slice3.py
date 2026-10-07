@@ -32,7 +32,14 @@ LOGIN_PASSWORD = os.environ.get("CHECK_PASSWORD", "")
 
 def login(ctx):
     """브라우저 컨텍스트에 로그인 쿠키를 심는다. ctx.request 와 ctx 의 모든 페이지가 같은 쿠키를 쓴다."""
-    ctx.request.post(f"{BASE}/login", data={"name": LOGIN_NAME, "password": LOGIN_PASSWORD})
+    # 로그인 폼은 CSRF 토큰이 필요하다. 실제 화면에서 폼을 채워 제출한다.
+    page = ctx.new_page()
+    page.goto(f"{BASE}/login")
+    page.fill("#name", LOGIN_NAME)
+    page.fill("#password", LOGIN_PASSWORD)
+    page.click("input[type=submit]")
+    page.wait_for_load_state()
+    page.close()
     me = ctx.request.get(f"{BASE}/api/me")
     if me.status != 200:
         sys.exit(f"로그인 실패(/api/me {me.status}). CHECK_USER / CHECK_PASSWORD 환경변수를 확인한다.")
@@ -200,7 +207,9 @@ def run(browser, req, errors):
     page.screenshot(path=str(OUT / "s3_final.png"))  # ⑥
     check("⑥ 스크린샷 저장", all((OUT / f).exists() for f in
           ("s3_full.png", "s3_detail.png", "s3_conflict.png", "s3_broken.png")))
-    check("① 콘솔 에러 0", not errors, f"({errors[:3]})")
+    # ④ 에서 B 페이지는 일부러 읽기를 끊고(abort -> ERR_FAILED) 409 를 받는다. 그 두 종류는 의도된 기록이라 뺀다.
+    real = [e for e in errors if not (e.startswith("B:") and "Failed to load resource" in e)]
+    check("① 콘솔 에러 0", not real, f"({real[:3]})")
 
 
 def main():
