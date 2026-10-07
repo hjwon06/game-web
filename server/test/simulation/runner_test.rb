@@ -84,4 +84,74 @@ class RunnerTest < ActiveSupport::TestCase
     run_window(runner, 3)
     assert_equal 3, @log.string.scan("simulated flush failure").size, "폐기된 구간은 더 이상 재시도하지 않는다"
   end
+
+  # 구간 0 이 두 번 실패하는 동안 구간 1 은 시도조차 되지 않아야 한다.
+  test "구간 0 이 실패한 경계에서 구간 1 은 기록되지 않고 시도도 되지 않는다" do
+    flusher = FlakyFlusher.new(fail_bucket: bucket(0), fail_times: 2)
+    runner = build_runner(flusher)
+
+    run_window(runner, 0)
+    run_window(runner, 1)
+
+    assert_equal 0, ProductionEvent.count, "구간 1 이 구간 0 보다 먼저 기록되면 안 된다"
+    assert_equal [bucket(0), bucket(0)], flusher.calls, "뒤 구간은 시도하지 않는다"
+    assert_equal 2, @log.string.scan("simulated flush failure").size, "뒤 구간은 실패 횟수가 늘지 않는다"
+  end
+
+  test "다음 경계에서 구간 0, 1 순서로 기록된다" do
+    runner = build_runner(FlakyFlusher.new(fail_bucket: bucket(0), fail_times: 2))
+
+    3.times { |window| run_window(runner, window) }
+
+    events = ProductionEvent.order(:id)
+    assert_equal [bucket(0), bucket(1), bucket(2)], events.map(&:bucket_start), "id 순서가 구간 순서와 같다"
+    assert_no_match(/dropped/, @log.string)
+  end
+
+  test "구간 0 의 생산량은 원래 지시에 들어가고 그 뒤에야 다음 지시가 활성화된다" do
+    @order.update!(target_qty: 1)
+    next_order = WorkOrder.create!(code: "WO-2", machine: @machine, product: "브래킷", target_qty: 100_000,
+                                   status: "queued")
+    runner = build_runner(FlakyFlusher.new(fail_bucket: bucket(0), fail_times: 1))
+
+    run_window(runner, 0)
+    run_window(runner, 1) # 구간 0 재시도 성공 → 지시 완료 → 지시 2 활성화 → 구간 1
+
+    events = ProductionEvent.order(:id).to_a
+    assert_equal [bucket(0), bucket(1)], events.map(&:bucket_start)
+    assert_operator events.first.good_qty, :>=, 1, "구간 0 이 목표를 채운다"
+    assert_equal [@order.id, next_order.id], events.map(&:work_order_id), "구간 0 은 원래 지시, 구간 1 은 다음 지시"
+    assert_equal "done", @order.reload.status
+    assert_equal events.first.good_qty, @order.produced_qty, "다음 지시의 생산량이 섞이지 않는다"
+    assert_equal events.last.good_qty, next_order.reload.produced_qty
+  end
+
+  class AlwaysFailFlusher
+    attr_reader :calls
+
+    def initialize
+      @calls = []
+    end
+
+    def call(_accumulator, bucket_start)
+      @calls << bucket_start
+      raise ActiveRecord::StatementInvalid, "down"
+    end
+  end
+
+  test "보류가 6개를 넘으면 가장 오래된 구간부터 폐기하고 경고를 남긴다" do
+    flusher = AlwaysFailFlusher.new
+    runner = build_runner(flusher)
+    runner.instance_variable_set(
+      :@pending, (-6..-1).map { |w| { bucket: bucket(w), accumulator: Simulation::Accumulator.new, failures: 0 } }
+    )
+
+    run_window(runner, 0) # 7번째 구간이 들어와 상한을 넘는다
+
+    pending = runner.instance_variable_get(:@pending)
+    assert_equal 6, pending.size
+    assert_equal [bucket(-5), bucket(-4), bucket(-3), bucket(-2), bucket(-1), bucket(0)], pending.map { |i| i[:bucket] }
+    assert_match(/dropped bucket #{Regexp.escape(bucket(-6).to_s)}: pending over 6/, @log.string)
+    assert_equal [bucket(-5)], flusher.calls, "맨 앞만 시도하고 멈춘다"
+  end
 end

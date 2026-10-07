@@ -25,30 +25,33 @@ class MachineCommand
   def call
     return Result.new(status: 422, machine: nil) unless valid_input?
 
-    stored = Command.find_by(idempotency_key: @key) # 기계 조회보다 먼저: 같은 키·다른 내용은 없는 기계여도 422
-    return replay(Machine.find_by(code: @machine_code)&.id, stored) if stored
+    Machine.transaction do
+      lock_key # 같은 키 요청을 직렬화한다. 먼저 온 쪽이 커밋하면 뒤 요청의 조회가 그 행을 본다.
+      stored = Command.find_by(idempotency_key: @key) # 기계 조회보다 먼저: 같은 키·다른 내용은 없는 기계여도 422
+      machine = Machine.find_by(code: @machine_code)
+      next replay(machine&.id, stored) if stored
+      next Result.new(status: 404, machine: nil) unless machine
 
-    machine = Machine.find_by(code: @machine_code)
-    return not_found unless machine
-
-    Machine.transaction { run(machine.id) }
+      run(machine.id)
+    end
   end
 
   private
 
-  # 조회 직후 같은 키가 동시에 커밋됐을 수 있으므로 404 를 내기 전에 한 번 더 본다.
-  def not_found
-    stored = Command.find_by(idempotency_key: @key)
-    return replay(nil, stored) if stored
-
-    Result.new(status: 404, machine: nil)
+  def lock_key
+    sql = ApplicationRecord.sanitize_sql(["SELECT pg_advisory_xact_lock(hashtext(?))", @key])
+    ApplicationRecord.connection.execute(sql)
   end
 
+  # 잠금 순서는 모든 경로에서 "advisory(키) → machines 행" 하나뿐이다. 기록(commands INSERT)은 그 뒤에 한다.
+  # commands INSERT 의 FK 검사는 machines 행에 FOR KEY SHARE 를 잡고 트랜잭션 끝까지 쥔다.
+  # INSERT 를 FOR UPDATE 앞에 두면 같은 기계로 온 두 요청이 각자 KEY SHARE 를 쥔 채 서로의 FOR UPDATE 를
+  # 기다려 교착(deadlock detected → 500)이 난다. FOR UPDATE 를 먼저 잡으면 뒤 요청은 INSERT 이전에 줄을 선다.
   def run(machine_id)
-    command_id = insert_command(machine_id)                       # ①
+    machine = Machine.lock.find(machine_id)                       # ① FOR UPDATE
+    command_id = insert_command(machine_id)                       # ② KEY SHARE 는 이미 쥔 행 잠금에 포함된다
     return replay(machine_id) unless command_id
 
-    machine = Machine.lock.find(machine_id)                       # ② FOR UPDATE
     return finish(command_id, machine, 409) if @base_version != machine.version # ③
     return finish(command_id, machine, 200) if machine.state == TARGET[@kind]   # 이미 목표 상태: no-op
     return finish(command_id, machine, 422) unless ALLOWED_FROM[@kind].include?(machine.state) # ④
