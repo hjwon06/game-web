@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>라인 관제 목업</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F2F3F5; --card:#FFFFFF; --line:#E5E7EB; --ink:#1A1A2E; --sub:#6B7280; --mute:#9CA3AF;
+  --navy:#1E3A5F; --navy-tint:#E8EEF5;
+  --run:#2F6B4F; --run-tint:#E6F0EA;
+  --stop:#6B7280; --stop-tint:#EEF0F2;
+  --bad:#C0392B; --bad-tint:#F8E7E5;
+  --num:'Outfit',Pretendard,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:Pretendard,sans-serif;font-size:13px;word-break:keep-all;-webkit-font-smoothing:antialiased}
+.app{min-height:100dvh;display:grid;grid-template-rows:52px 1fr;}
+/* header */
+.top{display:flex;align-items:center;gap:20px;padding:0 24px;background:var(--card);border-bottom:1px solid var(--line)}
+.brand{font-family:var(--num);font-weight:700;font-size:15px;letter-spacing:.02em;color:var(--navy)}
+.brand small{font-family:Pretendard;font-weight:500;color:var(--sub);font-size:12px;margin-left:8px;letter-spacing:0}
+.top .sp{flex:1}
+.live{display:flex;align-items:center;gap:8px;color:var(--sub);font-size:12px}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--run);display:inline-block}
+.clock{font-family:var(--num);font-weight:500;font-size:14px;font-variant-numeric:tabular-nums}
+.who{font-size:12px;color:var(--sub)} .who b{color:var(--ink);font-weight:600}
+.who a{color:var(--sub);margin-left:10px;text-decoration:none;border-bottom:1px solid var(--line)}
+/* body grid */
+.main{display:grid;grid-template-columns:minmax(0,1fr) 392px;gap:12px;padding:12px;min-height:0}
+.col{display:grid;gap:12px;min-height:0}
+.left{grid-template-rows:minmax(0,1.35fr) minmax(0,1fr)}
+.right{grid-template-rows:auto auto minmax(0,1fr)}
+.card{background:var(--card);border-radius:8px;padding:16px 18px;min-height:0;display:flex;flex-direction:column}
+.hd{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+.hd h2{font-size:13px;font-weight:600}
+.hd .meta{font-size:11px;color:var(--mute)}
+.hd .sp{flex:1}
+/* twin */
+.twin{flex:1;min-height:0}
+.twin svg{width:100%;height:100%;display:block}
+.m{cursor:pointer}
+.m rect.body{fill:#fff;stroke:var(--line);stroke-width:1.5;transition:stroke .15s}
+.m:hover rect.body{stroke:var(--navy)}
+.m.sel rect.body{stroke:var(--navy);stroke-width:2.5}
+.m .code{font-family:var(--num);font-weight:600;font-size:15px;fill:var(--ink)}
+.m .nm{font-size:11.5px;fill:var(--sub)}
+.m .wo{font-family:var(--num);font-size:10.5px;fill:var(--mute)}
+.m.broken rect.body{stroke:var(--bad);stroke-width:2;fill:#FFFBFA}
+.m.broken .code{fill:var(--bad)}
+.legend{display:flex;gap:14px;font-size:11px;color:var(--sub)}
+.legend span::before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--c)}
+/* work orders */
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;font-weight:500;color:var(--mute);text-align:left;padding:0 8px 8px;border-bottom:1px solid var(--line)}
+td{padding:7px 8px;border-bottom:1px solid #F1F2F4;font-size:12.5px;white-space:nowrap}
+td.n{font-family:var(--num);font-variant-numeric:tabular-nums;text-align:right}
+td.code{font-family:var(--num);font-weight:500;color:var(--sub)}
+.bar{height:6px;background:#EEF0F2;border-radius:4px;overflow:hidden;min-width:120px}
+.bar i{display:block;height:100%;background:var(--navy);border-radius:4px}
+tr.bad .bar i{background:var(--bad)}
+.tbl{overflow:auto;flex:1;min-height:0}
+.st{font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px}
+.st.running{color:var(--run);background:var(--run-tint)}
+.st.stopped{color:var(--stop);background:var(--stop-tint)}
+.st.broken{color:var(--bad);background:var(--bad-tint)}
+/* kpi */
+.kpi{display:grid;grid-template-columns:1.25fr 1fr;gap:0;padding:18px 20px}
+.kpi .big{font-family:var(--num);font-weight:600;font-size:76px;line-height:.95;letter-spacing:-.02em;color:var(--navy)}
+.kpi .big small{font-size:28px;color:var(--mute);font-weight:500;margin-left:2px}
+.kpi .lb{font-size:11px;color:var(--sub);margin-bottom:8px}
+.kpi .side{border-left:1px solid var(--line);padding-left:18px;display:grid;gap:10px;align-content:center}
+.kpi .row{display:flex;justify-content:space-between;align-items:baseline}
+.kpi .row b{font-family:var(--num);font-weight:600;font-size:20px}
+.kpi .row.bad b{color:var(--bad)}
+/* selected machine */
+.selhd{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.selhd .c{font-family:var(--num);font-weight:700;font-size:24px}
+.selhd .n{font-size:14px;font-weight:600}
+.selhd .sp{flex:1}
+.facts{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 16px;font-size:12px;color:var(--sub);margin-bottom:14px}
+.facts b{color:var(--ink);font-weight:500;font-family:var(--num);margin-left:6px}
+.btns{display:flex;gap:8px}
+.btn{flex:1;height:38px;border-radius:4px;border:1px solid var(--line);background:#fff;font:600 13px Pretendard;color:var(--ink);cursor:pointer;transition:transform .15s,border-color .15s}
+.btn:hover:not(:disabled){transform:translateY(-2px);border-color:var(--navy)}
+.btn.pri{background:var(--navy);color:#fff;border-color:var(--navy)}
+.btn:disabled{color:var(--mute);background:#F7F8F9;cursor:not-allowed}
+/* trace */
+.trace{flex:1;overflow:auto;min-height:0;font-size:12px}
+.ev{display:grid;grid-template-columns:62px 1fr auto;gap:10px;padding:8px 0;border-bottom:1px solid #F1F2F4;align-items:baseline}
+.ev .t{font-family:var(--num);color:var(--mute);font-variant-numeric:tabular-nums}
+.ev .d b{font-weight:600}
+.ev .d .k{font-family:var(--num);color:var(--mute);font-size:10.5px;display:block;margin-top:2px}
+.ev .r{font-family:var(--num);font-weight:600;font-size:11.5px}
+.ev .r.ok{color:var(--run)} .ev .r.no{color:var(--bad)} .ev .r.wait{color:var(--mute)}
+.ev.new{animation:in .35s ease-out}
+@keyframes in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.foot{position:fixed;right:16px;bottom:10px;font-size:10.5px;color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">LINE A<small>하우징·샤프트 가공 라인</small></div>
+    <div class="sp"></div>
+    <div class="live"><i></i>실시간 · 3초 폴링 · 마지막 갱신 <span id="ago" style="font-family:var(--num)">0.8s</span></div>
+    <div class="clock" id="clock">21:11:07</div>
+    <div class="who"><b>123</b> 로그인됨<a href="#">로그아웃</a></div>
+  </header>
+
+  <main class="main">
+    <section class="col left">
+      <div class="card">
+        <div class="hd"><h2>라인 트윈</h2><span class="meta">설비 12대 · 입고 → 가공 → 검사 → 출하</span><span class="sp"></span>
+          <div class="legend"><span style="--c:var(--run)">가동</span><span style="--c:var(--stop)">정지</span><span style="--c:var(--bad)">고장</span></div>
+        </div>
+        <div class="twin"><svg id="twin" viewBox="0 0 1000 470" preserveAspectRatio="xMidYMid meet"></svg></div>
+      </div>
+      <div class="card">
+        <div class="hd"><h2>작업지시</h2><span class="meta">진행 12건 · 대기 10건 · 완료 36건</span></div>
+        <div class="tbl"><table><thead><tr><th>지시</th><th>설비</th><th>품목</th><th>진행</th><th style="text-align:right">생산 / 목표</th><th>설비 상태</th></tr></thead><tbody id="wo"></tbody></table></div>
+      </div>
+    </section>
+
+    <section class="col right">
+      <div class="card kpi">
+        <div><div class="lb">지금 가동 중</div><div class="big" id="kRun">10<small>/12</small></div></div>
+        <div class="side">
+          <div class="row"><span>정지</span><b id="kStop">1</b></div>
+          <div class="row bad"><span>고장</span><b id="kBad">1</b></div>
+          <div class="row"><span>생산 기록</span><b style="font-size:16px">30,541건</b></div>
+        </div>
+      </div>
+      <div class="card" id="sel"></div>
+      <div class="card">
+        <div class="hd"><h2>명령 · 상태 이력</h2><span class="meta">commands → machine_state_events</span></div>
+        <div class="trace" id="trace"></div>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="foot">목업 · 2026-10-07 21:11 DB 스냅샷 값 · 버튼은 화면 안에서만 흉내냅니다</div>
+
+<script>
+// 실제 DB 스냅샷 (2026-10-07)
+const M = [
+ {id:1,code:'M1',name:'절단기',st:'running',v:2,wo:['WO-3040','하우징',719,23700]},
+ {id:2,code:'M2',name:'조립기',st:'running',v:1,wo:['WO-3041','하우징',11494,23700]},
+ {id:3,code:'M3',name:'검사기',st:'running',v:2,wo:['WO-3043','샤프트',13789,29600]},
+ {id:4,code:'M4',name:'가공기',st:'stopped',v:1,wo:['WO-1004','샤프트 D',0,240]},
+ {id:5,code:'M5',name:'절단기 2',st:'running',v:2,wo:['WO-3046','기어',2896,23700]},
+ {id:6,code:'M6',name:'가공기 2',st:'running',v:20,wo:['WO-3047','기어',9058,23700]},
+ {id:7,code:'M7',name:'조립기 2',st:'running',v:14,wo:['WO-3049','브래킷',15080,29600]},
+ {id:8,code:'M8',name:'검사기 2',st:'running',v:21,wo:['WO-3051','하우징',12619,31500]},
+ {id:9,code:'M9',name:'도장기 1',st:'running',v:0,wo:['WO-3053','샤프트',17263,18400]},
+ {id:10,code:'M10',name:'도장기 2',st:'broken',v:2,wo:['WO-2037','커버',1276,2370]},
+ {id:11,code:'M11',name:'포장기 1',st:'running',v:1,wo:['WO-3055','플랜지',19660,29600]},
+ {id:12,code:'M12',name:'포장기 2',st:'running',v:1,wo:['WO-3057','기어',13774,31500]},
+];
+let trace = [
+ {t:'21:11:06',cmd:78,m:'M8',kind:'start',base:20,res:200,to:'stopped → running · v21'},
+ {t:'21:11:05',cmd:77,m:'M8',kind:'repair',base:19,res:200,to:'broken → stopped · v20'},
+ {t:'21:11:02',cmd:76,m:'M8',kind:'break',base:18,res:200,to:'running → broken · v19'},
+ {t:'21:10:58',cmd:75,m:'M7',kind:'start',base:13,res:200,to:'stopped → running · v14'},
+ {t:'21:10:51',cmd:74,m:'M7',kind:'stop',base:12,res:409,to:'버전 충돌 · 이미 v13으로 바뀜'},
+ {t:'21:10:44',cmd:73,m:'M7',kind:'stop',base:12,res:200,to:'running → stopped · v13'},
+ {t:'21:09:57',cmd:72,m:'M6',kind:'start',base:19,res:200,to:'stopped → running · v20'},
+];
+const KIND={start:'재가동',stop:'정지',repair:'수리',break:'고장 발생'};
+const STL={running:'가동',stopped:'정지',broken:'고장'};
+const COL={running:'#2F6B4F',stopped:'#6B7280',broken:'#C0392B'};
+let selId=10, nextCmd=79;
+
+// 배치: 윗줄 왼→오, 아랫줄 오→왼 (U자 라인)
+const W=112,H=104, TOP=64, BOT=318;
+const pos={1:[30,TOP],2:[166,TOP],3:[322,TOP],4:[458,TOP],5:[594,TOP],6:[730,TOP],7:[858,TOP],
+           8:[858,BOT],9:[722,BOT],10:[586,BOT],11:[386,BOT],12:[250,BOT]};
+const zones=[['입고',14,40,276,150],['가공',306,40,680,150],['검사',570,294,416,150],['출하',14,294,526,150]];
+
+const svg=document.getElementById('twin');
+let built=false;
+function draw(){
+  if(!built){ let s='';
+  zones.forEach(([n,x,y,w,h])=>{ s+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="#F7F8FA"/><text x="${x+12}" y="${y+18}" font-size="11" font-weight="600" fill="#9CA3AF">${n}</text>`; });
+  // 컨베이어
+  const path='M 14 116 L 960 116 Q 980 116 980 136 L 980 350 Q 980 370 960 370 L 30 370';
+  s+=`<path id="belt" d="${path}" fill="none" stroke="#D5D9DF" stroke-width="10" stroke-linecap="round"/>`;
+  s+=`<path d="${path}" fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="2 14"/>`;
+  for(let i=0;i<9;i++) s+=`<rect width="10" height="8" x="-5" y="-4" rx="2" fill="#1E3A5F" opacity=".55"><animateMotion dur="18s" begin="-${i*2}s" repeatCount="indefinite" rotate="auto"><mpath href="#belt"/></animateMotion></rect>`;
+  // 출하 도크
+  s+=`<rect x="30" y="${BOT+8}" width="190" height="88" rx="8" fill="#fff" stroke="#E5E7EB" stroke-dasharray="4 4"/><text x="46" y="${BOT+36}" font-size="12" font-weight="600" fill="#6B7280">출하 도크</text><text x="46" y="${BOT+70}" font-family="Outfit" font-size="22" font-weight="600" fill="#1A1A2E">4,187</text><text x="120" y="${BOT+70}" font-size="11" fill="#9CA3AF">개 오늘</text>`;
+  svg.innerHTML=s+'<g id="mach"></g>'; built=true; }
+  let s='';
+  M.forEach(m=>{
+    const [x,y]=pos[m.id]; const p=Math.min(1,m.wo[2]/m.wo[3]);
+    s+=`<g class="m ${m.st} ${m.id===selId?'sel':''}" data-id="${m.id}" transform="translate(${x},${y})">
+      <rect class="body" width="${W}" height="${H}" rx="8"/>
+      <rect x="0" y="0" width="${W}" height="5" rx="2" fill="${COL[m.st]}"/>
+      <text class="code" x="12" y="30">${m.code}</text>
+      <text x="${W-12}" y="29" text-anchor="end" font-size="11" font-weight="600" fill="${COL[m.st]}">${STL[m.st]}</text>
+      <text class="nm" x="12" y="49">${m.name}</text>
+      <text class="wo" x="12" y="76">${m.wo[0]}</text>
+      <rect x="12" y="85" width="${W-24}" height="5" rx="2" fill="#EEF0F2"/>
+      <rect x="12" y="85" width="${(W-24)*p}" height="5" rx="2" fill="${m.st==='broken'?'#C0392B':'#1E3A5F'}"/>
+      ${m.st==='broken'?`<circle cx="${W-6}" cy="6" r="9" fill="#C0392B"><animate attributeName="opacity" values="1;.35;1" dur="1.4s" repeatCount="indefinite"/></circle><text x="${W-6}" y="10" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">!</text>`:''}
+    </g>`;
+  });
+  const g0=svg.querySelector('#mach'); g0.innerHTML=s;
+  svg.querySelectorAll('.m').forEach(g=>g.onclick=()=>{selId=+g.dataset.id;render();});
+}
+function fmt(n){return n.toLocaleString('ko-KR')}
+function renderWO(){
+  document.getElementById('wo').innerHTML=M.map(m=>{const p=m.wo[2]/m.wo[3];return `<tr class="${m.st==='broken'?'bad':''}"><td class="code">${m.wo[0]}</td><td>${m.code} ${m.name}</td><td>${m.wo[1]}</td><td><div class="bar"><i style="width:${(p*100).toFixed(1)}%"></i></div></td><td class="n">${fmt(m.wo[2])} / ${fmt(m.wo[3])}</td><td><span class="st ${m.st}">${STL[m.st]}</span></td></tr>`}).join('');
+}
+function renderKPI(){
+  const c=s=>M.filter(m=>m.st===s).length;
+  document.getElementById('kRun').innerHTML=`${c('running')}<small>/12</small>`;
+  document.getElementById('kStop').textContent=c('stopped');
+  document.getElementById('kBad').textContent=c('broken');
+}
+function renderSel(){
+  const m=M.find(x=>x.id===selId); const p=m.wo[2]/m.wo[3];
+  document.getElementById('sel').innerHTML=`
+   <div class="selhd"><span class="c">${m.code}</span><span class="n">${m.name}</span><span class="sp"></span><span class="st ${m.st}">${STL[m.st]}</span></div>
+   <div class="facts"><span>작업지시<b>${m.wo[0]}</b></span><span>품목<b style="font-family:Pretendard">${m.wo[1]}</b></span>
+     <span>진행<b>${(p*100).toFixed(1)}%</b></span><span>행 버전<b>v${m.v}</b></span></div>
+   <div class="btns">
+     <button class="btn ${m.st==='broken'?'pri':''}" data-k="repair" ${m.st!=='broken'?'disabled':''}>수리</button>
+     <button class="btn ${m.st==='stopped'?'pri':''}" data-k="start" ${m.st!=='stopped'?'disabled':''}>재가동</button>
+     <button class="btn" data-k="stop" ${m.st!=='running'?'disabled':''}>정지</button>
+   </div>`;
+  document.querySelectorAll('#sel .btn').forEach(b=>b.onclick=()=>send(m,b.dataset.k));
+}
+function renderTrace(fresh){
+  document.getElementById('trace').innerHTML=trace.map((e,i)=>`<div class="ev ${i===0&&fresh?'new':''}"><span class="t">${e.t}</span><span class="d"><b>${e.m} ${KIND[e.kind]}</b> · ${e.to}<span class="k">#${e.cmd} · base v${e.base}</span></span><span class="r ${e.res===200?'ok':e.res===409?'no':'wait'}">${e.res||'전송 중'}</span></div>`).join('');
+}
+function now(){return new Date().toLocaleTimeString('ko-KR',{hour12:false})}
+function send(m,kind){
+  const next={repair:'stopped',start:'running',stop:'stopped'}[kind];
+  const e={t:now(),cmd:nextCmd++,m:m.code,kind,base:m.v,res:null,to:'요청 접수'};
+  trace.unshift(e); renderTrace(true);
+  setTimeout(()=>{ const from=m.st; m.st=next; m.v++; e.res=200; e.to=`${from} → ${next} · v${m.v}`; render(true); },700);
+}
+function render(fresh){draw();renderWO();renderKPI();renderSel();renderTrace(fresh);}
+render();
+setInterval(()=>{document.getElementById('clock').textContent=now();},1000);
+let ago=0; setInterval(()=>{ago=(ago+0.1)%3;document.getElementById('ago').textContent=ago.toFixed(1)+'s'; if(ago<0.1){M.forEach(m=>{if(m.st==='running'&&m.wo[2]<m.wo[3])m.wo[2]+=Math.floor(Math.random()*7)+1;});draw();renderWO();}},100);
+</script>
+</body>
+</html>
