@@ -57,27 +57,24 @@ function producedOf(m) {
   return m.work_order ? m.work_order.produced_qty : m.processed;
 }
 
-function buildTable(m) {
-  const rows = [
-    ['상태', 'state', stateLabel(m.state), `state-${m.state}`],
-    ['작업지시', 'work_order', workOrderText(m.work_order), ''],
-    ['생산 수량', 'produced', fmt(producedOf(m)), 'num'],
-    ['최근 1분 생산', 'last_minute', fmt(m.last_minute_good ?? 0), 'num'],
-    ['위치', 'pos', `x ${m.x}, y ${m.y}`, 'num'],
-  ];
-  const table = el('div', 'detail-table');
-  rows.forEach(([k, field, v, cls]) => {
-    const row = el('div', 'detail-row');
-    const val = el('span', `detail-value ${cls}`.trim(), v);
-    val.dataset.field = field;
-    row.append(el('span', 'detail-label', k), val);
-    table.append(row);
-  });
-  return table;
+// 라벨 + 값 한 쌍. 값은 navy, 라벨만 muted.
+function kv(label, field, value, cls = '') {
+  const row = el('div', 'kv');
+  const val = el('span', `detail-value ${cls}`.trim(), value);
+  val.dataset.field = field;
+  row.append(el('span', 'detail-label', label), val);
+  return row;
+}
+
+function column(cls, ...kids) {
+  const col = el('div', cls);
+  col.append(...kids);
+  return col;
 }
 
 function buildProgress(m) {
   const wrap = el('div', 'progress');
+  wrap.title = '작업지시 진행';
   const bar = el('div', 'progress-bar');
   bar.setAttribute('role', 'progressbar');
   const fill = el('i', 'progress-fill');
@@ -143,7 +140,7 @@ export function renderDetail(section, machine) {
   view = { section, machine };
   if (!machine) {
     built = '';
-    section.className = 'panel-section';
+    section.className = 'panel-section detail-slot';
     section.replaceChildren(el('p', 'detail-empty', '기계를 누르면 상세가 여기에 나옵니다'));
     return;
   }
@@ -160,14 +157,26 @@ export function renderDetail(section, machine) {
     return;
   }
   built = key;
-  section.className = 'panel-section machine-detail';
+  section.className = 'panel-section detail-slot machine-detail';
   const icon = el('i', 'tile-icon');
   icon.setAttribute('aria-hidden', 'true');
   icon.style.setProperty('--tc', `var(--tc-${machine.color})`);
   icon.style.setProperty('--tr', `var(--tr-${machine.color})`);
-  const head = el('div', 'detail-head');
-  head.append(icon, el('h3', 'detail-name', machine.name));
+  const state = el('p', `detail-state state-${machine.state}`, stateLabel(machine.state));
+  state.dataset.field = 'state';
   const result = el('p', 'cmd-result', msg);
   result.setAttribute('role', 'status');
-  section.replaceChildren(head, buildTable(machine), buildProgress(machine), buildActions(machine), result);
+  section.replaceChildren(
+    // 왼쪽 묶음(이름·작업지시·진행) / 오른쪽 묶음(최근 1분·위치·버튼). 데스크톱은 display: contents 로 4칸, 중간 폭은 2열
+    column(
+      'dc-left',
+      column('dc-id', icon, column('dc-name', el('h3', 'detail-name', machine.name), state)),
+      column('dc-work', kv('작업지시', 'work_order', workOrderText(machine.work_order)), buildProgress(machine), kv('생산 수량', 'produced', fmt(producedOf(machine)), 'num')),
+    ),
+    column(
+      'dc-right',
+      column('dc-stat', kv('최근 1분 생산', 'last_minute', fmt(machine.last_minute_good ?? 0), 'num'), kv('위치', 'pos', `x ${machine.x}, y ${machine.y}`, 'num')),
+      column('dc-act', buildActions(machine), result),
+    ),
+  );
 }
