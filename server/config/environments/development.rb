@@ -3,6 +3,8 @@ require "active_support/core_ext/integer/time"
 Rails.application.configure do
   # Cloudflare Tunnel 로 들어오는 주소. 로그인은 앱(DB 계정)이 맡는다.
   config.hosts << "game.aico.gripe"
+  # 화면 파일을 바꿔도 Cloudflare·브라우저가 옛 파일을 쥐고 있지 않게 한다(데모 서버).
+  config.public_file_server.headers = { "cache-control" => "no-store" }
   # Settings specified here will take precedence over those in config/application.rb.
 
   # Make code changes take effect immediately without server restart.

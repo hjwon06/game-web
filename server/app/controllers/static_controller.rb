@@ -2,6 +2,9 @@
 # ver 는 주소만 바꾸는 용도라 검사하지 않는다(Cloudflare 가 옛 사본을 못 쥐게).
 # 파일은 소스이므로 로그인 없이 열린다. 허용 목록 밖은 전부 404.
 class StaticController < ActionController::Base
+  # .js 를 GET 으로 내려주면 Rails 가 교차 출처 스크립트 보호로 422 를 낸다. 공개 소스 파일이라 끈다.
+  skip_forgery_protection
+
   ROOT = Rails.root.join("..").expand_path.to_s.freeze
   PREFIXES = %w[src/ data/ assets/ vendor/].freeze
   EXACT = %w[styles.css].freeze
