@@ -2,10 +2,23 @@
 <div class="card">
   <h2>첫 계정 만들기</h2>
   <p class="hint">처음 한 번만 만드는 관리자 계정입니다.</p>
-  <% if @errors.present? %>
+  <%
+    messages = if @user && @user.errors.any?
+      @user.errors.map do |error|
+        case [error.attribute, error.type]
+        when [:name, :blank] then "이름을 입력해 주세요"
+        when [:name, :taken] then "이미 있는 이름입니다"
+        when [:password_confirmation, :confirmation] then "비밀번호가 서로 다릅니다"
+        when [:password, :blank] then "비밀번호를 입력해 주세요"
+        else error.full_message
+        end
+      end.uniq
+    end
+  %>
+  <% if messages.present? %>
     <div class="error" role="alert">
       <ul>
-        <% Array(@errors).each do |msg| %>
+        <% messages.each do |msg| %>
           <li><%= msg %></li>
         <% end %>
       </ul>

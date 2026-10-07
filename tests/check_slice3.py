@@ -149,9 +149,15 @@ def run(browser, req, errors):
     check("② 가동 버튼으로 되돌림", wait_row_state(page, "M6", "running"))
 
     # ③ 생산 수량 증가(30초 관찰, 최대 40초)
+    # 상세의 생산 수량은 작업지시가 있어야 늘어난다. 가동 중 + /api/hud 에 work_order 가 있는 기계만 고른다.
     st = api_state(req)
-    code = next((c for c, m in st.items() if m["state"] == "running"), None)
-    check("③ 사전: 가동 중 기계 있음", code is not None)
+    hud = {m["code"]: m for m in req.get(f"{BASE}/api/hud").json()["machines"]}
+    code = next((c for c, m in st.items()
+                 if m["state"] == "running" and (hud.get(c) or {}).get("work_order")), None)
+    running = [c for c, m in st.items() if m["state"] == "running"]
+    check("③ 사전: 가동 중이면서 작업지시가 있는 기계 있음", code is not None,
+          "" if code else f"(가동 중 {running}, hud 작업지시 있는 기계 "
+          f"{[c for c, m in hud.items() if m.get('work_order')]} — 겹치는 기계가 없어 ③ 을 건너뛸 수 없다)")
     if code:
         select(page, code)
         first = produced(page)
