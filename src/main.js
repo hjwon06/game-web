@@ -31,13 +31,14 @@ async function boot() {
     fitCanvas(game);
   };
 
-  // 내부 해상도는 그대로 두고 CSS 표시 크기만 줄인다. NONE 모드의 Phaser 는 표시 크기를
-  // 스스로 다시 재지 않으므로, 크기가 바뀔 때마다 refresh() 로 입력 좌표 보정값(displayScale)을 갱신한다.
+  // 내부 해상도는 그대로 두고 CSS 표시 크기만 바꾼다. 폭 상한(816)은 없다: .stage-col 이 왼쪽 열 폭과
+  // 남은 높이로 폭을 정하고, 여기서는 그 폭을 꽉 채워 grid 비율을 유지한다(확대 시 pixelated).
+  // NONE 모드의 Phaser 는 표시 크기를 스스로 다시 재지 않으므로, 크기가 바뀔 때마다 refresh() 로 입력 좌표 보정값(displayScale)을 갱신한다.
   function fitCanvas(g) {
     const host = document.getElementById('game');
     const w = g.config.width; // grid.w × cell (17×48 = 816)
     const h = g.config.height; // grid.h × cell (9×48 = 432)
-    host.style.width = `min(${w}px, 100%)`;
+    host.style.width = '100%';
     host.style.height = 'auto';
     host.style.aspectRatio = `${w} / ${h}`;
     const cv = g.canvas;
