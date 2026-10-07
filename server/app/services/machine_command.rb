@@ -25,23 +25,22 @@ class MachineCommand
   def call
     return Result.new(status: 422, machine: nil) unless valid_input?
 
-    stored = Command.find_by(idempotency_key: @key) # 기계 조회보다 먼저: 같은 키·다른 내용은 없는 기계여도 422
-    return replay(Machine.find_by(code: @machine_code)&.id, stored) if stored
+    Machine.transaction do
+      lock_key # 같은 키 요청을 직렬화한다. 먼저 온 쪽이 커밋하면 뒤 요청의 조회가 그 행을 본다.
+      stored = Command.find_by(idempotency_key: @key) # 기계 조회보다 먼저: 같은 키·다른 내용은 없는 기계여도 422
+      machine = Machine.find_by(code: @machine_code)
+      next replay(machine&.id, stored) if stored
+      next Result.new(status: 404, machine: nil) unless machine
 
-    machine = Machine.find_by(code: @machine_code)
-    return not_found unless machine
-
-    Machine.transaction { run(machine.id) }
+      run(machine.id)
+    end
   end
 
   private
 
-  # 조회 직후 같은 키가 동시에 커밋됐을 수 있으므로 404 를 내기 전에 한 번 더 본다.
-  def not_found
-    stored = Command.find_by(idempotency_key: @key)
-    return replay(nil, stored) if stored
-
-    Result.new(status: 404, machine: nil)
+  def lock_key
+    sql = ApplicationRecord.sanitize_sql(["SELECT pg_advisory_xact_lock(hashtext(?))", @key])
+    ApplicationRecord.connection.execute(sql)
   end
 
   def run(machine_id)
