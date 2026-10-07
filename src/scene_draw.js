@@ -32,13 +32,33 @@ export function registerFrames(scene) {
       if (!tex.has(machineFrame(kind, n))) tex.add(machineFrame(kind, n), 0, o.x + dx, o.y + dy, w, h);
     });
   });
-  items.frames.forEach((n) => {
+  [...items.frames, ...(scene.sp.props?.frames || [])].forEach((n) => {
     const o = cellOrigin(sheet, n);
     if (!tex.has(itemFrame(n))) tex.add(itemFrame(n), 0, o.x, o.y, items.crop, items.crop);
   });
 }
 
+// 소품: { f: 시트 칸 번호(16px 그림, 2배로 한 칸 크기) } 또는 { mark: 시트 칸 번호(32px 바닥 표시) } + 칸 좌표 x, y.
+// 채도·불투명도를 낮추고 벨트·기계보다 아래(depth 1~2)에 둔다. 칸 크기에서 나오므로 배율이 바뀌어도 따라온다.
+export function drawProps(scene, props, add) {
+  const sp = scene.sp.props;
+  if (!sp) return;
+  const c = scene.cell;
+  props.forEach((p) => {
+    const x = p.x * c + c / 2;
+    const y = p.y * c + c / 2;
+    if (p.mark !== undefined) {
+      add(scene.add.image(x, y, 'tiles', p.mark).setScale(scene.zoom).setAlpha(sp.markAlpha).setDepth(1));
+      return;
+    }
+    const spr = add(scene.add.image(x, y, 'tiles', itemFrame(p.f)).setScale(sp.scale * scene.zoom).setAlpha(sp.alpha).setDepth(2));
+    const fx = spr.preFX ? spr.preFX.addColorMatrix() : null;
+    if (fx) (fx.colorMatrix || fx).saturate(sp.sat - 1);
+  });
+}
+
 // 바닥은 CSS(#game)가 깔고, 여기서는 구역 띠만 그린다: 띠 색 + 32px 격자(칸 하나 = 시트 한 칸 × 배율).
+// 띠 색·격자색은 styles.css 의 --band / --band-line 과 같아야 한다(캔버스 밖 여백이 같은 띠로 이어진다).
 export function drawFloor(scene, f, add) {
   const c = scene.cell;
   const g = add(scene.add.graphics().setDepth(0));

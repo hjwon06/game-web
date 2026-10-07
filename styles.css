@@ -28,7 +28,12 @@
   --cell: 96px;
   --ox: 0px;
   --oy: 0px;
-  --grid: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M32 0H0V32' fill='none' stroke='%23D8D3CA' stroke-width='1'/%3E%3C/svg%3E");
+  /* 구역 띠: scene_draw.js COLORS.band / bandLine 과 같은 값 */
+  --band: #DCD7CE;
+  --band-line: #CEC9BF;
+  /* main.js 가 정한다: 구역 띠의 세로 시작(px)·높이(px) */
+  --band-y: 0px;
+  --band-h: 0px;
 }
 
 * { box-sizing: border-box; margin: 0; }
@@ -50,10 +55,23 @@ body {
   width: 100vw;
   height: 100dvh;
   background-color: var(--floor);
-  background-image: var(--grid);
+  background-image: linear-gradient(to right, var(--grid-line) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-size: var(--cell) var(--cell); /* 칸 한 변 = 32px × 배율 */
   background-position: var(--ox) var(--oy);
   image-rendering: pixelated;
+}
+/* 구역 띠를 캔버스 밖 좌우 여백까지 이어 그린다(캔버스 안 띠와 같은 색·격자). 캔버스가 이 위에 놓인다 */
+.game::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--band-y);
+  height: var(--band-h);
+  background-color: var(--band);
+  background-image: linear-gradient(to right, var(--band-line) 1px, transparent 1px), linear-gradient(to bottom, var(--band-line) 1px, transparent 1px);
+  background-size: var(--cell) var(--cell);
+  background-position: var(--ox) calc(var(--oy) - var(--band-y));
 }
 .game canvas { position: absolute; left: var(--ox); top: var(--oy); display: block; image-rendering: pixelated; }
 

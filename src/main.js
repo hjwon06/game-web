@@ -14,6 +14,7 @@ const $ = (id) => document.getElementById(id);
 
 async function boot() {
   const sprites = await (await fetch('data/sprites.json', { cache: 'no-store' })).json();
+  const props = (await (await fetch('data/layout.json', { cache: 'no-store' })).json()).props || [];
   const host = $('game');
   const tile = sprites.sheet.tile;
   const view = { zoom: 0, cell: 0, ox: 0, oy: 0 };
@@ -21,7 +22,7 @@ async function boot() {
   let selectedId = null;
   let game = null;
 
-  const scene = new FactoryScene({ sprites, onSelect: (id) => setSelected(id, true) });
+  const scene = new FactoryScene({ sprites, props, onSelect: (id) => setSelected(id, true) });
   const toScreen = (wx, wy) => ({ x: view.ox + wx, y: view.oy + wy });
   const machineOf = (id) => state && state.machines.find((m) => m.id === id);
   const anchorOf = (id) => {
@@ -56,6 +57,11 @@ async function boot() {
     root.setProperty('--cell', `${view.cell}px`);
     root.setProperty('--ox', `${view.ox}px`);
     root.setProperty('--oy', `${view.oy}px`);
+    // 구역 띠가 덮는 세로 범위(화면 px). styles.css 가 이 범위를 뷰포트 폭 전체로 이어 그려 캔버스 밖 여백이 액자처럼 안 보이게 한다
+    const top = Math.min(...state.zones.map((z) => z.y));
+    const bottom = Math.max(...state.zones.map((z) => z.y + z.h));
+    root.setProperty('--band-y', `${view.oy + (state.zones.length ? top : 0) * view.cell}px`);
+    root.setProperty('--band-h', `${state.zones.length ? (bottom - top) * view.cell : 0}px`);
     sprites.scale = scene.zoom = view.zoom;
     scene.cell = view.cell;
     if (game) {

@@ -1,6 +1,6 @@
 // 상태·입력·애니메이션을 맡는다. 그리기 도구는 scene_draw.js, 벨트는 scene_belt.js, 전이 연출은 fx.js.
 // 상태의 원본은 서버(state.js 가 배치와 합쳐 준다)이고 여기서는 읽기만 한다. 칸 번호·배율은 data/sprites.json 에서만 온다.
-import { COLORS, drawBadge, drawFloor, drawMachine, machineFrame, makeOutline, placeOutline, registerFrames } from './scene_draw.js';
+import { COLORS, drawBadge, drawFloor, drawMachine, drawProps, machineFrame, makeOutline, placeOutline, registerFrames } from './scene_draw.js';
 import { buildBelt, destroyBelt, setBeltRunning, updateBelt } from './scene_belt.js';
 import { Fx, staggerOf } from './fx.js';
 
@@ -9,9 +9,10 @@ const HIT_MIN_PX = 44; // 히트박스 최소 크기(화면 픽셀)
 const PLATE_H = 5; // 기계 그림 아래 명판 높이(월드 px = 이 값 × 배율). 히트박스에 포함한다
 
 export class FactoryScene extends Phaser.Scene {
-  constructor({ sprites, onSelect }) {
+  constructor({ sprites, props, onSelect }) {
     super('factory');
     this.sp = sprites;
+    this.props = props || []; // layout.json props (소품). state 에는 실리지 않아 main.js 가 따로 준다
     this.zoom = sprites.scale; // this.scale 은 Phaser ScaleManager 라서 이름을 피한다
     this.cell = sprites.sheet.tile * this.zoom;
     this.onSelect = onSelect || (() => {});
@@ -69,7 +70,7 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   structureOf(f) {
-    return JSON.stringify([f.grid, f.zones, f.belt, f.machines.map((m) => [m.id, m.x, m.y, m.kind, m.zone])]);
+    return JSON.stringify([f.grid, f.zones, f.belt, this.props, f.machines.map((m) => [m.id, m.x, m.y, m.kind, m.zone])]);
   }
 
   rebuild(f) {
@@ -83,6 +84,7 @@ export class FactoryScene extends Phaser.Scene {
     this.scale.setGameSize(f.grid.w * this.cell, f.grid.h * this.cell);
 
     drawFloor(this, f, this.track);
+    drawProps(this, this.props, this.track);
     this.belt = buildBelt(this, f, this.track);
     f.machines.forEach((m) => {
       const v = drawMachine(this, m, this.track);
