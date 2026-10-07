@@ -56,6 +56,15 @@ class AuthTest < ActionDispatch::IntegrationTest
     assert_response :ok
     post "/setup", params: { name: "jay", password: "secret-pass-1", password_confirmation: "mismatch" }
     assert_response :unprocessable_entity
+    assert_includes response.body, "비밀번호가 서로 다릅니다"
+    assert_equal 0, User.count
+
+    post "/setup", params: { name: "", password: "secret-pass-1", password_confirmation: "secret-pass-1" }
+    assert_response :unprocessable_entity
+    assert_includes response.body, "이름을 입력해 주세요"
+    post "/setup", params: { name: "jay", password: "", password_confirmation: "" }
+    assert_response :unprocessable_entity
+    assert_includes response.body, "비밀번호를 입력해 주세요"
     assert_equal 0, User.count
 
     post "/setup", params: { name: "jay", password: "secret-pass-1", password_confirmation: "secret-pass-1" }

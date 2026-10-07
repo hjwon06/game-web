@@ -7,20 +7,3 @@ export function formatTime(iso) {
   const m = ISO_HEAD.exec(String(iso));
   return m ? `${m[1]}.${m[2]}.${m[3]} ${m[4]}:${m[5]}` : '';
 }
-
-export function summarize(state) {
-  const machines = (state && state.machines) || [];
-  const count = (s) => machines.filter((m) => m.state === s).length;
-  return {
-    total: machines.length,
-    running: count('running'),
-    stopped: count('stopped'),
-    defect: count('defect'),
-    processedSum: machines.reduce((sum, m) => sum + (Number(m.processed) || 0), 0),
-  };
-}
-
-export function incomingBelts(state, id) {
-  const belts = (state && state.conveyors) || [];
-  return belts.filter((c) => c.to === id).length;
-}

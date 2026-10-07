@@ -17,6 +17,7 @@ const RESULT_TEXT = {
   409: '다른 곳에서 먼저 바뀌었습니다. 최신 상태로 맞췄습니다',
   422: '지금 상태에서는 할 수 없는 조작입니다',
   0: '서버에 닿지 않습니다. 잠시 뒤 다시 눌러 주세요',
+  other: '서버 오류가 났습니다. 잠시 뒤 다시 눌러 주세요',
 };
 const RESULT_MS = 5000;
 
@@ -44,7 +45,7 @@ export function exposeTiles(sprites) {
 
 // 3초마다 상세가 다시 그려져도 "처리 중"과 결과 문구가 남도록 모듈이 들고 있는다.
 const busy = new Set(); // 명령 진행 중인 기계 id
-let notice = null; // { id, text, timer }
+const notices = new Map(); // 기계 id -> { text, timer }
 let view = null; // { section, machine } 마지막으로 그린 대상
 let built = ''; // 마지막 구조 키. 같으면 값만 갱신한다(눌리는 중인 버튼을 지우지 않는다)
 
@@ -110,9 +111,15 @@ function buildActions(m) {
   return box;
 }
 
+// 기계별로 5초 보관. 처리 중에 다른 기계를 골라도 끝난 결과는 그 기계 상세에 남는다.
 function setNotice(id, text) {
-  if (notice) clearTimeout(notice.timer);
-  notice = text ? { id, text, timer: setTimeout(() => setNotice(null, ''), RESULT_MS) } : null;
+  const old = notices.get(id);
+  if (old) clearTimeout(old.timer);
+  if (text) {
+    notices.set(id, { text, timer: setTimeout(() => setNotice(id, ''), RESULT_MS) });
+  } else {
+    notices.delete(id);
+  }
   if (view) renderDetail(view.section, view.machine);
 }
 
@@ -120,12 +127,12 @@ async function run(id, kind) {
   const m = view && view.machine && view.machine.id === id ? view.machine : null;
   if (!m || busy.has(id)) return;
   busy.add(id);
-  setNotice(null, '');
+  setNotice(id, '');
   try {
     const res = await sendCommand(m, kind);
     const status = res && Number.isFinite(res.status) ? res.status : 0;
     busy.delete(id);
-    setNotice(id, status === 200 ? '' : RESULT_TEXT[status] ?? RESULT_TEXT[422]);
+    setNotice(id, status === 200 ? '' : RESULT_TEXT[status] ?? RESULT_TEXT.other);
   } catch {
     busy.delete(id);
     setNotice(id, RESULT_TEXT[0]);
@@ -140,7 +147,8 @@ export function renderDetail(section, machine) {
     section.replaceChildren(el('p', 'detail-empty', '기계를 누르면 상세가 여기에 나옵니다'));
     return;
   }
-  const msg = notice && notice.id === machine.id ? notice.text : '';
+  const note = notices.get(machine.id);
+  const msg = note ? note.text : '';
   const key = [machine.id, machine.state, busy.has(machine.id), msg].join('|');
   if (key === built && section.classList.contains('machine-detail')) {
     // 구조는 그대로, 값만 바꾼다.

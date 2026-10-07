@@ -13,6 +13,8 @@ let current = null; // 마지막으로 성공해서 만든 상태 (깊게 freeze
 let failed = false;
 let timer = null;
 let inFlight = false;
+let rerun = null; // refreshNow: 진행 중 읽기 뒤 한 번 더 읽을 약속
+let pendingResolve = null;
 let lastKey = null; // 변경 감지용: 서버 응답 내용
 const warned = new Set();
 
@@ -125,13 +127,21 @@ export async function refresh() {
     if (changed) emit();
   } finally {
     inFlight = false;
+    if (pendingResolve) {
+      const done = pendingResolve;
+      pendingResolve = null;
+      rerun = null;
+      refresh().finally(done);
+    }
   }
 }
 
 // 명령 직후 즉시 한 번 읽기용. 진행 중인 읽기가 있으면 끝난 뒤 한 번 더 읽는다.
-export async function refreshNow() {
-  for (let i = 0; i < 20 && inFlight; i++) await new Promise((r) => setTimeout(r, 50));
-  await refresh();
+// 진행 중이면 flag 만 세우고, 그 읽기가 끝나는 즉시 한 번 더 읽은 뒤 resolve 한다.
+export function refreshNow() {
+  if (!inFlight) return refresh();
+  if (!rerun) rerun = new Promise((resolve) => { pendingResolve = resolve; });
+  return rerun;
 }
 
 // listener({ state, error }) — state 는 읽기 전용, 아직 한 번도 못 읽었으면 null.
