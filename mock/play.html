@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>공장 걷기 목업</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#1A1A2E;--sub:#6B7280;--line:#E5E7EB;--navy:#1E3A5F;--run:#2F6B4F;--bad:#C0392B;--num:'Outfit',Pretendard,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#2B2F36;font-family:Pretendard,sans-serif;color:var(--ink);word-break:keep-all}
+canvas{display:block;image-rendering:pixelated;cursor:pointer}
+.hud{position:fixed;font-size:13px}
+.panel{background:#FFFFFF;border-radius:8px;border:2px solid #1A1A2E}
+/* 좌상단: 날짜·시간 */
+.clock{top:16px;left:16px;padding:10px 14px;display:flex;gap:14px;align-items:center}
+.clock .d{font-size:12px;color:var(--sub)}
+.clock .t{font-family:var(--num);font-weight:700;font-size:26px;line-height:1}
+.clock .sep{width:1px;height:28px;background:var(--line)}
+.clock .k{font-family:var(--num);font-weight:700;font-size:26px;color:var(--navy)}
+.clock .k small{font-size:14px;color:var(--sub);font-weight:500}
+/* 우상단: 오늘 할 일 */
+.quest{top:16px;right:16px;width:300px;padding:14px 16px}
+.quest h3{font-size:12px;color:var(--sub);font-weight:600;margin-bottom:8px}
+.q{display:flex;gap:10px;align-items:flex-start;padding:6px 0;font-size:13px}
+.q i{width:14px;height:14px;border:2px solid #1A1A2E;border-radius:4px;flex:none;margin-top:2px}
+.q.done{color:var(--sub);text-decoration:line-through}
+.q.done i{background:var(--run);border-color:var(--run)}
+.q.hot i{border-color:var(--bad)}
+.q b{font-family:var(--num)}
+/* 하단: 대화창 */
+.talk{left:50%;bottom:18px;transform:translateX(-50%);width:min(720px,calc(100% - 32px));padding:14px 18px;display:flex;gap:14px;align-items:center;transition:opacity .2s}
+.talk .who{font-family:var(--num);font-weight:700;font-size:20px;min-width:52px}
+.talk .msg{flex:1;font-size:14px;line-height:1.5}
+.talk .msg small{display:block;font-size:11.5px;color:var(--sub);font-family:var(--num)}
+.talk .keys{display:flex;gap:6px}
+.key{font:600 12px Pretendard;padding:7px 10px;border:2px solid #1A1A2E;border-radius:4px;background:#fff;cursor:pointer;white-space:nowrap}
+.key b{font-family:var(--num);background:#1A1A2E;color:#fff;border-radius:4px;padding:0 5px;margin-right:6px}
+.key:hover{transform:translateY(-2px)}
+.key:disabled{opacity:.35;cursor:default;transform:none}
+.help{left:16px;bottom:18px;color:#C9CDD4;font-size:11.5px;line-height:1.7}
+.help b{font-family:var(--num);color:#fff;border:1px solid #6B7280;border-radius:4px;padding:0 5px}
+/* 우하단 로그 */
+.log{right:16px;bottom:18px;width:300px;color:#E5E7EB;font-size:11.5px;line-height:1.6;text-align:right}
+.log div{opacity:.85}
+.log b{font-family:var(--num)}
+.log .no{color:#F2A49B}
+.mock{position:fixed;left:50%;top:10px;transform:translateX(-50%);font-size:10.5px;color:#9CA3AF}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud panel clock"><div><div class="d">10월 8일 목요일 · 1교대</div><div class="t" id="t">09:42</div></div><div class="sep"></div><div><div class="d">가동 중</div><div class="k" id="k">10<small> / 12</small></div></div></div>
+<div class="hud panel quest"><h3>오늘 할 일</h3><div id="qs"></div></div>
+<div class="hud panel talk" id="talk"></div>
+<div class="hud help"><b>WASD</b> <b>←↑↓→</b> 이동 · 바닥 클릭으로 걸어가기<br><b>E</b> 설비 앞에서 조작</div>
+<div class="hud log" id="log"></div>
+<div class="mock">목업 · 수치는 2026-10-07 DB 스냅샷 · 버튼은 화면 안에서만 흉내</div>
+<script>
+// ---------- 실제 DB 스냅샷 ----------
+const M=[
+ {id:1,code:'M1',name:'절단기',kind:'recycler',st:'running',v:2,wo:['WO-3040','하우징',719,23700],x:3,y:4},
+ {id:2,code:'M2',name:'조립기',kind:'recycler',st:'running',v:1,wo:['WO-3041','하우징',11494,23700],x:5,y:4},
+ {id:3,code:'M3',name:'검사기',kind:'smelter',st:'running',v:2,wo:['WO-3043','샤프트',13789,29600],x:8,y:4},
+ {id:4,code:'M4',name:'가공기',kind:'fabrication',st:'stopped',v:1,wo:['WO-1004','샤프트 D',0,240],x:10,y:4},
+ {id:5,code:'M5',name:'절단기 2',kind:'smelter',st:'running',v:2,wo:['WO-3046','기어',2896,23700],x:12,y:4},
+ {id:6,code:'M6',name:'가공기 2',kind:'fabrication',st:'running',v:20,wo:['WO-3047','기어',9058,23700],x:15,y:4},
+ {id:7,code:'M7',name:'조립기 2',kind:'smelter',st:'running',v:14,wo:['WO-3049','브래킷',15080,29600],x:18,y:4},
+ {id:8,code:'M8',name:'검사기 2',kind:'cooler',st:'running',v:21,wo:['WO-3051','하우징',12619,31500],x:18,y:10},
+ {id:9,code:'M9',name:'도장기 1',kind:'electrifier',st:'running',v:0,wo:['WO-3053','샤프트',17263,18400],x:15,y:10},
+ {id:10,code:'M10',name:'도장기 2',kind:'cooler',st:'broken',v:2,wo:['WO-2037','커버',1276,2370],x:12,y:10},
+ {id:11,code:'M11',name:'포장기 1',kind:'randomizer',st:'running',v:1,wo:['WO-3055','플랜지',19660,29600],x:8,y:10},
+ {id:12,code:'M12',name:'포장기 2',kind:'randomizer',st:'running',v:1,wo:['WO-3057','기어',13774,31500],x:5,y:10},
+];
+const SP={ // data/sprites.json 과 같은 칸 번호
+ recycler:{c:[-8,-10,48,42],off:671,on:[691,694,697,711,714,717]},
+ smelter:{c:[-8,-6,48,38],off:331,on:[371,374,377,391,394,397,411]},
+ fabrication:{c:[-8,-12,48,44],off:451,on:[474,477,491,494,497,511,514,517,531,534,537,551,554]},
+ cooler:{c:[-8,-4,48,36],off:151,on:[157,171,174,177,191,194,197,211]},
+ electrifier:{c:[-8,-4,48,36],off:241,on:[267,271,274,277,281,284,287,291,294,297]},
+ randomizer:{c:[-8,-4,48,36],off:731,on:[744,747,751,754,757,761,764,767,771,774,777,781,784]},
+};
+const BELT={r:[50,51,52,53],l:[54,55,56,57],d:[58,59,60,61]};
+const STL={running:'가동 중',stopped:'멈춤',broken:'고장'};
+const S=2, T=32*S, MW=22, MH=14;
+
+// ---------- 맵 ----------
+const belt={}; // "x,y" -> dir
+for(let x=2;x<=19;x++)belt[x+','+4]='r';
+for(let y=4;y<=10;y++)belt[19+','+y]='d';
+for(let x=2;x<=19;x++)belt[x+','+10]='l';
+belt['19,4']='d';
+const zones=[
+ {n:'입고',x:1,y:2,w:6,h:4,c:'#D9DEE6'},{n:'가공',x:7,y:2,w:14,h:4,c:'#D4DCE8'},
+ {n:'출하',x:1,y:8,w:10,h:4,c:'#DCE3DA'},{n:'검사',x:11,y:8,w:10,h:4,c:'#E2DCD6'},
+];
+const solid=(x,y)=>x<1||y<2||x>=MW-1||y>=MH-1||!!belt[x+','+y];
+
+// ---------- 캐릭터(직접 그린 16x20 픽셀) ----------
+const PAL={k:'#1A1A2E',s:'#F1C9A5',h:'#3B2A20',c:'#1E3A5F',v:'#E8D44D',p:'#333A45',w:'#FFFFFF',b:'#5A3E2B'};
+const BODY=[
+'.....kkkkkk.....','....khhhhhhk....','...khhhhhhhhk...','...khsssssshk...','...ksswsswssk...',
+'...kssksskssk...','....kssssssk....','.....kkssk......','...kcccvvccck...','..kccccvvcccck..',
+'..kscccvvcccsk..','..ksccccccccsk..','...kccccccccck...','....kppppppk....','....kpppkpppk...'];
+const LEG=[['....kppk.kppk...','....kbbk.kbbk...','....kkk..kkk....'],['...kppk...kppk..','...kbbk...kbbk..','...kkk.....kkk..'],['.....kppkppk....','.....kbbkbbk....','.....kkk.kkk....']];
+function spriteCanvas(frame,back){
+  const cv=document.createElement('canvas');cv.width=16;cv.height=18;const g=cv.getContext('2d');
+  const rows=BODY.slice();
+  if(back){rows[3]='...khhhhhhhhk...';rows[4]='...khhhhhhhhk...';rows[5]='...khhhhhhhhk...';rows[6]='....khhhhhhk....';}
+  rows.concat(LEG[frame]).forEach((r,y)=>[...r].forEach((ch,x)=>{if(PAL[ch]){g.fillStyle=PAL[ch];g.fillRect(x,y,1,1);}}));
+  return cv;
+}
+const CH={front:[0,1,2].map(i=>spriteCanvas(i,false)),back:[0,1,2].map(i=>spriteCanvas(i,true))};
+
+// ---------- 상태 ----------
+const P={x:12.5*T,y:8.6*T,dir:'front',moving:false,step:0,target:null};
+let cam={x:0,y:0}, near=null, cmdNo=79;
+const logs=[['21:11:06','M8 재가동',200],['21:10:51','M7 정지 · 버전 충돌',409],['21:10:44','M7 정지',200]];
+const keys={};
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const sheet=new Image();sheet.src='../assets/sierra-automation/spritesheet.png';
+function resize(){cv.width=innerWidth;cv.height=innerHeight;g.imageSmoothingEnabled=false;}
+addEventListener('resize',resize);resize();
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='e'&&near)act(near,primary(near));});
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+cv.addEventListener('click',e=>{
+  const wx=e.clientX+cam.x, wy=e.clientY+cam.y;
+  const hit=M.find(m=>{const r=mRect(m);return wx>r.x&&wx<r.x+r.w&&wy>r.y&&wy<r.y+r.h;});
+  if(hit){P.target={x:(hit.x+.5)*T,y:(hit.y+(hit.y<7?1.6:-0.6))*T};}else P.target={x:wx,y:wy};
+});
+
+function cell(n){return [(n%10)*32,Math.floor(n/10)*32]}
+function mRect(m){const c=SP[m.kind].c;const w=c[2]*S,h=c[3]*S;return {x:m.x*T+(T-w)/2,y:(m.y+1)*T-h,w,h};}
+function primary(m){return m.st==='broken'?'repair':m.st==='stopped'?'start':'stop'}
+const KN={repair:'수리',start:'재가동',stop:'정지'};
+
+function act(m,kind){
+  if(kind!==primary(m))return;
+  const base=m.v;m.v++;
+  m.st={repair:'stopped',start:'running',stop:'stopped'}[kind];
+  logs.unshift([now(),`${m.code} ${KN[kind]} · v${base}→v${m.v}`,200]);logs.length=Math.min(logs.length,4);
+  cmdNo++;renderHUD();
+}
+function now(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`}
+
+// ---------- 갱신 ----------
+function update(dt){
+  let vx=0,vy=0;
+  if(keys['a']||keys['arrowleft'])vx-=1; if(keys['d']||keys['arrowright'])vx+=1;
+  if(keys['w']||keys['arrowup'])vy-=1; if(keys['s']||keys['arrowdown'])vy+=1;
+  if(vx||vy)P.target=null;
+  else if(P.target){const dx=P.target.x-P.x,dy=P.target.y-P.y,d=Math.hypot(dx,dy);if(d<4)P.target=null;else{vx=dx/d;vy=dy/d;}}
+  const sp=220*dt, len=Math.hypot(vx,vy)||1;
+  const nx=P.x+vx/len*sp, ny=P.y+vy/len*sp;
+  const free=(x,y)=>!solid(Math.floor(x/T),Math.floor(y/T));
+  let moved=false;
+  if(vx&&free(nx,P.y)){P.x=nx;moved=true;} if(vy&&free(P.x,ny)){P.y=ny;moved=true;}
+  if((vx||vy)&&!moved)P.target=null;
+  P.moving=moved; if(vy<0)P.dir='back'; else if(vy>0||vx)P.dir='front';
+  P.step+=moved?dt*8:0;
+  // 가까운 설비
+  let best=null,bd=1e9;M.forEach(m=>{const d=Math.hypot((m.x+.5)*T-P.x,(m.y+.5)*T-P.y);if(d<bd){bd=d;best=m;}});
+  const nn=bd<T*1.6?best:null; if(nn!==near){near=nn;renderTalk();}
+  // 카메라
+  const tx=Math.max(0,Math.min(MW*T-cv.width,P.x-cv.width/2)), ty=Math.max(0,Math.min(MH*T-cv.height,P.y-cv.height/2));
+  cam.x+=(((MW*T<cv.width)?(MW*T-cv.width)/2:tx)-cam.x)*.12; cam.y+=(((MH*T<cv.height)?(MH*T-cv.height)/2:ty)-cam.y)*.12;
+  // 생산 진행
+  M.forEach(m=>{if(m.st==='running'&&m.wo[2]<m.wo[3])m.wo[2]+=dt*3;});
+}
+
+// ---------- 그리기 ----------
+function draw(t){
+  g.fillStyle='#2B2F36';g.fillRect(0,0,cv.width,cv.height);
+  g.save();g.translate(-Math.round(cam.x),-Math.round(cam.y));
+  // 벽
+  g.fillStyle='#4A5260';g.fillRect(0,0,MW*T,2*T);
+  g.fillStyle='#5B6475';g.fillRect(0,2*T-10,MW*T,10);
+  for(let x=2;x<MW-1;x+=4){g.fillStyle='#9FB6D3';g.fillRect(x*T+10,26,T*2-20,T-30);g.fillStyle='#C9D7E8';g.fillRect(x*T+10,26,T*2-20,8);}
+  // 바닥
+  for(let y=2;y<MH;y++)for(let x=0;x<MW;x++){g.fillStyle=(x+y)%2?'#C4CAD3':'#BEC5CF';g.fillRect(x*T,y*T,T,T);}
+  zones.forEach(z=>{g.fillStyle=z.c;g.fillRect(z.x*T,z.y*T,z.w*T,z.h*T);
+    g.strokeStyle='#E7C64A';g.lineWidth=4;g.setLineDash([14,10]);g.strokeRect(z.x*T+6,z.y*T+6,z.w*T-12,z.h*T-12);g.setLineDash([]);
+    g.fillStyle='#1A1A2E';g.font='700 15px Pretendard';g.fillText(z.n,z.x*T+16,z.y*T+28);});
+  // 출하 팔레트
+  for(let i=0;i<3;i++){const px=(1.3+i*.9)*T,py=11.1*T;g.fillStyle='#8B5E3C';g.fillRect(px,py,T*.8,T*.55);g.fillStyle='#A8794F';for(let j=0;j<3;j++)g.fillRect(px+4,py+4+j*10,T*.8-8,5);}
+  // 벨트
+  const bf=Math.floor(t/120)%4;
+  for(const k in belt){const [x,y]=k.split(',').map(Number);const [sx,sy]=cell(BELT[belt[k]][bf]);if(sheet.complete)g.drawImage(sheet,sx,sy,32,32,x*T,y*T,T,T);}
+  // 설비 (y 정렬해서 캐릭터와 겹침 처리)
+  const ents=M.map(m=>({y:(m.y+1)*T,draw:()=>drawMachine(m,t)}));
+  ents.push({y:P.y+8,draw:()=>drawPlayer(t)});
+  ents.sort((a,b)=>a.y-b.y).forEach(e=>e.draw());
+  M.forEach(m=>drawTag(m,t));
+  if(P.target){g.strokeStyle='#1E3A5F';g.lineWidth=2;g.beginPath();g.ellipse(P.target.x,P.target.y,10,5,0,0,7);g.stroke();}
+  g.restore();
+}
+function drawMachine(m,t){
+  const d=SP[m.kind],r=mRect(m);
+  const f=m.st==='running'?d.on[Math.floor(t/140)%d.on.length]:d.off;
+  const [sx,sy]=cell(f);
+  if(sheet.complete){
+    if(m.st==='broken'){g.filter='grayscale(.7) brightness(.85)';}
+    else if(m.st==='stopped'){g.filter='grayscale(.6)';}
+    g.drawImage(sheet,sx+d.c[0],sy+d.c[1],d.c[2],d.c[3],r.x,r.y,r.w,r.h);g.filter='none';
+  }
+  if(m===near){g.strokeStyle='#FFFFFF';g.lineWidth=3;g.strokeRect(r.x-4,r.y-4,r.w+8,r.h+8);}
+  if(m.st==='broken'&&Math.floor(t/90)%2){ // 스파크
+    g.fillStyle='#FFE45C';for(let i=0;i<4;i++){g.fillRect(r.x+r.w*.3+Math.random()*r.w*.4,r.y+Math.random()*r.h*.5,4,4);}
+  }
+}
+function drawTag(m,t){
+  const r=mRect(m),cx=r.x+r.w/2,top=m.y<7?r.y-8:r.y+r.h+T*.05+30;
+  const col=m.st==='running'?'#2F6B4F':m.st==='broken'?'#C0392B':'#6B7280';
+  const label=`${m.code} ${STL[m.st]}`;g.font='700 12px Outfit, Pretendard';const w=g.measureText(label).width+18;
+  const y=m.y<7?top-22:top-22;
+  g.fillStyle='#FFFFFF';g.fillRect(cx-w/2,y,w,20);g.fillStyle=col;g.fillRect(cx-w/2,y,4,20);
+  g.fillStyle='#1A1A2E';g.textAlign='center';g.fillText(label,cx+2,y+14);g.textAlign='left';
+  // 진행 바
+  const p=Math.min(1,m.wo[2]/m.wo[3]);g.fillStyle='rgba(26,26,46,.35)';g.fillRect(cx-w/2,y+22,w,4);g.fillStyle=col;g.fillRect(cx-w/2,y+22,w*p,4);
+  if(m.st==='broken'){const b=Math.sin(t/180)*3;g.fillStyle='#C0392B';g.beginPath();g.arc(cx,y-16+b,11,0,7);g.fill();g.fillStyle='#fff';g.font='800 15px Outfit';g.textAlign='center';g.fillText('!',cx,y-11+b);g.textAlign='left';}
+}
+function drawPlayer(t){
+  const fr=P.moving?(Math.floor(P.step)%2?1:2):0;const img=CH[P.dir][fr];
+  const w=16*3.2,h=18*3.2,x=P.x-w/2,y=P.y-h+6;
+  g.fillStyle='rgba(26,26,46,.25)';g.beginPath();g.ellipse(P.x,P.y+4,16,6,0,0,7);g.fill();
+  g.drawImage(img,x,y,w,h);
+  g.font='700 12px Pretendard';const nw=g.measureText('제이').width+14;
+  g.fillStyle='#1A1A2E';g.fillRect(P.x-nw/2,y-22,nw,18);g.fillStyle='#fff';g.textAlign='center';g.fillText('제이',P.x,y-9);g.textAlign='left';
+}
+
+// ---------- HUD ----------
+function renderHUD(){
+  document.getElementById('k').innerHTML=`${M.filter(m=>m.st==='running').length}<small> / 12</small>`;
+  const m10=M.find(m=>m.id===10),m4=M.find(m=>m.id===4);
+  const qs=[
+    {t:`<b>M10</b> 도장기 2 고치기`,done:m10.st!=='broken',hot:true},
+    {t:`<b>M10</b> 다시 돌리기`,done:m10.st==='running'},
+    {t:`<b>M4</b> 가공기 재가동 · 샤프트 D 240개`,done:m4.st==='running'},
+    {t:`작업지시 <b>12</b>건 진행 · 대기 <b>10</b>건`,done:false},
+  ];
+  document.getElementById('qs').innerHTML=qs.map(q=>`<div class="q ${q.done?'done':''} ${q.hot&&!q.done?'hot':''}"><i></i><span>${q.t}</span></div>`).join('');
+  document.getElementById('log').innerHTML=logs.map(l=>`<div class="${l[2]===409?'no':''}"><b>${l[0]}</b> ${l[1]} · <b>${l[2]}</b></div>`).join('');
+  renderTalk();
+}
+function renderTalk(){
+  const el=document.getElementById('talk');
+  if(!near){el.style.opacity=.92;el.innerHTML=`<div class="who" style="font-size:14px">안내</div><div class="msg">설비 가까이 가면 상태를 보고 조작할 수 있어요. <b>M10</b> 도장기 2가 고장 났습니다.</div>`;return;}
+  const m=near,p=Math.min(1,m.wo[2]/m.wo[3]);
+  const line={broken:'펌프에서 소리가 나요. 수리하면 멈춤 상태로 돌아갑니다.',stopped:'멈춰 있어요. 재가동하면 작업지시를 이어서 만듭니다.',running:`${m.wo[1]}을(를) 만드는 중이에요.`}[m.st];
+  el.style.opacity=1;
+  el.innerHTML=`<div class="who">${m.code}</div><div class="msg">${m.name} · ${STL[m.st]} — ${line}<small>${m.wo[0]} · ${Math.floor(m.wo[2]).toLocaleString()} / ${m.wo[3].toLocaleString()} (${(p*100).toFixed(1)}%) · v${m.v}</small></div>
+   <div class="keys">${['repair','start','stop'].map(k=>`<button class="key" data-k="${k}" ${primary(m)!==k?'disabled':''}>${primary(m)===k?'<b>E</b>':''}${KN[k]}</button>`).join('')}</div>`;
+  el.querySelectorAll('.key').forEach(b=>b.onclick=()=>act(m,b.dataset.k));
+}
+renderHUD();
+let last=performance.now(),tick=0;
+function loop(t){const dt=Math.min(.05,(t-last)/1000);last=t;update(dt);draw(t);if((tick+=dt)>1){tick=0;if(near)renderTalk();
+  const d=new Date();document.getElementById('t').textContent=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
+  requestAnimationFrame(loop);}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
