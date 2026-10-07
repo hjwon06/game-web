@@ -6,13 +6,14 @@ class StaticController < ActionController::Base
   skip_forgery_protection
 
   ROOT = Rails.root.join("..").expand_path.to_s.freeze
-  PREFIXES = %w[src/ data/ assets/ vendor/].freeze
+  PREFIXES = %w[src/ data/ assets/ vendor/ mock/].freeze
   EXACT = %w[styles.css].freeze
   TYPES = {
     ".js" => "text/javascript",
     ".css" => "text/css",
     ".json" => "application/json",
-    ".png" => "image/png"
+    ".png" => "image/png",
+    ".html" => "text/html"
   }.freeze
 
   def show

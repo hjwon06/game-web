@@ -1,6 +1,9 @@
 // 상태 전이 연출 뼈대. 이전 응답과 비교해 바뀐 기계에만 1회씩 틀고, 같은 응답이면 아무것도 하지 않는다.
 // 연출은 눈에 보이는 것만 바꾼다(원본 상태는 건드리지 않는다). 상시 효과 없음: 모두 끝나면 원래 모습으로 돌아온다.
 import { itemFrame } from './scene_draw.js';
+import { expandRoute } from './scene_belt.js';
+
+const DIR_VEC = { right: [1, 0], left: [-1, 0], down: [0, 1], up: [0, -1] };
 
 const STOP_MS = 250; // 정지: 어두워졌다 돌아옴
 const SHAKE_MS = 150; // 고장: 가로 흔들림
@@ -142,8 +145,9 @@ export class Fx {
     const i = f.machines.findIndex((m) => m.id === v.id);
     const me = f.machines[i];
     const next = f.machines[i + 1];
-    let dx = 1;
-    let dy = 0;
+    // 다음 기계가 없으면(마지막 기계) 그 기계가 놓인 벨트 칸의 진행 방향을 쓴다.
+    const cell = expandRoute(f.belt.route).find((c) => c.x === me.x && c.y === me.y);
+    let [dx, dy] = DIR_VEC[cell?.dir] ?? DIR_VEC.right;
     if (next) {
       const len = Math.hypot(next.x - me.x, next.y - me.y) || 1;
       dx = (next.x - me.x) / len;

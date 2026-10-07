@@ -42,6 +42,8 @@
   --icon: 48px;
   --icon-sm: 32px;
   --pad-stage: 16px;
+  --grid-w: 17; /* data/layout.json 의 grid.w 와 같은 값 */
+  --grid-h: 8; /* data/layout.json 의 grid.h 와 같은 값 */
 }
 
 * { box-sizing: border-box; }
@@ -101,7 +103,7 @@ body {
 
 .frame { position: relative; width: 100%; border: var(--frame) solid var(--navy); }
 /* 내부 해상도는 grid × cell(1088x512) 고정, CSS 표시 크기만 바꾼다. 비율은 main.js 가 grid 에서 다시 정한다 */
-#game { position: relative; width: 100%; aspect-ratio: 17 / 8; container-type: inline-size; }
+#game { position: relative; width: 100%; aspect-ratio: var(--grid-w) / var(--grid-h); container-type: inline-size; }
 #game canvas { display: block; width: 100% !important; height: 100% !important; image-rendering: pixelated; }
 /* 구역 이름표: layout.json 의 칸 좌표를 % 로 얹는다. 클릭은 캔버스로 통과 */
 .zone-label {
@@ -295,8 +297,8 @@ body {
   .stage-area { height: 100%; display: flex; align-items: center; justify-content: center; }
   .detail-slot { grid-area: detail; }
   .panel { grid-area: side; min-height: 0; overflow-y: auto; border-top: 0; border-left: 1px solid var(--line); }
-  /* 폭 = min(칸 폭, 칸 높이에서 범례를 뺀 만큼의 17:9). 남는 여백은 좌우로만 생긴다 */
+  /* 폭 = min(칸 폭, 칸 높이에서 범례를 뺀 만큼의 grid-w:grid-h). 남는 여백은 좌우로만 생긴다 */
   .stage-col {
-    width: min(100cqw - var(--pad-stage) * 2, (100cqh - var(--pad-stage) * 2 - var(--h-legend) - var(--frame) * 2) * 20 / 11 + var(--frame) * 2);
+    width: min(100cqw - var(--pad-stage) * 2, (100cqh - var(--pad-stage) * 2 - var(--h-legend) - var(--frame) * 2) * var(--grid-w) / var(--grid-h) + var(--frame) * 2);
   }
 }
