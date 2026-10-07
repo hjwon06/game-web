@@ -43,11 +43,15 @@ class MachineCommand
     ApplicationRecord.connection.execute(sql)
   end
 
+  # 잠금 순서는 모든 경로에서 "advisory(키) → machines 행" 하나뿐이다. 기록(commands INSERT)은 그 뒤에 한다.
+  # commands INSERT 의 FK 검사는 machines 행에 FOR KEY SHARE 를 잡고 트랜잭션 끝까지 쥔다.
+  # INSERT 를 FOR UPDATE 앞에 두면 같은 기계로 온 두 요청이 각자 KEY SHARE 를 쥔 채 서로의 FOR UPDATE 를
+  # 기다려 교착(deadlock detected → 500)이 난다. FOR UPDATE 를 먼저 잡으면 뒤 요청은 INSERT 이전에 줄을 선다.
   def run(machine_id)
-    command_id = insert_command(machine_id)                       # ①
+    machine = Machine.lock.find(machine_id)                       # ① FOR UPDATE
+    command_id = insert_command(machine_id)                       # ② KEY SHARE 는 이미 쥔 행 잠금에 포함된다
     return replay(machine_id) unless command_id
 
-    machine = Machine.lock.find(machine_id)                       # ② FOR UPDATE
     return finish(command_id, machine, 409) if @base_version != machine.version # ③
     return finish(command_id, machine, 200) if machine.state == TARGET[@kind]   # 이미 목표 상태: no-op
     return finish(command_id, machine, 422) unless ALLOWED_FROM[@kind].include?(machine.state) # ④
