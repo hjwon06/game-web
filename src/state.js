@@ -1,15 +1,20 @@
-// 상태 읽기 전용 모듈. data/factory.json 을 폴링해 구독자에게 알린다.
-// 상태를 수정하는 함수는 의도적으로 없다. 원본은 파일(나중에는 서버)이 갖는다.
+// 상태 모듈. data/layout.json(배치, 1회) + /api/state + /api/hud(3초 폴링)를 합쳐 구독자에게 알린다.
+// 원본은 서버다. 이 모듈은 상태를 수정하지 않는다(명령은 commands.js).
 
-const STATE_URL = 'data/factory.json';
+const LAYOUT_URL = 'data/layout.json';
+const STATE_URL = '/api/state';
+const HUD_URL = '/api/hud';
 const POLL_MS = 3000;
 const TIMEOUT_MS = 2500;
 
 const listeners = new Set();
-let current = null; // 마지막으로 성공해서 받은 상태 (깊게 freeze)
-let failed = false; // 마지막 읽기가 실패했는가
+let layout = null;
+let current = null; // 마지막으로 성공해서 만든 상태 (깊게 freeze)
+let failed = false;
 let timer = null;
 let inFlight = false;
+let lastKey = null; // 변경 감지용: 서버 응답 내용
+const warned = new Set();
 
 function deepFreeze(obj) {
   if (obj && typeof obj === 'object' && !Object.isFrozen(obj)) {
@@ -19,11 +24,6 @@ function deepFreeze(obj) {
   return obj;
 }
 
-function isValid(s) {
-  return s && Number.isInteger(s.version) && s.grid && Array.isArray(s.machines)
-    && Array.isArray(s.conveyors) && Array.isArray(s.workers);
-}
-
 function emit() {
   const event = { state: current, error: failed };
   listeners.forEach((fn) => {
@@ -31,32 +31,95 @@ function emit() {
   });
 }
 
-async function fetchState() {
+async function getJson(url) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(`${STATE_URL}?t=${Date.now()}`, { cache: 'no-store', signal: ctrl.signal });
+    // no-cache: 브라우저가 ETag 로 재검증하고 304 는 투명하게 200 처럼 돌려준다.
+    const res = await fetch(url, { cache: 'no-cache', signal: ctrl.signal });
+    if (res.status === 401) {
+      // 세션이 없거나 만료됐다. 서버 API 만 해당하므로 정적 layout.json 은 여기 오지 않는다.
+      location.href = '/login';
+      throw new Error('HTTP 401');
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    if (!isValid(json)) throw new Error('상태 파일 모양이 맞지 않음');
-    return json;
+    return await res.json();
   } finally {
     clearTimeout(t);
   }
 }
 
-// 한 번 읽는다. version 이 바뀌었거나 실패 여부가 바뀐 경우에만 구독자에게 알린다.
+function warnOnce(msg) {
+  if (warned.has(msg)) return;
+  warned.add(msg);
+  console.warn(msg);
+}
+
+function merge(api, hud) {
+  if (!api || !Number.isInteger(api.version) || !Array.isArray(api.machines)) {
+    throw new Error('/api/state 모양이 맞지 않음');
+  }
+  if (!hud || !Array.isArray(hud.machines)) throw new Error('/api/hud 모양이 맞지 않음');
+  const byCode = new Map(api.machines.map((m) => [m.code, m]));
+  const hudBy = new Map(hud.machines.map((m) => [m.code, m]));
+  const laid = new Set(layout.machines.map((m) => m.id));
+  api.machines.forEach((m) => {
+    if (!laid.has(m.code)) warnOnce(`서버에만 있는 기계(그리지 않음): ${m.code}`);
+  });
+  const machines = [];
+  layout.machines.forEach((l) => {
+    const s = byCode.get(l.id);
+    if (!s) { warnOnce(`layout 에만 있는 기계(그리지 않음): ${l.id}`); return; }
+    const h = hudBy.get(l.id);
+    const wo = h && h.work_order ? h.work_order : null;
+    machines.push({
+      id: l.id, name: s.name, x: l.x, y: l.y, color: l.color,
+      state: s.state, version: s.version,
+      processed: wo ? wo.produced_qty : 0,
+      work_order: wo,
+      last_minute_good: h ? h.last_minute_good : 0,
+    });
+  });
+  return {
+    version: api.version,
+    updated_at: new Date().toISOString(),
+    grid: layout.grid,
+    conveyors: layout.conveyors,
+    workers: layout.workers,
+    machines,
+    hud: { defect_ratio_10m: hud.defect_ratio_10m ?? null, broken: hud.broken || [] },
+  };
+}
+
+async function fetchAll() {
+  if (!layout) {
+    const l = await getJson(LAYOUT_URL);
+    if (!l || !l.grid || !Array.isArray(l.machines)) throw new Error('layout.json 모양이 맞지 않음');
+    layout = l;
+  }
+  const [api, hud] = await Promise.all([getJson(STATE_URL), getJson(HUD_URL)]);
+  return { api, hud };
+}
+
+// 한 번 읽는다. 내용이 바뀌었거나 실패 여부가 바뀐 경우에만 구독자에게 알린다.
+// 같은 내용이면 updated_at 도 갱신하지 않는다(마지막 "변경" 시각이 아니라 emit 기준).
 export async function refresh() {
-  if (inFlight) return; // 느린 응답 위에 요청이 쌓이지 않게 한다
+  if (inFlight) return;
   inFlight = true;
   try {
-    const next = await fetchState();
-    const changed = !current || next.version !== current.version || failed;
-    if (!current || next.version !== current.version) current = deepFreeze(next);
+    const { api, hud } = await fetchAll();
+    const key = JSON.stringify([api, hud]);
+    const recovered = failed;
     failed = false;
-    if (changed) emit();
+    if (key !== lastKey || !current) {
+      current = deepFreeze(merge(api, hud));
+      lastKey = key;
+      emit();
+    } else if (recovered) {
+      current = deepFreeze({ ...current, updated_at: new Date().toISOString() });
+      emit();
+    }
   } catch (e) {
-    // 마지막 상태는 유지한다. 실패 여부만 알린다.
     const changed = !failed;
     failed = true;
     if (changed) emit();
@@ -65,8 +128,13 @@ export async function refresh() {
   }
 }
 
+// 명령 직후 즉시 한 번 읽기용. 진행 중인 읽기가 있으면 끝난 뒤 한 번 더 읽는다.
+export async function refreshNow() {
+  for (let i = 0; i < 20 && inFlight; i++) await new Promise((r) => setTimeout(r, 50));
+  await refresh();
+}
+
 // listener({ state, error }) — state 는 읽기 전용, 아직 한 번도 못 읽었으면 null.
-// 구독 즉시 현재 값을 한 번 돌려준다. 반환값은 구독 해제 함수.
 export function subscribe(listener) {
   listeners.add(listener);
   if (current || failed) listener({ state: current, error: failed });

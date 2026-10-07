@@ -9,7 +9,7 @@
   --muted: #64748B;
   --running: #0F766E;
   --stopped: #64748B;
-  --defect: #B91C1C;
+  --broken: #B91C1C;
 
   --font-body: 'Pretendard', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-num: 'Outfit', 'Pretendard', system-ui, sans-serif;
@@ -31,8 +31,10 @@
   --h-legend: 40px;
   --h-row: 48px;
   --w-panel: 360px;
-  --w-canvas: 768px;
-  --h-canvas: 480px;
+  --w-canvas: 816px;
+  --h-canvas: 432px;
+  --h-touch: 44px;
+  --h-progress: 8px;
   --frame: 2px;
   --bracket: 8px;
   --dot: 12px;
@@ -72,7 +74,22 @@ body {
   border: 1px solid var(--line);
   border-radius: var(--r-1);
 }
+.chip-live { color: var(--running); border-color: var(--running); }
+.chip-off { color: var(--stopped); border-color: var(--stopped); background: var(--bg); }
 .topbar-updated { margin-left: auto; font-size: var(--fs-body); color: var(--muted); }
+.topbar-user { font-size: var(--fs-body); font-weight: 600; }
+.topbar-logout {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--s-2);
+  font-size: var(--fs-body);
+  color: var(--navy);
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+}
+.topbar-logout:hover { border-color: var(--navy); }
 
 /* 본문: 캔버스 영역 + 사이드 패널 */
 .layout {
@@ -93,8 +110,8 @@ body {
   width: 100%;
   border: var(--frame) solid var(--navy);
 }
-/* 내부 해상도는 768x480 고정, CSS 표시 크기만 줄인다 */
-#game { width: 100%; aspect-ratio: 768 / 480; }
+/* 내부 해상도는 grid × cell(816x432) 고정, CSS 표시 크기만 줄인다 */
+#game { width: 100%; aspect-ratio: 816 / 432; }
 #game canvas { display: block; width: 100% !important; height: 100% !important; image-rendering: pixelated; }
 
 .bracket { position: absolute; width: var(--bracket); height: var(--bracket); border: 0 solid var(--navy); }
@@ -124,10 +141,10 @@ body {
 .dot { display: inline-block; flex: none; width: var(--dot); height: var(--dot); border-radius: 50%; background: var(--stopped); }
 .dot-running { background: var(--running); }
 .dot-stopped { background: var(--stopped); }
-.dot-defect { background: var(--defect); }
+.dot-broken { background: var(--broken); }
 .state-running { color: var(--running); }
 .state-stopped { color: var(--stopped); }
-.state-defect { color: var(--defect); }
+.state-broken { color: var(--broken); }
 
 /* Kenney 시트에서 잘라 쓰는 아이콘. 칸 위치(--tc/--tr)와 시트 규격은 main.js 가 :root 에 넣는다 */
 .tile-icon {
@@ -195,9 +212,36 @@ body {
 .detail-label { padding-right: var(--s-4); font-size: var(--fs-cap); text-align: left; color: var(--muted); }
 .detail-value { font-size: var(--fs-body); text-align: right; font-weight: 700; }
 .detail-empty { margin: 0; font-size: var(--fs-cap); color: var(--muted); }
+
+/* 진행 막대: 숫자는 막대 아래에 병기 */
+.progress { margin-top: var(--s-3); }
+.progress-bar { height: var(--h-progress); background: var(--line); border-radius: var(--r-1); overflow: hidden; }
+.progress-fill { display: block; height: 100%; background: var(--accent); border-radius: var(--r-1); }
+.progress-label { display: block; margin-top: var(--s-1); font-size: var(--fs-cap); text-align: right; color: var(--muted); }
+
+/* 조작 버튼: 주 버튼은 액센트 채움, 보조(고장)는 테두리만. 터치 타깃 44px 이상 */
+.cmd-actions { display: flex; gap: var(--s-2); margin-top: var(--s-3); }
+.cmd-btn {
+  flex: 1;
+  min-height: var(--h-touch);
+  padding: 0 var(--s-3);
+  font: inherit;
+  font-weight: 700;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-2);
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+.cmd-btn:hover:not(:disabled) { transform: translateY(-2px); }
+.cmd-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cmd-btn:disabled { cursor: progress; opacity: 0.6; }
+.cmd-primary { color: var(--surface); background: var(--accent); }
+.cmd-secondary { color: var(--broken); background: transparent; border-color: var(--broken); }
+.cmd-result { min-height: var(--s-4); margin: var(--s-2) 0 0; font-size: var(--fs-cap); color: var(--navy); }
+.cmd-result:empty { visibility: hidden; }
 .muted { margin: 0; color: var(--muted); }
 
-.panel-error { margin: var(--s-4) 0 0; font-size: var(--fs-body); color: var(--defect); }
+.panel-error { margin: var(--s-4) 0 0; font-size: var(--fs-body); color: var(--broken); }
 .panel-error[hidden] { display: none; }
 
 @media (max-width: 899px) {

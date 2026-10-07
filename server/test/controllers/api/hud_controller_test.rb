@@ -4,6 +4,7 @@ class HudControllerTest < ActionDispatch::IntegrationTest
   NOW = Time.utc(2026, 10, 6, 12, 0, 30)
 
   setup do
+    sign_in_as create_user
     @m1 = Machine.create!(code: "M1", name: "절단기", state: "running")
     @m2 = Machine.create!(code: "M2", name: "조립기", state: "stopped")
     @m3 = Machine.create!(code: "M3", name: "검사기", state: "broken")

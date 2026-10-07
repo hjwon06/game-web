@@ -35,9 +35,11 @@ async function boot() {
   // 스스로 다시 재지 않으므로, 크기가 바뀔 때마다 refresh() 로 입력 좌표 보정값(displayScale)을 갱신한다.
   function fitCanvas(g) {
     const host = document.getElementById('game');
-    host.style.width = 'min(768px, 100%)';
+    const w = g.config.width; // grid.w × cell (17×48 = 816)
+    const h = g.config.height; // grid.h × cell (9×48 = 432)
+    host.style.width = `min(${w}px, 100%)`;
     host.style.height = 'auto';
-    host.style.aspectRatio = '768 / 480';
+    host.style.aspectRatio = `${w} / ${h}`;
     const cv = g.canvas;
     cv.style.width = '100%';
     cv.style.height = '100%';
@@ -50,10 +52,8 @@ async function boot() {
 
   store.subscribe(({ state, error }) => {
     if (state && !game) startGame(state.grid);
-    if (state) {
-      renderTopbar(topbar, state);
-      scene.applyState(state);
-    }
+    renderTopbar(topbar, state, error);
+    if (state) scene.applyState(state);
     panel.update(state, error);
   });
   store.start();

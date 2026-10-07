@@ -1,0 +1,30 @@
+<% content_for :title, "첫 계정 만들기" %>
+<div class="card">
+  <h2>첫 계정 만들기</h2>
+  <p class="hint">처음 한 번만 만드는 관리자 계정입니다.</p>
+  <% if @errors.present? %>
+    <div class="error" role="alert">
+      <ul>
+        <% Array(@errors).each do |msg| %>
+          <li><%= msg %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+  <%= form_with url: setup_path, method: :post, local: true do |f| %>
+    <div class="field">
+      <%= f.label :name, "이름", for: "name" %>
+      <%= f.text_field :name, id: "name", value: params[:name], required: true, autofocus: true,
+            autocomplete: "username", autocapitalize: "none", spellcheck: false %>
+    </div>
+    <div class="field">
+      <%= f.label :password, "비밀번호", for: "password" %>
+      <%= f.password_field :password, id: "password", required: true, autocomplete: "new-password" %>
+    </div>
+    <div class="field">
+      <%= f.label :password_confirmation, "비밀번호 확인", for: "password_confirmation" %>
+      <%= f.password_field :password_confirmation, id: "password_confirmation", required: true, autocomplete: "new-password" %>
+    </div>
+    <%= f.submit "계정 만들고 시작", class: "btn", data: { disable_with: false } %>
+  <% end %>
+</div>

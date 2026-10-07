@@ -13,8 +13,10 @@
 <body>
   <header id="topbar" class="topbar">
     <h1 class="topbar-name">1공장</h1>
-    <span class="chip">샘플 데이터</span>
+    <span id="topbar-link" class="chip chip-live">실시간</span>
     <span id="topbar-updated" class="topbar-updated num"></span>
+    <span id="topbar-user" class="topbar-user" hidden></span>
+    <a id="topbar-logout" class="topbar-logout" href="/logout" hidden>로그아웃</a>
   </header>
   <div class="layout">
     <section class="stage" aria-label="공장 화면">
@@ -30,7 +32,7 @@
           <ul id="legend" class="legend" aria-label="범례">
             <li class="legend-item"><i class="dot dot-running" aria-hidden="true"></i>가동</li>
             <li class="legend-item"><i class="dot dot-stopped" aria-hidden="true"></i>정지</li>
-            <li class="legend-item"><i class="dot dot-defect" aria-hidden="true"></i>불량</li>
+            <li class="legend-item"><i class="dot dot-broken" aria-hidden="true"></i>고장</li>
             <li class="legend-item legend-tile"><i class="tile-icon tile-icon-sm icon-machine" aria-hidden="true"></i>기계</li>
             <li class="legend-item"><i class="tile-icon tile-icon-sm icon-box" aria-hidden="true"></i>제품 상자</li>
           </ul>
@@ -44,7 +46,7 @@
         <div id="panel-rows"></div>
       </section>
       <section id="panel-detail" class="panel-section"></section>
-      <p id="panel-error" class="panel-error" hidden>상태 파일을 읽지 못했습니다. 마지막 값을 보여주는 중입니다</p>
+      <p id="panel-error" class="panel-error" hidden>서버에 닿지 않습니다. 마지막 값을 보여주는 중입니다</p>
     </aside>
   </div>
   <script src="vendor/phaser-3.90.0.min.js"></script>
