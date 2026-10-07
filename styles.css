@@ -1,17 +1,21 @@
 /* 모든 색·간격·글자 크기·고정 치수는 이 :root 에서만 정한다. 아래 컴포넌트 규칙에는 리터럴 색을 쓰지 않는다. */
 :root {
   --navy: #0B1F3A;
-  --bg: #F1F5F9;
-  --line: #E2E8F0;
+  --bg: #F3F1EC; /* 페이지 바탕. 캔버스 바닥·패널과 같은 웜그레이 계열 */
+  --floor: #E7E3DC; /* 캔버스 바닥 = 패널 배경 (scene_draw.js CANVAS_FLOOR 와 같은 값) */
+  --floor-zone: #DDD7CD; /* 구역 띠 (scene_draw.js CANVAS_ZONE 와 같은 값) */
+  --floor-edge: #CFC8BB; /* 캔버스 가장자리·구역 경계 */
+  --panel: var(--floor);
+  --line: #CFC8BB;
   --surface: #FFFFFF;
   --accent: #1E3A8A;
   --accent-tint: #E8EEF8;
-  --muted: #64748B;
+  --muted: #4B5563;
   --running: #0F766E;
   --stopped: #64748B;
   --broken: #B91C1C;
-  --zone-label: #E6ECF5; /* 어두운 구역 바닥 위 표지판 글자 */
-  --zone-label-no: #8FA3BF;
+  --zone-label: var(--navy); /* 밝은 구역 띠 위 표지판 글자 */
+  --zone-label-no: var(--muted);
 
   --font-body: 'Pretendard', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-num: 'Outfit', 'Pretendard', system-ui, sans-serif;
@@ -36,8 +40,7 @@
   --w-panel: 360px;
   --h-touch: 44px;
   --h-progress: 8px;
-  --frame: 2px;
-  --bracket: 8px;
+  --frame: 1px;
   --dot: 12px;
   --icon: 48px;
   --icon-sm: 32px;
@@ -101,7 +104,7 @@ body {
 .stage-area { padding: var(--pad-stage); }
 .stage-col { width: 100%; }
 
-.frame { position: relative; width: 100%; border: var(--frame) solid var(--navy); }
+.frame { position: relative; width: 100%; border: var(--frame) solid var(--floor-edge); background: var(--floor); }
 /* 내부 해상도는 grid × cell(1088x512) 고정, CSS 표시 크기만 바꾼다. 비율은 main.js 가 grid 에서 다시 정한다 */
 #game { position: relative; width: 100%; aspect-ratio: var(--grid-w) / var(--grid-h); container-type: inline-size; }
 #game canvas { display: block; width: 100% !important; height: 100% !important; image-rendering: pixelated; }
@@ -122,11 +125,35 @@ body {
 }
 .zone-no { font-weight: 800; color: var(--zone-label-no); }
 
-.bracket { position: absolute; width: var(--bracket); height: var(--bracket); border: 0 solid var(--navy); }
-.bracket-tl { top: calc(var(--frame) * -1 - var(--bracket)); left: calc(var(--frame) * -1 - var(--bracket)); border-top-width: var(--frame); border-left-width: var(--frame); }
-.bracket-tr { top: calc(var(--frame) * -1 - var(--bracket)); right: calc(var(--frame) * -1 - var(--bracket)); border-top-width: var(--frame); border-right-width: var(--frame); }
-.bracket-bl { bottom: calc(var(--frame) * -1 - var(--bracket)); left: calc(var(--frame) * -1 - var(--bracket)); border-bottom-width: var(--frame); border-left-width: var(--frame); }
-.bracket-br { bottom: calc(var(--frame) * -1 - var(--bracket)); right: calc(var(--frame) * -1 - var(--bracket)); border-bottom-width: var(--frame); border-right-width: var(--frame); }
+/* 모서리 꺾쇠는 쓰지 않는다(index.html 의 .bracket 요소는 숨김) */
+.bracket { display: none; }
+
+/* 기계 명판: 기계 아래 빈 줄(칸 좌표 %)에 얹는 DOM 버튼. 폭은 기계 간격(2칸)보다 조금 좁게 */
+.plate {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--s-1);
+  min-height: var(--h-touch);
+  padding: 0 var(--s-2);
+  transform: translateX(-50%);
+  font: inherit;
+  font-size: max(var(--fs-cap), 1.2cqw);
+  line-height: 1.2;
+  color: var(--navy);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--floor-edge);
+  border-radius: var(--r-1);
+  cursor: pointer;
+}
+.plate:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.plate.is-selected { background: var(--accent-tint); border-color: var(--accent); outline: 1px solid var(--accent); }
+.plate-head { display: flex; align-items: center; gap: var(--s-1); min-width: 0; }
+.plate-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plate-count { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 500; }
+.plate .dot { width: 10px; height: 10px; }
 
 /* 범례: 캔버스 바로 아래 한 줄, 왼쪽 정렬. 항목 사이 간격은 16px(--s-3) */
 .legend {
@@ -170,7 +197,7 @@ body {
 .icon-box { --ix: var(--ix-box); --iy: var(--iy-box); --is: var(--is-box); }
 
 /* 오른쪽 패널: 요약 + 기계 목록 */
-.panel { min-width: 0; padding: var(--s-3); background: var(--surface); border-top: 1px solid var(--line); }
+.panel { min-width: 0; padding: var(--s-3); background: var(--panel); border-top: 1px solid var(--line); }
 .panel-section { margin-top: var(--s-3); }
 .panel-section:empty { display: none; }
 .panel-title { margin: 0 0 var(--s-1); font-size: var(--fs-body); font-weight: 700; }
@@ -218,7 +245,7 @@ body {
 .machine-count { text-align: right; font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: var(--fs-num); font-weight: 500; }
 
 /* 선택 상세 카드: 가로형 4칸 (식별 | 작업·진행 | 최근·위치 | 버튼) */
-.detail-slot { margin: 0; padding: var(--s-3); background: var(--surface); border-top: 1px solid var(--line); }
+.detail-slot { margin: 0; padding: var(--s-3); background: var(--panel); border-top: 1px solid var(--line); }
 .detail-slot.machine-detail {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1.1fr);

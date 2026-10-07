@@ -1,10 +1,10 @@
 {
   "grid": { "w": 17, "h": 8 },
   "zones": [
-    { "id": "in", "name": "입고", "x": 1, "y": 1, "w": 5, "h": 3, "tone": "#262F3D", "item": 0, "label": { "x": 1, "y": 1 } },
-    { "id": "proc", "name": "가공", "x": 6, "y": 1, "w": 10, "h": 3, "tone": "#2C3646", "item": 1, "label": { "x": 6, "y": 1 } },
-    { "id": "insp", "name": "검사", "x": 8, "y": 4, "w": 8, "h": 3, "tone": "#323D4F", "item": 2, "label": { "x": 8, "y": 4 } },
-    { "id": "out", "name": "출하", "x": 1, "y": 4, "w": 7, "h": 3, "tone": "#394559", "item": 2, "label": { "x": 1, "y": 4 } }
+    { "id": "in", "name": "입고", "x": 1, "y": 1, "w": 5, "h": 3, "tone": "#DDD7CD", "item": 0, "label": { "x": 1, "y": 1 } },
+    { "id": "proc", "name": "가공", "x": 6, "y": 1, "w": 10, "h": 3, "tone": "#D9D2C7", "item": 1, "label": { "x": 6, "y": 1 } },
+    { "id": "insp", "name": "검사", "x": 8, "y": 4, "w": 8, "h": 3, "tone": "#D5CEC2", "item": 2, "label": { "x": 8, "y": 4 } },
+    { "id": "out", "name": "출하", "x": 1, "y": 4, "w": 7, "h": 3, "tone": "#D1CABD", "item": 2, "label": { "x": 1, "y": 4 } }
   ],
   "belt": { "route": [[1, 2], [15, 2], [15, 5], [2, 5]] },
   "machines": [

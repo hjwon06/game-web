@@ -8,9 +8,12 @@ export const COLORS = {
 };
 
 // 캔버스 안 바닥·선택 색은 여기 한 곳에만 둔다. 구역 바닥 톤은 layout.json(zones[].tone)에서 온다.
-export const CANVAS_FLOOR = 0x262f3d;
-export const CANVAS_ZONE_EDGE = 0x1b2230; // 구역 경계 1px
-export const CANVAS_SELECT = { inner: 0xf1f5f9, outer: 0x1e3a8a }; // 안 2px 실선 + 바깥 1px
+// 바닥·구역 띠 색은 styles.css 의 --floor / --floor-zone / --floor-edge 와 같은 값이다.
+export const CANVAS_FLOOR = 0xe7e3dc;
+export const CANVAS_ZONE = 0xddd7cd; // 구역 띠 (바닥보다 한 단계 진하게)
+export const CANVAS_ZONE_EDGE = 0xcfc8bb; // 구역 경계 1px
+export const CANVAS_GRID = { color: 0xcfc8bb, alpha: 0.35 }; // 칸 격자선: 아주 옅게
+export const CANVAS_SELECT = { inner: 0x1e3a8a, outer: 0xffffff }; // 밝은 바닥 위: 안 2px 남색 실선 + 바깥 1px 흰 선
 
 const BADGE_R = 6; // 12px 원
 const BADGE_INSET = 10;
@@ -40,13 +43,16 @@ export function registerFrames(scene) {
   });
 }
 
-// 구역마다 바닥 톤을 한 단계씩 다르게 깔고 경계를 1px 로 긋는다.
+// 밝은 웜그레이 바닥 위에 구역 띠를 한 톤 진하게 깔고, 칸 격자선과 구역 경계를 긋는다. (layout.json 의 zones[].tone 은 쓰지 않는다)
 export function drawFloor(scene, f, add) {
   const c = scene.cell;
   const g = add(scene.add.graphics().setDepth(0));
   g.fillStyle(CANVAS_FLOOR, 1).fillRect(0, 0, f.grid.w * c, f.grid.h * c);
   f.zones.forEach((z) => {
-    g.fillStyle(Phaser.Display.Color.HexStringToColor(z.tone).color, 1).fillRect(z.x * c, z.y * c, z.w * c, z.h * c);
+    g.fillStyle(CANVAS_ZONE, 1).fillRect(z.x * c, z.y * c, z.w * c, z.h * c);
+    g.lineStyle(1, CANVAS_GRID.color, CANVAS_GRID.alpha);
+    for (let i = 1; i < z.w; i++) g.lineBetween((z.x + i) * c + 0.5, z.y * c, (z.x + i) * c + 0.5, (z.y + z.h) * c);
+    for (let j = 1; j < z.h; j++) g.lineBetween(z.x * c, (z.y + j) * c + 0.5, (z.x + z.w) * c, (z.y + j) * c + 0.5);
     g.lineStyle(1, CANVAS_ZONE_EDGE, 1).strokeRect(z.x * c + 0.5, z.y * c + 0.5, z.w * c - 1, z.h * c - 1);
   });
 }
