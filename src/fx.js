@@ -6,6 +6,9 @@ const STOP_MS = 250; // 정지: 어두워졌다 돌아옴
 const SHAKE_MS = 150; // 고장: 가로 흔들림
 const SHAKE_AMP = 2; // px
 const REPAIR_MS = 300; // 수리: 밝아지는 펄스
+const START_MS = 150; // 정지 → 가동: 짧게 밝아짐(정지의 어두워짐과 짝)
+const START_PEAK = 0.5;
+const REPAIR_PEAK = 0.7;
 const FLOAT_MS = 400; // 생산: 아이템이 다음 구역 쪽으로 떠오름
 const STAGGER_MAX = 300; // 기계별 시차 상한(ms)
 const MAX_PARTICLES = 8; // 전이 1회당 파티클 상한
@@ -44,7 +47,7 @@ export class Fx {
       const p = this.prev?.get(m.id);
       if (!p || skip) return;
       if (m.state !== p.state) {
-        const kind = m.state === 'broken' ? 'broken' : p.state === 'broken' ? 'repair' : m.state === 'stopped' ? 'stop' : null;
+        const kind = m.state === 'broken' ? 'broken' : p.state === 'broken' ? 'repair' : m.state === 'stopped' ? 'stop' : m.state === 'running' ? 'start' : null;
         if (kind) events.push({ id: m.id, kind });
       }
       if (m.processed > p.made) events.push({ id: m.id, kind: 'produce' });
@@ -63,7 +66,8 @@ export class Fx {
       if (!v) return;
       const delay = staggerOf(e.id);
       if (e.kind === 'stop') this.dim(v, delay);
-      else if (e.kind === 'repair') this.pulse(v, delay);
+      else if (e.kind === 'repair') this.pulse(v, delay, REPAIR_MS, REPAIR_PEAK, true);
+      else if (e.kind === 'start') this.pulse(v, delay, START_MS, START_PEAK, false);
       else if (e.kind === 'produce') this.float(v, f, delay);
     });
   }
@@ -117,19 +121,19 @@ export class Fx {
   }
 
   // 밝아지는 펄스: 기계 모양 그대로의 흰 그림자를 겹쳐 알파만 올렸다 내린다.
-  pulse(v, delay) {
+  pulse(v, delay, ms, peak, sparks) {
     const { spr } = v;
-    const ghost = this.scene.add.image(spr.x, spr.y, spr.texture.key, spr.frame.name)
-      .setOrigin(0.5, 1).setScale(spr.scaleX).setTintFill(0xffffff).setAlpha(0).setDepth(11);
+    const ghost = this.scene.track(this.scene.add.image(spr.x, spr.y, spr.texture.key, spr.frame.name)
+      .setOrigin(0.5, 1).setScale(spr.scaleX).setTintFill(0xffffff).setAlpha(0).setDepth(11));
     const cleanup = () => ghost.destroy();
     this.release(v, 'pulse');
-    v.rampUntil = this.scene.now + delay + REPAIR_MS; // 이 동안은 켜짐(on) 프레임을 보여 준다
+    v.rampUntil = this.scene.now + delay + ms; // 이 동안은 켜짐(on) 프레임을 보여 준다
     const tween = this.scene.tweens.add({
-      targets: ghost, alpha: 0.7, delay, duration: REPAIR_MS / 2, yoyo: true,
+      targets: ghost, alpha: peak, delay, duration: ms / 2, yoyo: true,
       onComplete: () => { delete v.fx.pulse; cleanup(); },
     });
     this.hold(v, 'pulse', tween, cleanup);
-    this.burst(v.cx, v.rect.y + v.rect.h / 2, 6, SPARK.repair, delay);
+    if (sparks) this.burst(v.cx, v.rect.y + v.rect.h / 2, 6, SPARK.repair, delay);
   }
 
   // 생산 1건: 아이템이 기계 위에서 떠올라 다음 기계(=다음 구역) 방향으로 흘러간다.
@@ -146,7 +150,7 @@ export class Fx {
       dy = (next.y - me.y) / len;
     }
     const item = f.zones.find((z) => z.id === me.zone)?.item ?? 0;
-    const spr = sc.add.image(v.cx, v.rect.y + sc.cell * 0.3, 'tiles', itemFrame(sc.sp.items.frames[item])).setScale(sc.zoom).setDepth(22).setVisible(false);
+    const spr = sc.track(sc.add.image(v.cx, v.rect.y + sc.cell * 0.3, 'tiles', itemFrame(sc.sp.items.frames[item])).setScale(sc.zoom).setDepth(22).setVisible(false));
     sc.tweens.add({
       targets: spr, delay, duration: FLOAT_MS, ease: 'Sine.easeOut',
       x: spr.x + dx * sc.cell, y: spr.y + dy * sc.cell - sc.cell * 0.4, alpha: 0,
@@ -161,7 +165,7 @@ export class Fx {
     const count = Math.min(n, MAX_PARTICLES);
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2;
-      const p = sc.add.rectangle(x, y, 4, 4, color).setDepth(25).setVisible(false);
+      const p = sc.track(sc.add.rectangle(x, y, 4, 4, color).setDepth(25).setVisible(false));
       sc.tweens.add({
         targets: p, delay, duration: 300, x: x + Math.cos(a) * 24, y: y + Math.sin(a) * 24, alpha: 0,
         onStart: () => p.setVisible(true),

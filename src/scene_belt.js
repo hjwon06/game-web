@@ -6,6 +6,11 @@ const SPEED = 1.0; // 칸/초
 const GAP = 1.5; // 아이템 간격(칸)
 const DIRS = { right: 'right', left: 'left', down: 'down', up: 'up' };
 
+// 꺾이는 칸에서 남기는 반쪽(프레임 안 x, y, w, h). 벨트 한 칸은 32px.
+const HALF = 16;
+const HALF_IN = { right: [0, 0, HALF, 32], left: [HALF, 0, HALF, 32], down: [0, 0, 32, HALF], up: [0, HALF, 32, HALF] };
+const HALF_OUT = { right: [HALF, 0, HALF, 32], left: [0, 0, HALF, 32], down: [0, HALF, 32, HALF], up: [0, 0, 32, HALF] };
+
 export function expandRoute(route) {
   const cells = [];
   for (let i = 0; i < route.length - 1; i++) {
@@ -49,9 +54,18 @@ export function buildBelt(scene, f, add) {
   }
   cells.forEach((c, i) => {
     const seg = segs[ms.filter((e) => e.i < i).length];
-    const frames = belt[DIRS[c.dir]];
-    const spr = add(scene.add.image(pts[i].x, pts[i].y, 'tiles', frames[0]).setScale(scene.zoom).setDepth(1));
-    seg.cells.push({ spr, frames });
+    const prev = i > 0 && cells[i - 1].dir !== c.dir ? cells[i - 1].dir : null;
+    const put = (dir, keep) => {
+      const frames = belt[DIRS[dir]];
+      const spr = add(scene.add.image(pts[i].x, pts[i].y, 'tiles', frames[0]).setScale(scene.zoom).setDepth(1));
+      if (keep) spr.setCrop(...keep);
+      seg.cells.push({ spr, frames });
+    };
+    // 꺾이는 칸: 코너 그림이 없어서(sprites.json belt.corner = null) 들어오는 쪽 반 칸 + 나가는 쪽 반 칸을 맞대 ㄱ 자로 잇는다.
+    if (prev) {
+      put(prev, HALF_IN[prev]);
+      put(c.dir, HALF_OUT[c.dir]);
+    } else put(c.dir);
   });
   const b = { cells, pts, segs, phase: 0, scene };
   // 멈춘 벨트에서도 아이템이 보이도록 구간마다 미리 채운다.

@@ -38,10 +38,13 @@ async function boot() {
 
   // 구역 이름표는 캔버스 글자 대신 DOM 으로 얹는다(표시 배율이 바뀌어도 글자가 뭉개지지 않는다). 위치는 layout.json 의 칸 좌표.
   function addZoneLabels(host, state) {
-    state.zones.forEach((z) => {
+    state.zones.forEach((z, i) => {
       const tag = document.createElement('span');
       tag.className = 'zone-label';
-      tag.textContent = z.name;
+      const no = document.createElement('b');
+      no.className = 'zone-no num';
+      no.textContent = String(i + 1).padStart(2, '0');
+      tag.append(no, z.name);
       tag.style.left = `${(z.label.x / state.grid.w) * 100}%`;
       tag.style.top = `${(z.label.y / state.grid.h) * 100}%`;
       host.appendChild(tag);
@@ -53,8 +56,8 @@ async function boot() {
   // NONE 모드의 Phaser 는 표시 크기를 스스로 다시 재지 않으므로, 크기가 바뀔 때마다 refresh() 로 입력 좌표 보정값(displayScale)을 갱신한다.
   function fitCanvas(g) {
     const host = document.getElementById('game');
-    const w = g.config.width; // grid.w × cell (20×64 = 1280)
-    const h = g.config.height; // grid.h × cell (11×64 = 704)
+    const w = g.config.width; // grid.w × cell (17×64 = 1088)
+    const h = g.config.height; // grid.h × cell (8×64 = 512)
     host.style.width = '100%';
     host.style.height = 'auto';
     host.style.aspectRatio = `${w} / ${h}`;

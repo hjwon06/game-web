@@ -12,7 +12,6 @@ export const CANVAS_FLOOR = 0x262f3d;
 export const CANVAS_ZONE_EDGE = 0x1b2230; // 구역 경계 1px
 export const CANVAS_SELECT = { inner: 0xf1f5f9, outer: 0x1e3a8a }; // 안 2px 실선 + 바깥 1px
 
-const MACHINE_W = 44; // 기계 그림 폭(시트 px). 선택 테두리·고장 점선·배지 기준
 const BADGE_R = 6; // 12px 원
 const BADGE_INSET = 10;
 const DASH = 6;
@@ -52,15 +51,20 @@ export function drawFloor(scene, f, add) {
   });
 }
 
-// 기계는 벨트 한 칸 위에 올라앉는다. (m.x, m.y) 가 그 칸이고, 선택·고장 표시용 사각형은 그림 폭 기준이다.
+const machineDef = (scene, kind) => scene.sp.machines[kind] || Object.values(scene.sp.machines)[0];
+
+// 기계는 벨트 한 칸 위에 올라앉는다. (m.x, m.y) 가 그 칸이고, 그림 아래변이 칸 아래변에 닿는다.
+// 선택·고장·배지용 사각형은 그림 crop(w×h) 그대로라서 그림이 바뀌어도 어긋나지 않는다.
 export function machineRect(scene, m) {
   const c = scene.cell;
-  const w = MACHINE_W * scene.zoom;
-  return { x: m.x * c + (c - w) / 2, y: m.y * c, w, h: c };
+  const { w: cw, h: ch } = machineDef(scene, m.kind).crop;
+  const w = cw * scene.zoom;
+  const h = ch * scene.zoom;
+  return { x: m.x * c + (c - w) / 2, y: (m.y + 1) * c - h, w, h };
 }
 
 export function drawMachine(scene, m, add) {
-  const def = scene.sp.machines[m.kind] || Object.values(scene.sp.machines)[0];
+  const def = machineDef(scene, m.kind);
   const r = machineRect(scene, m);
   const cx = r.x + r.w / 2;
   const spr = add(scene.add.image(cx, r.y + r.h, 'tiles', machineFrame(m.kind, def.off)).setOrigin(0.5, 1).setScale(scene.zoom).setDepth(10));

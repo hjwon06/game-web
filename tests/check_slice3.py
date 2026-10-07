@@ -96,8 +96,9 @@ def open_page(browser, errors, tag=""):
     page.on("console", lambda m: errors.append(f"{tag}{m.text}") if m.type == "error" else None)
     page.on("pageerror", lambda e: errors.append(f"{tag}{e}"))
     page.goto(BASE + "/")
-    page.wait_for_selector(SEL["canvas"], timeout=10000)
-    page.wait_for_selector(SEL["row"], timeout=10000)
+    # 서버가 1코어라 헤드리스 3탭 WebGL 이 느리다(10초에서 실패, 30초에서 통과)
+    page.wait_for_selector(SEL["canvas"], timeout=30000)
+    page.wait_for_selector(SEL["row"], timeout=30000)
     return page
 
 

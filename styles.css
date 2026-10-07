@@ -10,6 +10,8 @@
   --running: #0F766E;
   --stopped: #64748B;
   --broken: #B91C1C;
+  --zone-label: #E6ECF5; /* 어두운 구역 바닥 위 표지판 글자 */
+  --zone-label-no: #8FA3BF;
 
   --font-body: 'Pretendard', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-num: 'Outfit', 'Pretendard', system-ui, sans-serif;
@@ -18,6 +20,7 @@
   --fs-body: 15px;
   --fs-cap: 13px;
   --fs-num: 16px;
+  --fs-zone: 16px;
 
   --r-1: 4px;
   --r-2: 8px;
@@ -97,20 +100,25 @@ body {
 .stage-col { width: 100%; }
 
 .frame { position: relative; width: 100%; border: var(--frame) solid var(--navy); }
-/* 내부 해상도는 grid × cell(1280x704) 고정, CSS 표시 크기만 바꾼다 */
-#game { position: relative; width: 100%; aspect-ratio: 20 / 11; container-type: inline-size; }
+/* 내부 해상도는 grid × cell(1088x512) 고정, CSS 표시 크기만 바꾼다. 비율은 main.js 가 grid 에서 다시 정한다 */
+#game { position: relative; width: 100%; aspect-ratio: 17 / 8; container-type: inline-size; }
 #game canvas { display: block; width: 100% !important; height: 100% !important; image-rendering: pixelated; }
 /* 구역 이름표: layout.json 의 칸 좌표를 % 로 얹는다. 클릭은 캔버스로 통과 */
 .zone-label {
   position: absolute;
-  padding: 4px 8px;
-  font-size: max(13px, 1.3cqw);
-  font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-2);
+  font-size: max(var(--fs-zone), 1.6cqw);
+  font-weight: 800;
+  line-height: 1.1;
   letter-spacing: 0.04em;
-  color: #c9d3e3;
+  color: var(--zone-label);
   pointer-events: none;
   word-break: keep-all;
 }
+.zone-no { font-weight: 800; color: var(--zone-label-no); }
 
 .bracket { position: absolute; width: var(--bracket); height: var(--bracket); border: 0 solid var(--navy); }
 .bracket-tl { top: calc(var(--frame) * -1 - var(--bracket)); left: calc(var(--frame) * -1 - var(--bracket)); border-top-width: var(--frame); border-left-width: var(--frame); }

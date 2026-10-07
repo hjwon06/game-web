@@ -16,14 +16,15 @@ export class FactoryScene extends Phaser.Scene {
     this.pending = null;
     this.built = false;
     this.signature = '';
-    this.objs = [];
+    this.objs = new Set(); // 다시 그릴 때 지울 오브젝트. 연출용 일회성 스프라이트도 여기 넣고, 스스로 사라지면 빠진다
     this.machines = new Map();
     this.belt = null;
     this.selectedId = null;
     this.blinkOn = false;
     this.now = 0; // 씬 시계(ms). fx.js 가 켜짐 프레임 구간을 잡을 때 읽는다
     this.track = (obj) => {
-      this.objs.push(obj);
+      this.objs.add(obj);
+      obj.once('destroy', () => this.objs.delete(obj));
       return obj;
     };
   }
@@ -69,12 +70,12 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   rebuild(f) {
-    this.objs.forEach((o) => {
+    [...this.objs].forEach((o) => {
       this.tweens.killTweensOf(o);
       o.destroy();
     });
     destroyBelt(this.belt);
-    this.objs = [];
+    this.objs.clear();
     this.machines.clear();
     this.scale.setGameSize(f.grid.w * this.cell, f.grid.h * this.cell);
 
