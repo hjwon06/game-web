@@ -23,6 +23,8 @@ class ConcurrencyDeadlockTest < ActiveSupport::TestCase
   end
 
   def reset_machine
+    # version 을 0 으로 되돌리면 이전 라운드의 (machine_id, version) 이벤트가 남아 다음 라운드 첫 전이와 UniqueViolation 이 나므로 함께 지운다.
+    MachineStateEvent.where(machine_id: @machine.id).delete_all
     Machine.where(id: @machine.id).update_all(state: "running", version: 0)
   end
 
