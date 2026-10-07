@@ -37,6 +37,11 @@ async function getJson(url) {
   try {
     // no-cache: 브라우저가 ETag 로 재검증하고 304 는 투명하게 200 처럼 돌려준다.
     const res = await fetch(url, { cache: 'no-cache', signal: ctrl.signal });
+    if (res.status === 401) {
+      // 세션이 없거나 만료됐다. 서버 API 만 해당하므로 정적 layout.json 은 여기 오지 않는다.
+      location.href = '/login';
+      throw new Error('HTTP 401');
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } finally {

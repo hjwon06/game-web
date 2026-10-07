@@ -77,6 +77,19 @@ body {
 .chip-live { color: var(--running); border-color: var(--running); }
 .chip-off { color: var(--stopped); border-color: var(--stopped); background: var(--bg); }
 .topbar-updated { margin-left: auto; font-size: var(--fs-body); color: var(--muted); }
+.topbar-user { font-size: var(--fs-body); font-weight: 600; }
+.topbar-logout {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--s-2);
+  font-size: var(--fs-body);
+  color: var(--navy);
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-1);
+}
+.topbar-logout:hover { border-color: var(--navy); }
 
 /* 본문: 캔버스 영역 + 사이드 패널 */
 .layout {

@@ -2,6 +2,7 @@ require "test_helper"
 
 class ApiTest < ActionDispatch::IntegrationTest
   setup do
+    sign_in_as create_user
     Machine.create!(code: "M2", name: "조립기", state: "stopped")
     Machine.create!(code: "M1", name: "절단기", state: "running")
   end

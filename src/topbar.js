@@ -2,7 +2,25 @@
 // 실패하면 state 는 마지막 성공 값 그대로 오므로 updated_at 이 곧 마지막 성공 시각이다.
 import { formatTime } from './format.js';
 
+// 로그인한 이름은 한 번만 받는다. 실패해도 화면은 그대로 둔다(401 이면 state.js 가 로그인으로 보낸다).
+let meRequested = false;
+function loadMe(root) {
+  if (meRequested) return;
+  meRequested = true;
+  fetch('/api/me', { cache: 'no-cache' })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((me) => {
+      if (!me || !me.name) return;
+      const user = root.querySelector('#topbar-user');
+      const logout = root.querySelector('#topbar-logout');
+      if (user) { user.textContent = me.name; user.hidden = false; }
+      if (logout) logout.hidden = false;
+    })
+    .catch(() => { meRequested = false; });
+}
+
 export function renderTopbar(root, state, error) {
+  loadMe(root);
   const chip = root.querySelector('#topbar-link');
   const slot = root.querySelector('#topbar-updated');
   if (chip) {

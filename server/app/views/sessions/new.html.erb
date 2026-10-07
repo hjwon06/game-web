@@ -1,0 +1,20 @@
+<% content_for :title, "로그인" %>
+<div class="card">
+  <h2>로그인</h2>
+  <p class="hint">계정 이름과 비밀번호를 입력하세요.</p>
+  <% if @error.present? %>
+    <p class="error" role="alert"><%= @error %></p>
+  <% end %>
+  <%= form_with url: login_path, method: :post, local: true do |f| %>
+    <div class="field">
+      <%= f.label :name, "이름", for: "name" %>
+      <%= f.text_field :name, id: "name", value: params[:name], required: true, autofocus: true,
+            autocomplete: "username", autocapitalize: "none", spellcheck: false %>
+    </div>
+    <div class="field">
+      <%= f.label :password, "비밀번호", for: "password" %>
+      <%= f.password_field :password, id: "password", required: true, autocomplete: "current-password" %>
+    </div>
+    <%= f.submit "로그인", class: "btn", data: { disable_with: false } %>
+  <% end %>
+</div>

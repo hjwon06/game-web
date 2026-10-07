@@ -13,8 +13,14 @@ Rails.application.routes.draw do
     get "state", to: "state#show"
     get "hud", to: "hud#show"
     post "commands", to: "commands#create"
+    get "me", to: "me#show"
   end
 
-  # Defines the root path route ("/")
-  # root "posts#index"
+  get "login", to: "sessions#new"
+  post "login", to: "sessions#create"
+  match "logout", to: "sessions#destroy", via: [:get, :delete]
+  get "setup", to: "setup#new"
+  post "setup", to: "setup#create"
+
+  root "home#show"
 end

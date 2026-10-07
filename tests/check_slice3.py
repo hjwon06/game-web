@@ -4,6 +4,7 @@
 서버(127.0.0.1:3100)와 bin/sim 은 미리 띄워 둔다. 이 스크립트는 기동하지 않는다.
 선택자는 아래 SEL 한 곳에만 둔다(셀의 클래스 계약).
 """
+import os
 import re
 import sys
 import time
@@ -23,6 +24,18 @@ SEL = {
     "detail": ".machine-detail",
     "result": ".machine-detail .cmd-result",
 }
+
+
+LOGIN_NAME = os.environ.get("CHECK_USER", "jay")
+LOGIN_PASSWORD = os.environ.get("CHECK_PASSWORD", "")
+
+
+def login(ctx):
+    """브라우저 컨텍스트에 로그인 쿠키를 심는다. ctx.request 와 ctx 의 모든 페이지가 같은 쿠키를 쓴다."""
+    ctx.request.post(f"{BASE}/login", data={"name": LOGIN_NAME, "password": LOGIN_PASSWORD})
+    me = ctx.request.get(f"{BASE}/api/me")
+    if me.status != 200:
+        sys.exit(f"로그인 실패(/api/me {me.status}). CHECK_USER / CHECK_PASSWORD 환경변수를 확인한다.")
 
 
 def row(code):
@@ -71,7 +84,8 @@ def ensure(req, code, target):
 
 # ---- 화면 도우미 ----
 def open_page(browser, errors, tag=""):
-    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page = browser.new_page()  # browser 자리에는 로그인된 컨텍스트가 온다
+    page.set_viewport_size({"width": 1280, "height": 800})
     page.on("console", lambda m: errors.append(f"{tag}{m.text}") if m.type == "error" else None)
     page.on("pageerror", lambda e: errors.append(f"{tag}{e}"))
     page.goto(BASE + "/")
@@ -194,9 +208,10 @@ def main():
     errors = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
-        req = pw.request.new_context()
+        ctx = browser.new_context()  # 로그인 쿠키를 화면(페이지)과 서버 직접 호출(req)이 함께 쓴다
         try:
-            run(browser, req, errors)
+            login(ctx)
+            run(ctx, ctx.request, errors)
         finally:
             browser.close()
     failed = [n for n, ok in results if not ok]
