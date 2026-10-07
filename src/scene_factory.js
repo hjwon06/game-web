@@ -1,12 +1,12 @@
-// 상태·입력·애니메이션을 맡는다. 그리기 도구는 scene_draw.js.
-// 상태의 원본은 서버(state.js 가 배치와 합쳐 준다)이고 여기서는 읽기만 한다. 타일 번호·배율은 data/sprites.json 에서만 온다.
-import { COLORS, addBox, buildBelt, drawBadge, drawFloor, drawMachine, makeOutline, placeBox, placeOutline } from './scene_draw.js';
+// 상태·입력·애니메이션을 맡는다. 그리기 도구는 scene_draw.js, 벨트는 scene_belt.js, 전이 연출은 fx.js.
+// 상태의 원본은 서버(state.js 가 배치와 합쳐 준다)이고 여기서는 읽기만 한다. 칸 번호·배율은 data/sprites.json 에서만 온다.
+import { COLORS, drawBadge, drawFloor, drawMachine, machineFrame, makeOutline, placeOutline, registerFrames } from './scene_draw.js';
+import { buildBelt, destroyBelt, setBeltRunning, updateBelt } from './scene_belt.js';
+import { Fx, staggerOf } from './fx.js';
 
-const BELT_SPEED = 1.2; // 칸/초
-const BOX_GAP = 1.5; // 상자 사이 간격(칸)
-const BELT_FRAME_MS = 200;
 const BLINK_MS = 500;
-const STOPPED_ALPHA = 0.6;
+const HIT_MIN_PX = 44; // 히트박스 최소 크기(화면 픽셀)
+const PLATE_H = 5; // 기계 그림 아래 명판 높이(월드 px = 이 값 × 배율). 히트박스에 포함한다
 
 export class FactoryScene extends Phaser.Scene {
   constructor({ sprites, onSelect }) {
@@ -15,17 +15,19 @@ export class FactoryScene extends Phaser.Scene {
     this.zoom = sprites.scale; // this.scale 은 Phaser ScaleManager 라서 이름을 피한다
     this.cell = sprites.sheet.tile * this.zoom;
     this.onSelect = onSelect || (() => {});
-    this.grid = { w: 0, h: 0 };
     this.pending = null;
     this.built = false;
     this.signature = '';
-    this.objs = [];
+    this.objs = new Set(); // 다시 그릴 때 지울 오브젝트. 연출용 일회성 스프라이트도 여기 넣고, 스스로 사라지면 빠진다
     this.machines = new Map();
-    this.belts = [];
+    this.belt = null;
     this.selectedId = null;
     this.blinkOn = false;
+    this.hitK = 0; // 마지막으로 히트박스를 맞출 때의 화면 배율(월드 px / 화면 px)
+    this.now = 0; // 씬 시계(ms). fx.js 가 켜짐 프레임 구간을 잡을 때 읽는다
     this.track = (obj) => {
-      this.objs.push(obj);
+      this.objs.add(obj);
+      obj.once('destroy', () => this.objs.delete(obj));
       return obj;
     };
   }
@@ -36,6 +38,8 @@ export class FactoryScene extends Phaser.Scene {
   }
 
   create() {
+    registerFrames(this);
+    this.fx = new Fx(this);
     this.outline = makeOutline(this);
     // 빈 곳을 누르면 선택 해제. 캔버스에서 일어난 선택이므로 onSelect 로 알린다.
     this.input.on('pointerdown', (_p, over) => {
@@ -61,72 +65,61 @@ export class FactoryScene extends Phaser.Scene {
       this.rebuild(factory);
     }
     this.applyMachineStates(factory);
+    this.fx.observe(factory);
   }
 
   structureOf(f) {
-    return JSON.stringify([
-      f.grid,
-      f.machines.map((m) => [m.id, m.x, m.y, m.color]),
-      f.conveyors.map((c) => [c.id, c.path, c.to]),
-      f.workers.map((w) => [w.id, w.x, w.y]),
-    ]);
+    return JSON.stringify([f.grid, f.zones, f.belt, f.machines.map((m) => [m.id, m.x, m.y, m.kind, m.zone])]);
   }
 
   rebuild(f) {
-    this.objs.forEach((o) => {
+    [...this.objs].forEach((o) => {
       this.tweens.killTweensOf(o);
       o.destroy();
     });
-    this.objs = [];
+    destroyBelt(this.belt);
+    this.objs.clear();
     this.machines.clear();
-    this.belts = [];
-    this.grid = f.grid;
     this.scale.setGameSize(f.grid.w * this.cell, f.grid.h * this.cell);
 
-    drawFloor(this, f.grid, this.track);
-    f.conveyors.forEach((c) => this.addBelt(c, f));
+    drawFloor(this, f, this.track);
+    this.belt = buildBelt(this, f, this.track);
     f.machines.forEach((m) => {
       const v = drawMachine(this, m, this.track);
-      v.spr.on('pointerdown', () => this.pick(m.id));
+      v.t = staggerOf(m.id) * 3; // 기계마다 그림 박자가 어긋나게
+      v.spr.disableInteractive(); // 클릭은 히트박스만 받는다. 그림이 작아도 44px 보장이 깨지지 않게
+      v.hit = this.track(this.add.zone(0, 0, 1, 1).setInteractive({ useHandCursor: true }).setDepth(20));
+      v.hit.on('pointerdown', () => this.pick(m.id));
       this.machines.set(m.id, v);
     });
-    f.workers.forEach((w) => {
-      const p = this.px(w.x, w.y);
-      const spr = this.track(this.add.image(p.x, p.y, 'tiles', this.sp.tiles.worker).setScale(this.zoom).setDepth(20));
-      this.tweens.add({ targets: spr, y: p.y - this.zoom * 2, duration: 450, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-    });
+    this.fitHits(true);
     if (this.selectedId && !this.machines.has(this.selectedId)) this.selectedId = null;
     placeOutline(this.outline, this.machines.get(this.selectedId));
   }
 
-  addBelt(c, f) {
-    const b = buildBelt(this, c, f, this.track);
-    // 멈춘 벨트에서도 기계 앞 상자가 보이도록 미리 채워 둔다.
-    let s = b.total - this.cell * 0.5;
-    while (s >= 0) {
-      addBox(this, b, s, this.track);
-      s -= BOX_GAP * this.cell;
-    }
-    b.sinceSpawn = (s + BOX_GAP * this.cell) / this.cell;
-    this.belts.push(b);
-  }
-
+  // running = 일하는 그림(애니는 update), stopped·broken = 꺼진 그림. 고장은 거기에 빨간 깜빡임이 더해진다.
   applyMachineStates(f) {
     f.machines.forEach((m) => {
       const v = this.machines.get(m.id);
       if (!v) return;
       v.state = m.state;
-      v.spr.setAlpha(m.state === 'stopped' ? STOPPED_ALPHA : 1);
+      if (m.state !== 'running') this.setFrame(v, v.def.off);
       v.dash.setVisible(m.state === 'broken');
       this.paintTint(v);
       drawBadge(v, m.state);
     });
-    this.belts.forEach((b) => {
-      b.running = this.machines.get(b.to)?.state === 'running';
-    });
+    setBeltRunning(this.belt, this.machines);
+  }
+
+  setFrame(v, n) {
+    const key = machineFrame(v.kind, n);
+    if (v.frame === key) return;
+    v.frame = key;
+    v.spr.setFrame(key);
   }
 
   paintTint(v) {
+    if (v.fxBusy) return; // 정지 연출이 색을 잡고 있는 동안은 건드리지 않는다
     if (v.state === 'broken' && this.blinkOn) v.spr.setTint(COLORS.brokenTint);
     else v.spr.clearTint();
   }
@@ -136,40 +129,43 @@ export class FactoryScene extends Phaser.Scene {
     this.machines.forEach((v) => this.paintTint(v));
   }
 
-  // 캔버스를 눌러서 고른 경우: 안쪽 선택을 바꾸고 바깥(패널)에 알린다.
+  // 히트박스 = 그림 + 명판, 단 화면에서 44×44px 아래로는 줄지 않는다. 선택 테두리는 v.rect(그림 크기)라서 영향 없다.
+  // 캔버스 표시 배율이 바뀌면(리사이즈) 월드 크기를 다시 잡는다. 배율이 그대로면 아무것도 하지 않는다.
+  fitHits(force) {
+    const k = this.scale.displayScale.x || 1;
+    if (!force && k === this.hitK) return;
+    this.hitK = k;
+    const min = HIT_MIN_PX * k;
+    this.machines.forEach((v) => {
+      const r = v.rect;
+      const bottom = r.y + r.h + PLATE_H * this.zoom;
+      const w = Math.max(r.w, min);
+      const h = Math.max(bottom - r.y, min);
+      v.hit.setPosition(r.x + r.w / 2, bottom - h / 2).setSize(w, h);
+    });
+  }
+
+  // 캔버스가 눌렸을 때: 안쪽 선택을 바꾸고 콜백 하나(onSelect)로 바깥에 알린다.
   pick(id) {
     this.select(id);
     this.onSelect(id);
   }
 
-  // 바깥(목록)이 고른 경우: 표시만 바꾼다. onSelect 를 부르지 않는다.
+  // 바깥(고장 칩 등)이 고른 경우: 표시만 바꾼다. onSelect 를 부르지 않는다.
   select(id) {
     this.selectedId = id;
     if (this.outline) placeOutline(this.outline, this.machines.get(id));
   }
 
-  update(_time, delta) {
-    const dt = delta / 1000;
-    this.belts.forEach((b) => {
-      if (!b.running) return;
-      b.phase += dt;
-      const frame = Math.floor((b.phase * 1000) / BELT_FRAME_MS) % 2;
-      b.cells.forEach((c) => c.spr.setFrame(c.frames[frame]));
-      b.sinceSpawn += BELT_SPEED * dt;
-      if (b.sinceSpawn >= BOX_GAP) {
-        b.sinceSpawn -= BOX_GAP;
-        addBox(this, b, 0, this.track);
-      }
-      b.boxes = b.boxes.filter((box) => {
-        box.s += BELT_SPEED * this.cell * dt;
-        if (box.s >= b.total) {
-          box.spr.destroy();
-          this.objs = this.objs.filter((o) => o !== box.spr);
-          return false;
-        }
-        placeBox(b, box);
-        return true;
-      });
+  update(time, delta) {
+    this.now = time;
+    this.fitHits(false);
+    this.machines.forEach((v) => {
+      if (v.state !== 'running') return;
+      v.t += delta;
+      const list = time < v.rampUntil ? v.def.on : v.def.working;
+      this.setFrame(v, list[Math.floor(v.t / v.def.ms) % list.length]);
     });
+    if (this.belt) updateBelt(this.belt, delta / 1000, this.sp.belt.ms);
   }
 }

@@ -1,0 +1,215 @@
+/* 공장 화면 구조 목업 — 1920x1080 기준. 라이트 고정, 그림자·그라데이션·이모지 없음.
+   액센트 1색(navy) / 상태색 3개: 가동 #0F766E · 정지 #64748B · 고장 #B91C1C */
+:root {
+  --s: 2;
+  --accent: #1B3A5C;
+  --run: #0F766E;
+  --stop: #64748B;
+  --bad: #B91C1C;
+  --floor: #E7E3DC;
+  --band: #DCD7CE;
+  --line: #CFC9BE;
+  --ink: #1F2937;
+  --mute: #6B7280;
+  --x0: 148px;   /* 첫 기계 열 왼쪽 */
+  --p: 232px;    /* 기계 간격 */
+  --cy1: 380px;  /* 위 줄 벨트 중심선 */
+  --cy2: 740px;  /* 아래 줄 벨트 중심선 */
+  --sheet: url("../assets/sierra-automation/spritesheet.png");
+  --grid: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M32 0H0V32' fill='none' stroke='%23D8D3CA' stroke-width='1'/%3E%3C/svg%3E");
+  --grid-band: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cpath d='M32 0H0V32' fill='none' stroke='%23CEC9BF' stroke-width='1'/%3E%3C/svg%3E");
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { height: 100%; }
+body {
+  font-family: "Pretendard", "Pretendard Variable", system-ui, sans-serif;
+  color: var(--ink);
+  word-break: keep-all;
+  overflow: hidden;
+  background: var(--floor);
+}
+.num { font-family: "Outfit", "Pretendard", sans-serif; font-variant-numeric: tabular-nums; }
+
+/* 바닥 */
+.stage {
+  position: relative;
+  width: 100vw;
+  height: 100dvh;
+  min-height: 1080px;
+  background-color: var(--floor);
+  background-image: var(--grid);
+  background-size: calc(32px * var(--s)) calc(32px * var(--s));
+  image-rendering: pixelated;
+}
+.band {
+  position: absolute;
+  height: 330px;
+  background-color: var(--band);
+  background-image: var(--grid-band);
+  background-size: calc(32px * var(--s)) calc(32px * var(--s));
+  border-radius: 8px;
+}
+.band.r1 { top: calc(var(--cy1) - 175px); }
+.band.r2 { top: calc(var(--cy2) - 175px); }
+.zone-label {
+  position: absolute;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--accent);
+  letter-spacing: 0;
+}
+.zone-label .num { margin-right: 8px; font-weight: 700; }
+
+/* 벨트 (JS 가 칸을 채운다) */
+.belt { position: absolute; background-image: var(--sheet); image-rendering: pixelated; opacity: .62; }
+
+/* 기계 */
+.m {
+  position: absolute;
+  width: calc(48px * var(--s));
+  height: calc(var(--h) * 1px * var(--s));
+  left: calc(var(--x0) + var(--p) * (var(--c) + .5) - 24px * var(--s));
+  top: calc(var(--cy) + 8px * var(--s) - var(--h) * 1px * var(--s));
+  background-image: var(--sheet);
+  background-size: calc(320px * var(--s)) auto;
+  background-position: calc(-24px * var(--s)) calc(var(--by) * -1px * var(--s));
+  image-rendering: pixelated;
+  filter: saturate(.55);
+  opacity: .8;
+}
+.m.stop { filter: grayscale(1); opacity: .55; }
+.m.bad { filter: none; opacity: 1; }
+.r1 { --cy: var(--cy1); }
+.r2 { --cy: var(--cy2); }
+/* kind: --by = 시트 y(px) = row*32 + dy, --h = 크롭 높이 */
+.k-recycler { --by: 2134; --h: 42; }
+.k-smelter { --by: 1050; --h: 38; }
+.k-fab { --by: 1428; --h: 44; }
+.k-cooler { --by: 476; --h: 36; }
+.k-elec { --by: 764; --h: 36; }
+.k-rand { --by: 2332; --h: 36; }
+
+/* 명판 */
+.plate {
+  position: absolute;
+  left: calc(var(--x0) + var(--p) * (var(--c) + .5));
+  top: calc(var(--cy) + 16px * var(--s) + 8px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: #7A7F87;
+  background: #EFECE6;
+  border: 1px solid #D6D1C7;
+  border-radius: 4px;
+}
+.plate.bad { color: var(--bad); font-weight: 700; background: #FBF7F4; border-color: var(--bad); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); flex: none; }
+
+/* 선택 링 + 말풍선 (검사기 M3 = 위 줄 3번째 칸) */
+.ring {
+  position: absolute;
+  left: calc(var(--x0) + var(--p) * 2.5 - 24px * var(--s) - 18px);
+  width: calc(48px * var(--s) + 36px);
+  top: calc(var(--cy1) - 30px * var(--s) - 10px);
+  height: calc(46px * var(--s) + 52px);
+  border: 2px solid var(--accent);
+  border-radius: 8px;
+}
+.bubble {
+  position: absolute;
+  left: calc(var(--x0) + var(--p) * 2.5);
+  top: calc(var(--cy1) - 30px * var(--s) - 96px);
+  transform: translateX(-50%);
+  height: 60px;
+  padding: 8px;
+  display: flex;
+  gap: 8px;
+  background: #FBF9F5;
+  border: 1.5px solid var(--accent);
+  border-radius: 8px;
+}
+.bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 11px;
+  height: 11px;
+  transform: translateX(-50%) rotate(45deg);
+  background: #FBF9F5;
+  border-right: 1.5px solid var(--accent);
+  border-bottom: 1.5px solid var(--accent);
+}
+.btn {
+  min-width: 72px;
+  min-height: 44px;
+  padding: 0 16px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* HUD */
+.hud-count {
+  position: absolute;
+  left: 40px;
+  top: 36px;
+  font-size: 22px;
+  font-weight: 500;
+  color: #8A8F97;
+}
+.hud-count .num { font-weight: 600; }
+.hud-name { margin-top: 6px; font-size: 14px; color: #9A9EA5; }
+.chip {
+  position: absolute;
+  right: 40px;
+  top: 32px;
+  height: 40px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--bad);
+  background: #FBF7F4;
+  border: 1px solid var(--bad);
+  border-radius: 8px;
+}
+
+/* Inspect pane */
+.inspect {
+  position: absolute;
+  left: 40px;
+  bottom: 40px;
+  width: 380px;
+  padding: 18px 20px 20px;
+  background: #F6F3EE;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.ins-head { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 700; }
+.ins-head .id { font-size: 14px; font-weight: 500; color: var(--mute); }
+.ins-head .st { margin-left: auto; font-size: 14px; font-weight: 700; color: var(--bad); display: flex; align-items: center; gap: 6px; }
+.ins-wo { margin-top: 16px; font-size: 14px; color: var(--mute); }
+.ins-wo b { color: var(--ink); font-weight: 600; margin-left: 6px; }
+.bar { margin-top: 8px; height: 8px; border-radius: 4px; background: #DDD8CF; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0%; background: var(--accent); }
+.bar-n { margin-top: 6px; font-size: 14px; color: var(--mute); }
+.bar-n .num { color: var(--ink); font-weight: 600; }
+.ins-rows { margin-top: 14px; border-top: 1px solid var(--line); }
+.ins-row { display: flex; justify-content: space-between; align-items: baseline; padding-top: 10px; font-size: 14px; color: var(--mute); }
+.ins-row .num { font-size: 20px; font-weight: 600; color: var(--ink); }
+.ins-row .num.bad { color: var(--bad); }

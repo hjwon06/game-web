@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>공장 화면 구조 목업</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="structure.css">
+</head>
+<body>
+<main class="stage" id="stage">
+
+  <!-- 구역 띠: 위 줄(입고 2 · 가공 5) / 아래 줄(검사 3 · 출하 2). 열 간격 232px, 첫 열 x=148 -->
+  <div class="band r1" style="left:148px; width:464px"></div>
+  <div class="band r1" style="left:612px; width:1160px"></div>
+  <div class="band r2" style="left:1076px; width:696px"></div>
+  <div class="band r2" style="left:612px; width:464px"></div>
+
+  <div class="zone-label" style="left:148px; top:176px"><span class="num">01</span>입고</div>
+  <div class="zone-label" style="left:612px; top:176px"><span class="num">02</span>가공</div>
+  <div class="zone-label" style="left:1076px; top:536px"><span class="num">03</span>검사</div>
+  <div class="zone-label" style="left:612px; top:536px"><span class="num">04</span>출하</div>
+
+  <!-- 벨트: 칸은 아래 스크립트가 채운다 -->
+  <div id="belts"></div>
+
+  <!-- 위 줄: 입고 M1 M2 / 가공 M3..M7 (왼쪽 -> 오른쪽) -->
+  <div class="m r1 k-recycler" style="--c:0"></div>
+  <div class="m r1 k-recycler stop" style="--c:1"></div>
+  <div class="m r1 k-smelter bad" style="--c:2"></div>
+  <div class="m r1 k-fab" style="--c:3"></div>
+  <div class="m r1 k-smelter" style="--c:4"></div>
+  <div class="m r1 k-fab stop" style="--c:5"></div>
+  <div class="m r1 k-smelter" style="--c:6"></div>
+  <!-- 아래 줄: 검사 M8 M9 M10 / 출하 M11 M12 (오른쪽 -> 왼쪽) -->
+  <div class="m r2 k-cooler" style="--c:6"></div>
+  <div class="m r2 k-elec" style="--c:5"></div>
+  <div class="m r2 k-cooler stop" style="--c:4"></div>
+  <div class="m r2 k-rand" style="--c:3"></div>
+  <div class="m r2 k-rand" style="--c:2"></div>
+
+  <div class="plate r1" style="--c:0">절단기</div>
+  <div class="plate r1" style="--c:1">조립기</div>
+  <div class="plate r1 bad" style="--c:2"><span class="dot"></span>검사기</div>
+  <div class="plate r1" style="--c:3">가공기</div>
+  <div class="plate r1" style="--c:4">절단기 2</div>
+  <div class="plate r1" style="--c:5">가공기 2</div>
+  <div class="plate r1" style="--c:6">조립기 2</div>
+  <div class="plate r2" style="--c:6">검사기 2</div>
+  <div class="plate r2" style="--c:5">도장기 1</div>
+  <div class="plate r2" style="--c:4">도장기 2</div>
+  <div class="plate r2" style="--c:3">포장기 1</div>
+  <div class="plate r2" style="--c:2">포장기 2</div>
+
+  <!-- 선택: 검사기(고장) — 가능한 전이는 [수리] 하나 -->
+  <div class="ring"></div>
+  <div class="bubble"><button class="btn" type="button">수리</button></div>
+
+  <!-- 좌상단 -->
+  <div class="hud-count">
+    <div>가동 <span class="num">8</span> · 정지 <span class="num">3</span> · 고장 <span class="num">1</span></div>
+    <div class="hud-name">제1공장</div>
+  </div>
+
+  <!-- 우상단: 고장 칩 -->
+  <div class="chip"><span class="dot"></span>검사기 고장</div>
+
+  <!-- 좌하단: Inspect (선택 기계만) -->
+  <aside class="inspect">
+    <div class="ins-head">검사기 <span class="id num">M3</span><span class="st"><span class="dot"></span>고장</span></div>
+    <div class="ins-wo">작업지시 <b><span class="num">WO-1003</span> 플레이트 C</b></div>
+    <div class="bar"><i></i></div>
+    <div class="bar-n"><span class="num">0</span> / <span class="num">120</span></div>
+    <div class="ins-rows">
+      <div class="ins-row">최근 1분 양품 <span class="num">0</span></div>
+      <div class="ins-row">최근 10분 불량률 <span class="num bad">3.2%</span></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+// 배율: ?scale=2 | ?scale=3
+document.documentElement.style.setProperty('--s', new URLSearchParams(location.search).get('scale') === '3' ? 3 : 2);
+
+// 벨트 칸 채우기 (시트 프레임 50 오른쪽 / 54 왼쪽 / 58 아래)
+(function () {
+  var s = +getComputedStyle(document.documentElement).getPropertyValue('--s'), T = 32 * s;
+  var cy1 = 380, cy2 = 740, xv = 1820 - T / 2, box = document.getElementById('belts');
+  var F = { right: [0, 5], left: [4, 5], down: [8, 5] };
+  function cell(x, y, d) {
+    var e = document.createElement('div');
+    e.className = 'belt';
+    e.style.cssText = 'left:' + x + 'px;top:' + y + 'px;width:' + T + 'px;height:' + T + 'px;' +
+      'background-size:' + 320 * s + 'px auto;background-position:' + (-F[d][0] * T) + 'px ' + (-F[d][1] * T) + 'px';
+    box.appendChild(e);
+  }
+  for (var x = 80; x < xv; x += T) cell(x, cy1 - T / 2, 'right');
+  for (var y = cy1 - T / 2; y <= cy2 - T / 2; y += T) cell(xv, y, 'down');
+  for (var x2 = xv - T; x2 > 560; x2 -= T) cell(x2, cy2 - T / 2, 'left');
+})();
+</script>
+</body>
+</html>

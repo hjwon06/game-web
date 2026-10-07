@@ -6,49 +6,31 @@
   <title>1공장 — 공장 관제 화면</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&display=swap">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header id="topbar" class="topbar">
-    <h1 class="topbar-name">1공장</h1>
-    <span id="topbar-link" class="chip chip-live">실시간</span>
-    <span id="topbar-updated" class="topbar-updated num"></span>
-    <span id="topbar-user" class="topbar-user" hidden></span>
-    <a id="topbar-logout" class="topbar-logout" href="/logout" hidden>로그아웃</a>
+  <main id="game" class="game" aria-label="공장 화면"></main>
+  <div id="labels" class="labels" aria-hidden="true"></div>
+
+  <header id="hud" class="hud">
+    <div>
+      <p id="hud-count" class="hud-count" aria-live="polite">불러오는 중</p>
+      <p class="hud-name">1공장<span id="hud-link" class="hud-link" hidden>연결 끊김 · 마지막 값</span></p>
+    </div>
+    <p id="hud-user" class="hud-user" hidden>
+      <span id="hud-user-name"></span>
+      <a href="/logout">로그아웃</a>
+    </p>
   </header>
-  <div class="layout">
-    <section class="stage" aria-label="공장 화면">
-      <div class="stage-area">
-        <div class="stage-col">
-          <div class="frame">
-            <div id="game"></div>
-            <i class="bracket bracket-tl" aria-hidden="true"></i>
-            <i class="bracket bracket-tr" aria-hidden="true"></i>
-            <i class="bracket bracket-bl" aria-hidden="true"></i>
-            <i class="bracket bracket-br" aria-hidden="true"></i>
-          </div>
-          <ul id="legend" class="legend" aria-label="범례">
-            <li class="legend-item"><i class="dot dot-running" aria-hidden="true"></i>가동</li>
-            <li class="legend-item"><i class="dot dot-stopped" aria-hidden="true"></i>정지</li>
-            <li class="legend-item"><i class="dot dot-broken" aria-hidden="true"></i>고장</li>
-            <li class="legend-item"><i class="tile-icon tile-icon-sm icon-machine" aria-hidden="true"></i>기계</li>
-            <li class="legend-item"><i class="tile-icon tile-icon-sm icon-box" aria-hidden="true"></i>제품 상자</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-    <section id="panel-detail" class="panel-section detail-slot" aria-live="polite"></section>
-    <aside id="panel" class="panel" aria-live="polite">
-      <section id="panel-summary" class="summary" aria-label="요약"></section>
-      <section id="panel-list" class="panel-section">
-        <h2 class="panel-title">기계 목록</h2>
-        <div id="panel-rows"></div>
-      </section>
-      <p id="panel-error" class="panel-error" hidden>서버에 닿지 않습니다. 마지막 값을 보여주는 중입니다</p>
-    </aside>
-  </div>
+
+  <button id="alert-chip" class="alert-chip" type="button" hidden><i class="dot" aria-hidden="true"></i><span></span></button>
+
+  <p id="inspect-hint" class="inspect-hint" hidden></p>
+  <aside id="inspect" class="inspect" aria-live="polite" hidden></aside>
+  <div id="bubble" class="bubble" hidden></div>
+
   <script src="vendor/phaser-3.90.0.min.js"></script>
   <script type="module" src="src/main.js"></script>
 </body>
