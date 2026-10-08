@@ -13,6 +13,8 @@ class InspectionTest < ActiveSupport::TestCase
     Resource.ensure_defaults!
     Ops::Plan.reseed!(9)
     @fg = Product.create!(sku: "FG-BR", name: "브래킷", uom: "ea", kind: "fg")
+    # 적치 규칙: 완제품 창고 전체를 공용으로 연다(칸은 코드 순). 규칙 우선순위는 putaway_test 가 다룬다.
+    PutawayRule.create!(product: nil, location: Location.find_by!(code: "fg_store"), priority: 50)
     @machine = Machine.create!(code: "M1", name: "절단기", state: "running")
     @order = WorkOrder.create!(code: "WO-IN1", machine: @machine, item: @fg, product: "브래킷", target_qty: 100_000,
                                status: "active", started_at: M0)
@@ -260,6 +262,20 @@ class InspectionTest < ActiveSupport::TestCase
     putaways.where(status: "planned").update_all(status: "cancelled")
     assert_equal 0, plan[:putaway], "취소가 3번이면 더 계획하지 않는다"
     assert_equal 3, putaways.count
+  end
+
+  test "적치 규칙이 없으면 합격분은 칸을 못 받아 qc 에 남고 waiting 으로 센다" do
+    PutawayRule.delete_all
+    events(100, 0)
+    produce_to_qc(100, M0)
+    plan
+    tick
+
+    result = plan
+
+    assert_equal [0, 1], [result[:putaway], result[:waiting]]
+    assert_equal 0, putaways.count
+    assert_equal 100, qty_at("qc")
   end
 
   test "작업지시 코드와 맞지 않는 로트나 다른 위치의 재고는 검사하지 않는다" do

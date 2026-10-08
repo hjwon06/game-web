@@ -188,6 +188,21 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
     assert_equal [], Inventory::Reconcile.call
   end
 
+  test "Plan 이 만든 작업의 예약은 완료 때 consumed, 취소 때 released 이고 다른 작업의 예약은 그대로다" do
+    stock_receiving(100)
+    ok = plan_putaway(qty: 60)
+    short = plan_putaway(qty: 60) # 입고대에 40 만 남아 부족
+    still = plan_putaway(qty: 5, earliest_at: @t0 + 1.day)
+    assert_equal %w[active active active], Reservation.order(:task_id).pluck(:status)
+
+    r = drain(@t0 + 1.hour)
+
+    assert_equal [ok.id], r.done
+    assert_equal [short.id], r.cancelled
+    by_task = Reservation.pluck(:task_id, :status).to_h
+    assert_equal({ ok.id => "consumed", short.id => "released", still.id => "active" }, by_task)
+  end
+
   test "칸 용량을 넘겨서 완료가 실패해도 그 작업만 cancelled 이다" do
     cap = Location::BIN_CAPACITY
     stock_receiving(2 * cap)

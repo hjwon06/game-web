@@ -41,3 +41,7 @@ require "rake"
 Rails.application.load_tasks unless Rake::Task.task_defined?("inventory:seed")
 Rake::Task["inventory:seed"].reenable
 Rake::Task["inventory:seed"].invoke
+
+# 적치 규칙: 자재별 전용 랙 1개씩(강판 RAW-A-01, 볼트 RAW-A-02, 패킹 RAW-A-03), 공용 RAW-A-04 는 priority 90, 완제품은 FG 랙 4개 공용.
+# 자재 품목이 있어야 전용 규칙이 만들어지므로 재고 시드 뒤에 둔다. 이미 있는 규칙(바꿔 둔 priority 포함)은 건드리지 않는다.
+PutawayRule.ensure_defaults!

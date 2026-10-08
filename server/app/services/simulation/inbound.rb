@@ -21,8 +21,6 @@ module Simulation
       Location.where(level: "bin").where("locations.id IN (#{tree})").order(:code)
     end
 
-    Bin = Struct.new(:code, :capacity, :used, :products)
-
     def initialize(now:, logger:)
       @now = now.utc
       @logger = logger
@@ -108,9 +106,10 @@ module Simulation
     end
 
     # 이 자재 팔레트가 더 들어갈 수 있는 칸 용량(팔레트 수) - 이미 들어오는 중이라 칸을 차지할 팔레트(입고대 + 하차 계획분).
+    # 들어갈 수 있는 칸은 적치 규칙이 이 자재에 열어 둔 칸뿐이다(남의 전용 랙의 빈 칸은 세지 않는다).
     def free_pallets(product_id)
       cap = Config::PALLETS_PER_TRUCK.max
-      fit = load_bins.sum do |bin|
+      fit = Ops::Putaway.bins(product: Product.find(product_id)).sum do |bin|
         free = if bin.products.include?(product_id) then bin.capacity - bin.used
                elsif bin.products.empty? then bin.capacity
                else 0
@@ -160,19 +159,17 @@ module Simulation
       waiting = waiting_unloads
       return if waiting.empty?
 
-      bins = load_bins
       stuck = 0
       waiting.each do |unload|
-        bin = choose_bin(bins, unload)
+        # 칸은 적치 규칙(Ops::Putaway)이 고른다. 방금 계획한 적치도 DB 에 있어 다음 팔레트의 칸 계산에 들어간다.
+        bin = Ops::Putaway.choose(product: unload.product, qty: unload.qty)
         unless bin
           stuck += 1
           next
         end
 
         Ops::Plan.call(kind: "putaway", product: unload.product, lot: unload.lot, qty: unload.qty,
-                       from: "receiving", to: bin.code, ref: unload, earliest_at: unload.finished_at)
-        bin.used += unload.qty
-        bin.products << unload.product_id
+                       from: "receiving", to: bin, ref: unload, earliest_at: unload.finished_at)
         @counts[:putaway] += 1
       end
       @counts[:waiting] = stuck
@@ -193,24 +190,5 @@ module Simulation
       unloads.reject { |u| covered.include?(u.id) || cancels.fetch(u.id, 0) >= Config::MAX_PUTAWAY_CANCELS }
     end
 
-    # 칸마다 (현재고 + 이미 계획된 적치) 합과 들어 있는 품목. 이번 호출 동안은 메모리에서 갱신해 팔레트마다 다시 읽지 않는다.
-    def load_bins
-      rows = self.class.bins_under("raw_store").pluck(:id, :code, :capacity_units)
-      ids = rows.map(&:first)
-      on_hand = Quant.where(location_id: ids).where("qty > 0").group(:location_id, :product_id).sum(:qty)
-      planned = Task.where(kind: "putaway", status: %w[planned started], to_location_id: ids).group(:to_location_id, :product_id).sum(:qty)
-
-      qty_by = on_hand.merge(planned) { |_, a, b| a + b }.group_by { |(loc, _), _| loc }
-      rows.map do |id, code, capacity|
-        mine = qty_by.fetch(id, [])
-        Bin.new(code, capacity || Float::INFINITY, mine.sum { |_, qty| qty }, mine.map { |(_, product_id), _| product_id }.to_set)
-      end
-    end
-
-    # ① 같은 품목이 있고 남은 용량이 팔레트 이상인 칸 중 코드 순 첫 칸 ② 빈 칸 중 코드 순 첫 칸 ③ 없으면 nil.
-    def choose_bin(bins, unload)
-      bins.find { |b| b.products.include?(unload.product_id) && b.capacity - b.used >= unload.qty } ||
-        bins.find { |b| b.products.empty? && b.capacity >= unload.qty }
-    end
   end
 end

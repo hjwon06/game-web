@@ -1,5 +1,5 @@
 module Api
-  # 단지 화면용 한 방 응답. 3초 폴링 대상이라 쿼리 수가 고정이어야 한다(인증 제외 기본 12개, bins 포함 14개).
+  # 단지 화면용 한 방 응답. 3초 폴링 대상이라 쿼리 수가 고정이어야 한다(인증 제외 기본 12개, bins 포함 15개).
   # 작업(tasks)은 서버가 확정한 시작·예상 완료 시각을 내려주고 화면이 server_time 기준으로 보간한다.
   # production_events 는 건드리지 않는다. 집계는 quants.location_id / stock_moves.from_location_id 인덱스를 탄다.
   class CampusController < BaseController
@@ -103,7 +103,8 @@ module Api
       end
     end
 
-    # 쿼리 2개: 칸 위치 + 칸별 재고. level 은 같은 랙 안의 code 순서(1부터)다. 한 칸에 품목이 섞이면 수량이 가장 큰 품목을 product 로 쓴다.
+    # 쿼리 3개: 칸 위치 + 칸별 재고 + 칸별 active 예약 합(reserved: 다른 작업이 이미 가져가기로 한 수량).
+    # level 은 같은 랙 안의 code 순서(1부터)다. 한 칸에 품목이 섞이면 수량이 가장 큰 품목을 product 로 쓴다.
     def bins_payload(rows)
       code_of = rows.to_h { |id, code, _| [id, code] }
       parent_of = rows.to_h { |id, _, parent| [id, parent] }
@@ -111,6 +112,7 @@ module Api
       stock = Quant.joins(:product).where(location_id: bins.map(&:first)).where("quants.qty > 0")
                    .group(:location_id, "products.sku").sum(:qty)
       by_bin = stock.group_by { |(loc_id, _), _| loc_id }
+      reserved = Reservation.active.where(location_id: bins.map(&:first)).group(:location_id).sum(:qty)
       level_in_rack = Hash.new(0)
       out = { raw: [], fg: [] }
       bins.each do |id, code, rack_id, capacity|
@@ -118,7 +120,7 @@ module Api
         items = by_bin.fetch(id, [])
         top = items.max_by { |(_, sku), qty| [qty, sku] }
         out[zone.to_sym] << { code: code, rack: code_of[rack_id], level: (level_in_rack[rack_id] += 1), capacity: capacity,
-                              qty: num(items.sum { |_, qty| qty }), product: top&.first&.last }
+                              qty: num(items.sum { |_, qty| qty }), reserved: num(reserved[id]), product: top&.first&.last }
       end
       out
     end

@@ -12,6 +12,12 @@ class Task < ApplicationRecord
   belongs_to :from_location, class_name: "Location"
   belongs_to :to_location, class_name: "Location"
   belongs_to :stock_move, optional: true
+  # from 이 물리 위치인 작업만 갖는다(Ops::Plan 이 만든다). prune 은 DB 의 on_delete cascade 가 따라 지운다.
+  has_one :reservation, dependent: nil
+
+  # 예약은 작업 상태를 따라 닫힌다: done -> consumed, cancelled -> released. 상태를 저장하는 같은 트랜잭션 안이라
+  # Ops::Tick 이든 다른 경로든 작업만 끝나고 예약이 active 로 남아 재고를 영영 잡고 있는 일이 없다.
+  after_update :close_reservation, if: :saved_change_to_status?
 
   validates :kind, inclusion: { in: KINDS }
   validates :status, inclusion: { in: STATUSES }
@@ -25,5 +31,14 @@ class Task < ApplicationRecord
     deleted = 0
     scope.in_batches(of: 1000) { |batch| deleted += batch.delete_all }
     deleted
+  end
+
+  RESERVATION_CLOSE = { "done" => "consumed", "cancelled" => "released" }.freeze
+
+  private
+
+  def close_reservation
+    closed = RESERVATION_CLOSE[status] or return
+    Reservation.where(task_id: id, status: "active").update_all(status: closed, updated_at: Time.current)
   end
 end

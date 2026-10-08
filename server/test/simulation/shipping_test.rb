@@ -108,8 +108,8 @@ class ShippingTest < ActiveSupport::TestCase
 
     assert_equal [U - 400], picks.map { |t| t.qty.to_i }, "재고 #{U} 중 400 은 이미 잡혀 있다"
     assert_equal [line.id], picks.map(&:ref_id)
-    held = Ops::Plan.reserved.fetch([Location.find_by!(code: "FG-A-01-01").id, @fg.id, lot.id])
-    assert_equal U, held, "잡힌 합계가 재고를 넘지 않는다"
+    held = Reservation.held.fetch([Location.find_by!(code: "FG-A-01-01").id, @fg.id, lot.id])
+    assert_equal U, held, "잡힌 합계(active 예약)가 재고를 넘지 않는다"
 
     assert_equal 0, plan[:pick], "다시 불러도 같은 재고를 또 잡지 않는다"
   end
@@ -235,7 +235,7 @@ class ShippingTest < ActiveSupport::TestCase
     assert_equal 0, plan.values_at(:pick, :load).sum, "다 끝난 라인은 더 계획하지 않는다"
   end
 
-  test "pick 이 취소되면 그만큼 다시 계획한다" do
+  test "pick 이 취소되면 예약이 풀려 그만큼 다시 계획한다" do
     fg_stock(100)
     line_for("SO-T-1", 100)
     plan
@@ -243,6 +243,19 @@ class ShippingTest < ActiveSupport::TestCase
 
     assert_equal 1, plan[:pick]
     assert_equal %w[cancelled planned], picks.map(&:status)
+    assert_equal %w[released active], Reservation.order(:id).pluck(:status)
+  end
+
+  test "FIFO 칸의 가용이 필요량보다 적으면 가용이 충분한 다음 로트에서 잡는다" do
+    old_lot = fg_stock(100, bin: "FG-A-01-02", created_at: M0 - 7200)
+    new_lot = fg_stock(100, bin: "FG-A-01-01", created_at: M0 - 3600)
+    Ops::Plan.call(kind: "putaway", product: @fg, lot: old_lot, qty: 70, from: "FG-A-01-02", to: "FG-A-01-03", ref: nil, earliest_at: M0)
+    line_for("SO-T-1", 100)
+
+    plan
+
+    # 오래된 로트는 30 만 가용(70 은 예약됨). 100 이 필요하므로 가용 100 이상인 다음 로트가 먼저 선택된다.
+    assert_equal [[new_lot.id, 100]], picks.map { |t| [t.lot_id, t.qty.to_i] }
   end
 
   test "한 단계가 실패해도 다른 단계는 계속되고 실패는 로그에 남는다" do

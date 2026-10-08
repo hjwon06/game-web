@@ -324,6 +324,10 @@ class CampusControllerTest < ActionDispatch::IntegrationTest
 
     bin = Location.find_by!(code: "RAW-A-02-03")
     Quant.create!(product: @raw, location: bin, qty: 7)
+    held = make_task(kind: "feed", from: "RAW-A-02-03", to: "line_side", qty: 3)
+    Reservation.create!(task: held, product: @raw, location: bin, qty: 3)
+    done = make_task(kind: "feed", status: "done", from: "RAW-A-02-03", to: "line_side", qty: 2)
+    Reservation.create!(task: done, product: @raw, location: bin, qty: 2, status: "consumed") # 끝난 예약은 reserved 에 안 든다
 
     bins = tasks_of(include: "bins")["bins"]
     assert_equal %w[fg raw], bins.keys.sort
@@ -331,9 +335,21 @@ class CampusControllerTest < ActionDispatch::IntegrationTest
     assert_equal 24, bins["fg"].size
     row = bins["raw"].find { |b| b["code"] == "RAW-A-02-03" }
     assert_equal({ "code" => "RAW-A-02-03", "rack" => "RAW-A-02", "level" => 3, "capacity" => bin.capacity_units,
-                   "qty" => 7, "product" => "RAW-CMP" }, row)
+                   "qty" => 7, "reserved" => 3, "product" => "RAW-CMP" }, row)
     empty = bins["fg"].find { |b| b["code"] == "FG-A-01-01" }
-    assert_equal [1, 0, nil], empty.values_at("level", "qty", "product")
+    assert_equal [1, 0, 0, nil], empty.values_at("level", "qty", "reserved", "product")
+  end
+
+  test "bins 의 reserved 는 쿼리를 1개만 더한다(칸 수와 무관)" do
+    sign_in_as create_user
+    bin = Location.find_by!(code: "RAW-A-01-01")
+    Quant.create!(product: @raw, location: bin, qty: 7)
+    base = count_queries { get "/api/campus", params: { include: "bins" } }
+    20.times do |i|
+      task = make_task(kind: "feed", from: "RAW-A-01-01", to: "line_side", planned_at: Time.current + i.seconds)
+      Reservation.create!(task: task, product: @raw, location: bin, qty: 1)
+    end
+    assert_equal base, count_queries { get "/api/campus", params: { include: "bins" } }
   end
 
   test "ETag 는 server_time 에 흔들리지 않고 새 작업이 생기면 바뀐다" do

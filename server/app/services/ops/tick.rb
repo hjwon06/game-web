@@ -73,10 +73,12 @@ module Ops
         # 이동이 실패하면 savepoint 째로 되돌아가 원장·재고에 흔적이 없다.
         Task.transaction(requires_new: true) do
           move = complete(task)
+          # 예약은 Task 가 상태 저장과 같은 트랜잭션에서 닫는다(done -> consumed). 이동이 되돌아가면 예약도 active 로 남는다.
           task.update!(status: "done", finished_at: finished_at, stock_move: move)
         end
         @result.done << task.id
       rescue *TASK_FAILURES => e
+        # 작업 취소와 예약 해제(cancelled -> released)가 process_resource 의 같은 트랜잭션에서 커밋된다.
         task.update!(status: "cancelled", finished_at: finished_at, cancel_reason: "#{e.class.name.demodulize}: #{e.message}")
         @result.cancelled << task.id
       end

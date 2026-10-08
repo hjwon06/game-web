@@ -1,6 +1,8 @@
 module Ops
   # 작업 하나를 계획한다: 종류에 맞는 자원 중 가장 일찍 비는 자원에 붙이고 시작·예상 완료 시각을 정한다.
   # 재고는 여기서 움직이지 않는다. 움직임은 Ops::Tick 이 완료 순간 stock_move 1건으로 만든다.
+  # from 이 물리 위치면 그 칸의 재고를 예약(Reservation, active)으로 잡는다. 꺼낼 칸을 고르는 쪽(Ops::Removal)이 가용에서 뺀다.
+  # 예약은 작업이 done 이 되면 consumed, cancelled 가 되면 released 로 Task 가 닫는다.
   class Plan
     class NoResource < StandardError; end
 
@@ -18,15 +20,6 @@ module Ops
       def reseed!(seed = DEFAULT_SEED) = (@rng = Random.new(seed))
 
       def call(**args) = new(**args).call
-
-      # { [위치 id, 품목 id, 로트 id] => 미완료(planned/started) 작업이 그 위치에서 가져가기로 한 수량 }.
-      # 계획하는 쪽이 가용 재고 = 현재고 - 이 값 으로 보면, 같은 재고를 두 작업이 잡아 완료 때 부족으로 취소되는 일이 없다.
-      # 종류를 가리지 않는다(feed·pick·putaway·inspect 모두 from 위치의 재고를 쓴다). 예약 테이블 없이 tasks 에서 바로 합한다.
-      def reserved(location_ids = nil)
-        scope = Task.where(status: %w[planned started]).where.not(from_location_id: nil)
-        scope = scope.where(from_location_id: location_ids) if location_ids
-        scope.group(:from_location_id, :product_id, :lot_id).sum(:qty)
-      end
     end
 
     def initialize(kind:, product:, lot:, qty:, from:, to:, ref:, earliest_at:)
@@ -53,16 +46,26 @@ module Ops
         resource = resources.min_by { |r| [free.fetch(r.id), r.id] }
         planned_at = [@earliest_at, free.fetch(resource.id)].max
 
-        Task.create!(
+        task = Task.create!(
           kind: @kind, status: "planned", resource: resource, product: @product, lot: @lot, qty: @qty,
           from_location: @from, to_location: @to, planned_at: planned_at,
           expected_finish_at: planned_at + duration_seconds,
           ref_type: @ref&.class&.name, ref_id: @ref&.id
         )
+        reserve(task)
+        task
       end
     end
 
     private
+
+    # from 이 물리 위치면 그 칸의 재고(품목·로트·위치)를 작업 몫으로 잡는다. 작업과 같은 트랜잭션이라 둘 중 하나만 남는 일이 없다.
+    # 가상 위치(supplier 등)는 재고를 세지 않으므로 잡지 않는다.
+    def reserve(task)
+      return unless @from.physical?
+
+      Reservation.create!(task: task, product: @product, lot: @lot, location: @from, qty: @qty, status: "active")
+    end
 
     def resolve_location(loc)
       loc.is_a?(Location) ? loc : Location.find_by!(code: loc.to_s)

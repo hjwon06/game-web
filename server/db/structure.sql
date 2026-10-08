@@ -428,6 +428,41 @@ ALTER SEQUENCE public.products_id_seq OWNED BY public.products.id;
 
 
 --
+-- Name: putaway_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.putaway_rules (
+    id bigint NOT NULL,
+    product_id bigint,
+    location_id bigint NOT NULL,
+    priority integer DEFAULT 50 NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT putaway_rules_priority_check CHECK (((priority >= 1) AND (priority <= 100)))
+);
+
+
+--
+-- Name: putaway_rules_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.putaway_rules_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: putaway_rules_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.putaway_rules_id_seq OWNED BY public.putaway_rules.id;
+
+
+--
 -- Name: quants; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -459,6 +494,44 @@ CREATE SEQUENCE public.quants_id_seq
 --
 
 ALTER SEQUENCE public.quants_id_seq OWNED BY public.quants.id;
+
+
+--
+-- Name: reservations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reservations (
+    id bigint NOT NULL,
+    task_id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    lot_id bigint,
+    location_id bigint NOT NULL,
+    qty numeric(14,3) NOT NULL,
+    status character varying DEFAULT 'active'::character varying NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT reservations_qty_check CHECK ((qty > (0)::numeric)),
+    CONSTRAINT reservations_status_check CHECK (((status)::text = ANY (ARRAY[('active'::character varying)::text, ('consumed'::character varying)::text, ('released'::character varying)::text])))
+);
+
+
+--
+-- Name: reservations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.reservations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: reservations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.reservations_id_seq OWNED BY public.reservations.id;
 
 
 --
@@ -859,10 +932,24 @@ ALTER TABLE ONLY public.products ALTER COLUMN id SET DEFAULT nextval('public.pro
 
 
 --
+-- Name: putaway_rules id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.putaway_rules ALTER COLUMN id SET DEFAULT nextval('public.putaway_rules_id_seq'::regclass);
+
+
+--
 -- Name: quants id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.quants ALTER COLUMN id SET DEFAULT nextval('public.quants_id_seq'::regclass);
+
+
+--
+-- Name: reservations id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservations ALTER COLUMN id SET DEFAULT nextval('public.reservations_id_seq'::regclass);
 
 
 --
@@ -1010,11 +1097,27 @@ ALTER TABLE ONLY public.products
 
 
 --
+-- Name: putaway_rules putaway_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.putaway_rules
+    ADD CONSTRAINT putaway_rules_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: quants quants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.quants
     ADD CONSTRAINT quants_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: reservations reservations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservations
+    ADD CONSTRAINT reservations_pkey PRIMARY KEY (id);
 
 
 --
@@ -1202,6 +1305,13 @@ CREATE UNIQUE INDEX index_products_on_sku ON public.products USING btree (sku);
 
 
 --
+-- Name: index_putaway_rules_unique_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_putaway_rules_unique_scope ON public.putaway_rules USING btree (COALESCE(product_id, (0)::bigint), location_id);
+
+
+--
 -- Name: index_quants_on_location_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1220,6 +1330,20 @@ CREATE INDEX index_quants_on_lot_id ON public.quants USING btree (lot_id);
 --
 
 CREATE UNIQUE INDEX index_quants_unique_slot ON public.quants USING btree (product_id, COALESCE(lot_id, (0)::bigint), location_id);
+
+
+--
+-- Name: index_reservations_active_on_location_and_product; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_reservations_active_on_location_and_product ON public.reservations USING btree (location_id, product_id) WHERE ((status)::text = 'active'::text);
+
+
+--
+-- Name: index_reservations_on_task_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_reservations_on_task_id ON public.reservations USING btree (task_id);
 
 
 --
@@ -1620,6 +1744,54 @@ ALTER TABLE ONLY public.sales_order_lines
 
 
 --
+-- Name: putaway_rules fk_putaway_rules_location; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.putaway_rules
+    ADD CONSTRAINT fk_putaway_rules_location FOREIGN KEY (location_id) REFERENCES public.locations(id);
+
+
+--
+-- Name: putaway_rules fk_putaway_rules_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.putaway_rules
+    ADD CONSTRAINT fk_putaway_rules_product FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+
+--
+-- Name: reservations fk_reservations_location; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservations
+    ADD CONSTRAINT fk_reservations_location FOREIGN KEY (location_id) REFERENCES public.locations(id);
+
+
+--
+-- Name: reservations fk_reservations_lot; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservations
+    ADD CONSTRAINT fk_reservations_lot FOREIGN KEY (lot_id) REFERENCES public.lots(id);
+
+
+--
+-- Name: reservations fk_reservations_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservations
+    ADD CONSTRAINT fk_reservations_product FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+
+--
+-- Name: reservations fk_reservations_task; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservations
+    ADD CONSTRAINT fk_reservations_task FOREIGN KEY (task_id) REFERENCES public.tasks(id) ON DELETE CASCADE;
+
+
+--
 -- Name: resources fk_resources_home_location; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1684,6 +1856,8 @@ SET search_path TO "$user", public;
 INSERT INTO "schema_migrations" (version) VALUES
 ('20261009000002'),
 ('20261009000001'),
+('20261008140002'),
+('20261008140001'),
 ('20261008130004'),
 ('20261008130003'),
 ('20261008130002'),

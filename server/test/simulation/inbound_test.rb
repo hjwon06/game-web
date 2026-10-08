@@ -12,6 +12,8 @@ class InboundTest < ActiveSupport::TestCase
     @steel = Product.create!(sku: "RAW-S", name: "강판", uom: "ea", kind: "raw")
     @bolt = Product.create!(sku: "RAW-B", name: "볼트", uom: "ea", kind: "raw")
     @fg = Product.create!(sku: "FG-BR", name: "브래킷", uom: "ea", kind: "fg")
+    # 적치 규칙: 기본은 자재창고 전체를 공용으로 연다(칸은 코드 순). 전용 랙·공용 랙 규칙은 rules! 로 바꿔서 확인한다.
+    PutawayRule.create!(product: nil, location: Location.find_by!(code: "raw_store"), priority: 100)
     BomLine.create!(product: @fg, component: @steel, qty_per: 2) # M1 양품 0.784/s → 30분 강판 2822.4, 볼트 1411.2
     BomLine.create!(product: @fg, component: @bolt, qty_per: 1)
     @machine = Machine.create!(code: "M1", name: "절단기", state: "running")
@@ -138,6 +140,72 @@ class InboundTest < ActiveSupport::TestCase
     assert_equal 4, result[:putaway]
     # 03: 팔레트 2개가 들어가 가득 → 빈 칸 04 → 04 에 강판이 생겼으니 ① 로 04
     assert_equal %w[RAW-A-01-03 RAW-A-01-03 RAW-A-01-04 RAW-A-01-04], putaways.map { |p| p.to_location.code }
+  end
+
+  # 규칙을 [품목 또는 nil, 위치 code, priority] 목록으로 통째로 바꾼다.
+  def rules!(*rows)
+    PutawayRule.delete_all
+    rows.each { |product, code, priority| PutawayRule.create!(product: product, location: Location.find_by!(code: code), priority: priority) }
+  end
+
+  test "전용 랙: 자재마다 자기 랙에 쌓이고, 전용 랙이 아닌 빈 칸은 쓰지 않는다" do
+    rules!([@steel, "RAW-A-01", 10], [@bolt, "RAW-A-02", 10])
+    done_unload(@steel, NOW - 40)
+    done_unload(@bolt, NOW - 30)
+    done_unload(@steel, NOW - 20)
+
+    result = inbound(NOW)
+
+    assert_equal 3, result[:putaway]
+    assert_equal %w[RAW-A-01-01 RAW-A-02-01 RAW-A-01-01],
+                 putaways.map { |p| p.to_location.code }, "강판은 01 랙, 볼트는 02 랙(같은 품목 칸에 남은 용량이 있으면 거기)"
+  end
+
+  test "전용 랙이 꽉 차면 공용 랙(priority 90)으로 넘어간다" do
+    rules!([@steel, "RAW-A-01", 10], [nil, "RAW-A-04", 90])
+    Location.where(code: Simulation::Inbound.bins_under("raw_store").pluck(:code)).update_all(capacity_units: P) # 칸마다 팔레트 1개
+    Location.where("code LIKE 'RAW-A-01-%'").pluck(:code).each { |code| seed_bin(@steel, code, P) } # 전용 랙 6칸 가득
+    done_unload(@steel, NOW - 10)
+
+    inbound(NOW)
+
+    assert_equal ["RAW-A-04-01"], putaways.map { |p| p.to_location.code }
+  end
+
+  test "priority 가 작은 규칙이 먼저고, 같으면 품목 전용이 전 품목 규칙보다 먼저다" do
+    rules!([nil, "RAW-A-03", 20], [@steel, "RAW-A-02", 20], [nil, "RAW-A-01", 5])
+    done_unload(@steel, NOW - 10)
+    inbound(NOW)
+    assert_equal ["RAW-A-01-01"], putaways.map { |p| p.to_location.code }, "priority 5 가 먼저"
+
+    rules!([nil, "RAW-A-03", 20], [@steel, "RAW-A-02", 20])
+    Task.delete_all
+    done_unload(@steel, NOW - 10)
+    inbound(NOW + 10)
+    assert_equal ["RAW-A-02-01"], putaways.map { |p| p.to_location.code }, "priority 가 같으면 전용 규칙이 먼저"
+  end
+
+  test "비활성 규칙과 다른 품목 전용 규칙은 무시한다. 규칙이 없으면 적치하지 않는다" do
+    rules!([@bolt, "RAW-A-02", 10], [@steel, "RAW-A-01", 10])
+    PutawayRule.where(product: @steel).update_all(active: false)
+    done_unload(@steel, NOW - 10)
+
+    result = inbound(NOW)
+
+    assert_equal [0, 1], [result[:putaway], result[:waiting]]
+    assert_match(/적치할 칸이 없어 receiving 에 1팔레트 대기/, @log.string)
+  end
+
+  test "트럭 팔레트 수는 규칙이 열어 준 칸만 센다: 남의 전용 랙의 빈 칸은 자리가 아니다" do
+    rules!([@steel, "RAW-A-01", 10], [@bolt, "RAW-A-02", 10])
+    Location.where("code LIKE 'RAW-A-01-%'").update_all(capacity_units: P)
+    %w[RAW-A-01-01 RAW-A-01-02 RAW-A-01-03 RAW-A-01-04].each { |code| seed_bin(@bolt, code, P) } # 강판 랙 6칸 중 4칸을 볼트가 점유
+    due!(NOW)
+
+    result = inbound(NOW)
+
+    assert_equal ["R-202610081207-RAW-S"], truck_lots.pluck(:lot_no)
+    assert_equal 2, result[:unload], "6팔레트를 원했지만 강판 랙의 빈 칸은 2개(다른 랙의 빈 칸은 못 쓴다)"
   end
 
   test "칸 고르기: 이미 계획된 적치도 칸 용량과 품목으로 센다(다른 품목은 그 칸을 못 쓴다)" do

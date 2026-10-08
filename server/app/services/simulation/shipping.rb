@@ -77,18 +77,16 @@ module Simulation
 
     # 납기 빠른 순 라인마다, 주문량 - (pick 했거나 출하한 양) 이 남았고 열린 pick 이 없으면 fg 재고에서 FIFO 로 PICK_QTY 단위 pick 을 계획한다.
     def plan_picks
-      stock = fg_stock
-      return if stock.empty?
+      product_ids = stocked_product_ids
+      return if product_ids.empty?
 
-      lines = candidate_lines(stock.map(&:product_id).uniq).to_a
+      lines = candidate_lines(product_ids).to_a
       return if lines.empty?
 
       line_ids = lines.map(&:id)
       picking = line_tasks("pick", line_ids, OPEN).distinct.pluck(:ref_id).to_set
       picked = line_tasks("pick", line_ids, LIVE).group(:ref_id).sum(:qty)
       shipped = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id).sum(:qty)
-      # pick 만이 아니라 같은 칸에서 가져가려는 모든 미완료 작업(합격 적치 등)이 잡은 수량을 뺀다.
-      reserved = Ops::Plan.reserved(stock.map(&:location_id).uniq)
 
       lines.each do |line|
         next if picking.include?(line.id)
@@ -97,25 +95,25 @@ module Simulation
         Config::PICKS_PER_LINE.times do
           break unless remaining.positive?
 
-          quant = stock.find { |q| q.product_id == line.product_id && q.qty - reserved.fetch([q.location_id, q.product_id, q.lot_id], 0) > 0 }
-          break unless quant
+          # 꺼낼 칸은 Ops::Removal 이 고른다: FIFO 이면서 가용(현재고 - 다른 작업의 active 예약)이 있는 (칸, 로트).
+          # 합격 적치처럼 같은 칸에서 가져가려는 다른 작업이 잡은 수량도 예약에 들어 있다.
+          want = [Config::PICK_QTY, remaining].min
+          source = Ops::Removal.choose(product: line.product, qty: want, from_scope: "fg_store", partial: true, require_lot: true)
+          break unless source
 
-          key = [quant.location_id, quant.product_id, quant.lot_id]
-          qty = [Config::PICK_QTY, remaining, quant.qty - reserved.fetch(key, 0)].min
-          Ops::Plan.call(kind: "pick", product: line.product, lot: quant.lot, qty: qty, from: quant.location, to: "shipping",
+          qty = [want, source.available].min
+          Ops::Plan.call(kind: "pick", product: line.product, lot: source.lot, qty: qty, from: source.location, to: "shipping",
                          ref: line, earliest_at: @now)
-          reserved[key] = reserved.fetch(key, 0) + qty
           remaining -= qty
           @counts[:pick] += 1
         end
       end
     end
 
-    # fg 칸(+ 칸이 생기기 전 재고가 있을 수 있는 fg_store 자체)의 로트 있는 재고를 FIFO 순으로: 로트가 오래된 순, 같으면 칸 코드 순.
-    def fg_stock
+    # fg 칸(+ 칸이 생기기 전 재고가 있을 수 있는 fg_store 자체)에 로트 있는 재고가 있는 품목 id.
+    def stocked_product_ids
       place_ids = Inbound.bins_under("fg_store").pluck(:id) + Location.where(code: "fg_store").pluck(:id)
-      Quant.where(location_id: place_ids).where.not(lot_id: nil).where("qty > 0").includes(:lot, :location).to_a
-           .sort_by { |q| [q.lot.created_at, q.location.code, q.lot_id] }
+      Quant.where(location_id: place_ids).where.not(lot_id: nil).where("qty > 0").distinct.pluck(:product_id)
     end
 
     def candidate_lines(product_ids)

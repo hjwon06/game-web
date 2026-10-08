@@ -30,8 +30,6 @@ module Simulation
                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
     SQL
 
-    Bin = Struct.new(:code, :capacity, :used, :products)
-
     def initialize(now:, logger:)
       @now = now.utc
       @logger = logger
@@ -144,22 +142,20 @@ module Simulation
       waiting = waiting_inspections
       return if waiting.empty?
 
-      bins = load_bins
       stuck = 0
       waiting.each do |task|
         pass_qty = task.qty - (task.stock_move&.qty || 0)
         next unless pass_qty.positive?
 
-        bin = choose_bin(bins, task.product_id, pass_qty)
+        # 칸은 적치 규칙(Ops::Putaway)이 고른다. 방금 계획한 적치도 DB 에 있어 다음 건의 칸 계산에 들어간다.
+        bin = Ops::Putaway.choose(product: task.product, qty: pass_qty)
         unless bin
           stuck += 1
           next
         end
 
-        Ops::Plan.call(kind: "putaway", product: task.product, lot: task.lot, qty: pass_qty, from: "qc", to: bin.code,
+        Ops::Plan.call(kind: "putaway", product: task.product, lot: task.lot, qty: pass_qty, from: "qc", to: bin,
                        ref: task, earliest_at: task.finished_at)
-        bin.used += pass_qty
-        bin.products << task.product_id
         @counts[:putaway] += 1
       end
       @counts[:waiting] = stuck
@@ -180,24 +176,5 @@ module Simulation
       done.reject { |t| covered.include?(t.id) || cancels.fetch(t.id, 0) >= Config::MAX_PUTAWAY_CANCELS }
     end
 
-    # 칸마다 (현재고 + 이미 계획된 적치) 합과 들어 있는 품목. Inbound 의 완제품 창고 판이다.
-    def load_bins
-      rows = Inbound.bins_under("fg_store").pluck(:id, :code, :capacity_units)
-      ids = rows.map(&:first)
-      on_hand = Quant.where(location_id: ids).where("qty > 0").group(:location_id, :product_id).sum(:qty)
-      planned = Task.where(kind: "putaway", status: %w[planned started], to_location_id: ids).group(:to_location_id, :product_id).sum(:qty)
-
-      qty_by = on_hand.merge(planned) { |_, a, b| a + b }.group_by { |(loc, _), _| loc }
-      rows.map do |id, code, capacity|
-        mine = qty_by.fetch(id, [])
-        Bin.new(code, capacity || Float::INFINITY, mine.sum { |_, qty| qty }, mine.map { |(_, product_id), _| product_id }.to_set)
-      end
-    end
-
-    # ① 같은 품목이 있고 남은 용량이 수량 이상인 칸 중 코드 순 첫 칸 ② 빈 칸 중 코드 순 첫 칸 ③ 없으면 nil.
-    def choose_bin(bins, product_id, qty)
-      bins.find { |b| b.products.include?(product_id) && b.capacity - b.used >= qty } ||
-        bins.find { |b| b.products.empty? && b.capacity >= qty }
-    end
   end
 end

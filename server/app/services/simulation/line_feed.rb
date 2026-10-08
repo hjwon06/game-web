@@ -58,11 +58,12 @@ module Simulation
 
     def plan_feeds(line_side, shortfall)
       products = Product.where(id: shortfall.keys).index_by(&:id)
-      place_ids = Inbound.bins_under("raw_store").pluck(:id) + Location.where(code: "raw_store").pluck(:id)
-      reserved = Ops::Plan.reserved(place_ids)
       shortfall.each_key do |product_id|
-        source, available = oldest_source(product_id, place_ids, reserved)
-        qty = source && [Config::PALLET_QTY, available, @room].min
+        # 꺼낼 칸은 Ops::Removal 이 고른다: raw 칸(+ raw_store 자체) 중 FIFO 로 가용(현재고 - active 예약)이 있는 (칸, 로트).
+        # 팔레트 1개만큼 있는 칸이 먼저고, 없으면 가용이 있는 가장 오래된 칸에서 남은 만큼이다.
+        want = [Config::PALLET_QTY, @room].min
+        source = want.positive? && Ops::Removal.choose(product: products.fetch(product_id), qty: want, from_scope: "raw_store", partial: true)
+        qty = source && [want, source.available].min
         unless qty&.positive?
           @counts[:waiting] += 1
           next
@@ -70,21 +71,9 @@ module Simulation
 
         Ops::Plan.call(kind: "feed", product: products.fetch(product_id), lot: source.lot, qty: qty,
                        from: source.location, to: line_side, ref: nil, earliest_at: @now)
-        key = [source.location_id, source.product_id, source.lot_id]
-        reserved[key] = reserved.fetch(key, 0) + qty
         @room -= qty
         @counts[:feed] += 1
       end
-    end
-
-    # 자재가 있는 raw 칸(+ 칸이 생기기 전 재고가 있을 수 있는 raw_store 자체) 중 로트가 가장 오래된 (칸, 로트)와 그 가용 수량.
-    # 가용 = 현재고 - 다른 미완료 작업이 이미 잡은 수량(reserved). 가용이 없는 칸은 건너뛴다.
-    # 로트 없는 재고가 가장 오래된 것이고, 로트 시각이 같으면 칸 코드 순이다.
-    def oldest_source(product_id, place_ids, reserved)
-      rows = Quant.where(product_id: product_id, location_id: place_ids).where("qty > 0").includes(:lot, :location).to_a
-                  .map { |q| [q, q.qty - reserved.fetch([q.location_id, q.product_id, q.lot_id], 0)] }
-                  .select { |_, available| available.positive? }
-      rows.min_by { |q, _| [q.lot&.created_at || Time.at(0), q.location.code, q.lot_id || 0] }
     end
 
     # 자재별 초당 예상 소비량(running 기계의 active 작업지시 기준). Inbound 와 같은 식이다.
