@@ -185,35 +185,45 @@ module Campus
 
     # --- O5 shipment ----------------------------------------------------------------------------
 
-    # 쿼리 4: 대상 수주, 그 수주 라인(id·주문량), pick·ship 이동(원장), 시작한 load 작업. 수주를 못 찾으면 쿼리 1개만 쓰고 nil.
+    # 쿼리 4: 대상 수주, 그 수주 라인(id·주문량·할당 시작 시각 서브쿼리), pick·ship 이동(원장), 시작한 load 작업. 수주를 못 찾으면 쿼리 1개만 쓰고 nil.
     # 단계는 회차가 아니라 주문 수량 누적으로 정의한다(피킹분은 출하대에 쌓였다가 다른 회차에 실리므로 회차로 자르면 단계가 비는 응답이 나온다).
-    # picked = 첫 pick 이동 / staged = pick 이동 누적 >= 주문량 / loaded = 시작한 load 작업(started·done)의 시작 수량 누적 >= 주문량 /
-    # shipped = ship 이동 누적 >= 주문량. 도달 전이면 at=nil 이다. progress{done,total} 은 단계별 누적 수량 / 주문량이다. 주문량이 0 이하면 누적 단계는 도달할 수 없다.
-    # pick·ship 은 원장(stock_moves)에서 센다. ref 가 수주 라인이 아닌 옛 pick 이동(ref = Task)은 수주를 알 수 없어 센 적 없다 — 소급하지 않는다.
-    # 상차는 라인별 피킹분 안에서만 계획되므로(Simulation::Shipping#plan_loads) shipped <= loaded <= staged 누적 <= 주문량이 유지된다.
+    # 할당 시작 시각(Simulation::Shipping.allocation_started_at) 이전에는 ref = Task 인 pick 이동이라 수주별 피킹량이 없고 ship 만 수주에 붙어 있다.
+    # 그래서 시작 이전 ship 은 shipped_before 로 따로 빼 total = 주문량 - shipped_before(0 미만이면 0) 로 줄이고, 단계는 시작 이후 기록만 센다.
+    # picked = 첫 pick 이동 / staged = pick 이동 누적 >= total / loaded = 시작 시각 이후 시작한 load 작업(started·done)의 시작 수량 누적 >= total /
+    # shipped = 시작 이후 ship 이동 누적 >= total. 도달 전이면 at=nil 이다. progress{done,total} 은 단계별 누적 수량 / total 이다. total 이 0 이하면 누적 단계는 도달할 수 없다.
+    # 응답의 cutover{at, shipped_before} 는 shipped_before 가 0 이면 키를 넣지 않는다(새 수주는 옛 응답 모양 그대로).
+    # 주의: ⑥c 배포 순간 이미 계획돼 있던 load 는 시작 시각 이전에 started 라 loaded 에서 빠지고 그 ship 은 이후라 shipped 에 들어갈 수 있다(예외, dev 실측 0건).
     def shipment
       id, so_no, customer, created_at, _status = target_order
       return nil unless id
 
-      lines = SalesOrderLine.where(sales_order_id: id).pluck(:id, :ordered_qty)
+      lines = SalesOrderLine.where(sales_order_id: id).pluck(:id, :ordered_qty, Arel.sql(Simulation::Shipping.allocation_started_sql))
       line_ids = lines.map(&:first)
-      ordered = lines.sum { |_, qty| qty }
+      ordered = lines.sum { |_, qty, _| qty }
+      cutover_at = lines.first&.last
+      cutover_at = Time.zone.parse(cutover_at) if cutover_at.is_a?(String)
       moves = StockMove.where(move_type: %w[pick ship], ref_type: "SalesOrderLine", ref_id: line_ids).pluck(:move_type, :occurred_at, :qty)
       picks = moves.filter_map { |type, at, qty| [at, qty] if type == "pick" }
-      ships = moves.filter_map { |type, at, qty| [at, qty] if type == "ship" }
+      all_ships = moves.filter_map { |type, at, qty| [at, qty] if type == "ship" }
+      before, ships = cutover_at ? all_ships.partition { |at, _| at < cutover_at } : [[], all_ships]
+      shipped_before = before.sum { |_, qty| qty }
+      total = [ordered - shipped_before, 0].max
       loads = Task.where(kind: "load", status: %w[started done], ref_type: "SalesOrderLine", ref_id: line_ids)
-                  .where.not(started_at: nil).pluck(:started_at, :qty)
+      loads = loads.where(started_at: cutover_at..) if cutover_at
+      loads = loads.where.not(started_at: nil).pluck(:started_at, :qty)
 
       stages = [{ key: "received", at: iso(created_at) }]
       floor = created_at
-      [[:picked, picks.map(&:first).min, picks], [:staged, reached_at(picks, ordered), picks],
-       [:loaded, reached_at(loads, ordered), loads], [:shipped, reached_at(ships, ordered), ships]].each do |key, at, events|
+      [[:picked, picks.map(&:first).min, picks], [:staged, reached_at(picks, total), picks],
+       [:loaded, reached_at(loads, total), loads], [:shipped, reached_at(ships, total), ships]].each do |key, at, events|
         # 단계 시각은 단조 증가해야 한다: 앞 단계보다 이르게 찍힌 기록(상차가 마지막 pick 보다 먼저 끝난 경우 등)은 앞 단계 시각으로 올린다.
         at = [at, floor].max if at
         floor = at if at
-        stages << { key: key.to_s, at: iso(at), progress: { done: num(events.sum { |_, qty| qty }), total: num(ordered) } }
+        stages << { key: key.to_s, at: iso(at), progress: { done: num(events.sum { |_, qty| qty }), total: num(total) } }
       end
-      { so_no: so_no, customer: customer, stages: stages }
+      result = { so_no: so_no, customer: customer, stages: stages }
+      result[:cutover] = { at: iso(cutover_at), shipped_before: num(shipped_before) } if shipped_before.positive?
+      result
     end
 
     # 시각순 이벤트 수량을 누적해 target 이상이 되는 첫 시각. 도달 못 하거나 target 이 0 이하면 nil.

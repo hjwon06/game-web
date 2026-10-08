@@ -16,6 +16,15 @@ module Simulation
     # 상차 취소가 MAX 에 닿아 포기 로그를 이미 남긴 [라인 id, 로트 id]. 프로세스 메모리(재시작하면 1줄 더 남는다).
     def self.gave_up = (@gave_up ||= Set.new)
 
+    # 할당 시작 시각: 수주 라인에 붙은(ref_type = SalesOrderLine) pick 이동 중 가장 이른 occurred_at. 없으면 nil(전부 센다).
+    # ⑥c 이전 pick 이동은 ref = Task 라 수주별 피킹량을 모르고 ship 이동만 처음부터 수주 라인에 붙어 있다 — 그래서 이 시각 이전의 ship 은
+    # 수주별 할당 계산(상차 가능량·출하 단계바)에서 뺀다. 같은 정의를 Campus::OpsCards 가 부른다(allocation_started_sql 은 같은 범위의 서브쿼리).
+    def self.allocation_started_scope = StockMove.where(move_type: "pick", ref_type: "SalesOrderLine")
+
+    def self.allocation_started_at = allocation_started_scope.minimum(:occurred_at)
+
+    def self.allocation_started_sql = "(#{allocation_started_scope.select('MIN(occurred_at)').to_sql})"
+
     def initialize(now:, logger:)
       @now = now.utc
       @logger = logger
@@ -76,7 +85,12 @@ module Simulation
       # 라인·로트별 상차 가능량의 원장 쪽 재료. 출하대 재고는 수주 구분이 없어서(다른 수주가 피킹한 것도 섞여 있다) 이 라인이 피킹한 만큼만 싣는다.
       # 주의: ref 가 SalesOrderLine 이 아닌 옛 pick 이동(ref = Task)은 어느 수주 몫인지 알 수 없어 여기서 세지 않는다 — 소급하지 않는 의도된 제외다.
       picked_by_lot = StockMove.where(move_type: "pick", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id, :lot_id).sum(:qty)
-      shipped_by_lot = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id, :lot_id).sum(:qty)
+      # 출하 차감은 할당 시작 이후 ship 만 센다: 그 이전 출하는 대응하는 pick 이 위 합(picked_by_lot)에 없어서 빼면 가능량이 영영 음수다.
+      # 라인 잔량(remaining)의 출하는 위 shipped 그대로(전체) — 주문량은 과거 출하까지 포함해 채워야 한다.
+      started_at = self.class.allocation_started_at
+      after_start = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line_ids)
+      after_start = after_start.where(occurred_at: started_at..) if started_at
+      shipped_by_lot = after_start.group(:ref_id, :lot_id).sum(:qty)
       open_by_line_lot = line_tasks("load", line_ids, OPEN).group(:ref_id, :lot_id).sum(:qty)
 
       lines.each do |line|

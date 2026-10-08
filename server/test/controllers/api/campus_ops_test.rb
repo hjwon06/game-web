@@ -312,6 +312,74 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
     assert_equal order.so_no, ops(so: "SO-OPS-ZERO")["shipment"]["so_no"]
   end
 
+  # ⑥c 이전 기록의 실제 모양: pick 이동은 ref 없음(운영에선 ref = Task), ship 이동만 수주 라인에 붙는다.
+  def old_ship!(line, qty, at, bin: "FG-A-01-01")
+    quant = Quant.find_or_initialize_by(product: @fg, lot: @lot, location: loc(bin))
+    quant.qty = (quant.qty || 0) + qty
+    quant.save!
+    mv("pick", bin, "shipping", qty, at, product: @fg, lot: @lot, ref: nil)
+    mv("ship", "shipping", "customer", qty, at + 1.minute, product: @fg, lot: @lot, ref: line)
+  end
+
+  def progress_of(shipment) = shipment["stages"].drop(1).to_h { |s| [s["key"], s["progress"]["done"]] }
+
+  test "6e: 옛 수주(할당 시작 이전 출하 + ref 없는 pick)는 total 이 줄고 cutover 가 붙으며 shipped <= loaded <= staged <= total" do
+    order, line = so!("SO-OPS-OLD", qty: 4 * P)
+    t0 = @t - 5.hours
+    start = @t - 2.hours
+    old_ship!(line, 2 * P, t0)
+    task!(kind: "load", status: "done", resource: "DOCK-OUT-01", from: "shipping", to: "customer", product: @fg, lot: @lot, ref: line, qty: 2 * P, started: t0 - 1.minute)
+    order.update!(status: "partial")
+    # 시작 이후: 새로 2P 를 피킹·상차하고 P 만 출하
+    pick!(line, P, start)
+    pick!(line, P, start + 1.minute, bin: "FG-A-01-02")
+    task!(kind: "load", status: "started", resource: "DOCK-OUT-01", from: "shipping", to: "customer", product: @fg, lot: @lot, ref: line, qty: 2 * P, started: start + 2.minutes)
+    mv("ship", "shipping", "customer", P, start + 3.minutes, product: @fg, lot: @lot, ref: line)
+
+    shipment = ops(so: "SO-OPS-OLD")["shipment"]
+    assert_equal({ "at" => iso(start), "shipped_before" => 2 * P }, shipment["cutover"])
+    assert_equal [2 * P] * 4, shipment["stages"].drop(1).map { |s| s["progress"]["total"] }, "total = 주문 4P - 시작 이전 출하 2P"
+    done = progress_of(shipment)
+    assert_equal({ "picked" => 2 * P, "staged" => 2 * P, "loaded" => 2 * P, "shipped" => P }, done, "이전 상차(2P)·이전 출하는 센 적 없다")
+    assert_operator done["shipped"], :<=, done["loaded"]
+    assert_operator done["loaded"], :<=, done["staged"]
+    assert_operator done["staged"], :<=, shipment["stages"].last["progress"]["total"]
+    stages = shipment["stages"].index_by { |s| s["key"] }
+    assert_equal [iso(start), iso(start + 1.minute), iso(start + 2.minutes), nil], %w[picked staged loaded shipped].map { |k| stages[k]["at"] }
+
+    mv("ship", "shipping", "customer", P, start + 4.minutes, product: @fg, lot: @lot, ref: line)
+    assert_equal iso(start + 4.minutes), ops(so: "SO-OPS-OLD")["shipment"]["stages"].last["at"], "시작 이후 출하 누적이 total 에 닿은 시각"
+  end
+
+  test "6e: 시작 이후 만든 새 수주는 cutover 키가 없고 total = 주문량이다" do
+    _old, old_line = so!("SO-OPS-OLD", qty: 2 * P)
+    old_ship!(old_line, P, @t - 5.hours)
+    start = @t - 2.hours
+    pick!(old_line, P, start)
+
+    _new, line = so!("SO-OPS-NEW", qty: 2 * P)
+    pick!(line, P, start + 1.minute)
+    mv("ship", "shipping", "customer", P, start + 2.minutes, product: @fg, lot: @lot, ref: line)
+
+    shipment = ops(so: "SO-OPS-NEW")["shipment"]
+    refute shipment.key?("cutover")
+    assert_equal [2 * P] * 4, shipment["stages"].drop(1).map { |s| s["progress"]["total"] }
+    assert_equal({ "picked" => P, "staged" => P, "loaded" => 0, "shipped" => P }, progress_of(shipment))
+  end
+
+  test "6e: 시작 이전에 이미 다 출하한 수주는 total 0 이라 누적 단계 도달 시각이 없고 cutover 만 남는다" do
+    _full, full_line = so!("SO-OPS-FULL", qty: P)
+    old_ship!(full_line, P, @t - 5.hours)
+    _other, other_line = so!("SO-OPS-OTHER", qty: P)
+    pick!(other_line, P, @t - 2.hours)
+
+    shipment = ops(so: "SO-OPS-FULL")["shipment"]
+    assert_equal({ "at" => iso(@t - 2.hours), "shipped_before" => P }, shipment["cutover"])
+    stages = shipment["stages"].index_by { |s| s["key"] }
+    assert_equal [nil] * 3, %w[staged loaded shipped].map { |k| stages[k]["at"] }
+    assert_equal [{ "done" => 0, "total" => 0 }] * 4, %w[picked staged loaded shipped].map { |k| stages[k]["progress"] }
+  end
+
   def shipment_stages(so_no) = ops(so: so_no)["shipment"]["stages"].index_by { |s| s["key"] }
 
   def assert_monotonic(stages)

@@ -301,6 +301,63 @@ class ShippingTest < ActiveSupport::TestCase
     assert_equal [U, 2 * U], lines.map { |l| shipped(l) }
   end
 
+  # --- 6e: 할당 시작 시각 ------------------------------------------------------------------------
+
+  # ⑥c 이전 기록의 실제 모양: pick 이동은 ref 없음(운영에선 ref = Task), ship 이동만 수주 라인에 붙는다.
+  def old_ship(lot, line, qty, at: M0 - 2.days)
+    Inventory::Move.call(product: @fg, lot: lot, from: "FG-A-01-01", to: "shipping", qty: qty, move_type: "pick", ref: nil,
+                         idempotency_key: "old-pick-#{@seq += 1}", occurred_at: at)
+    Inventory::Move.call(product: @fg, lot: lot, from: "shipping", to: "customer", qty: qty, move_type: "ship", ref: line,
+                         idempotency_key: "old-ship-#{@seq += 1}", occurred_at: at + 1.hour)
+  end
+
+  def new_pick(lot, line, qty, at: M0 - 1.hour)
+    Inventory::Move.call(product: @fg, lot: lot, from: "FG-A-01-01", to: "shipping", qty: qty, move_type: "pick", ref: line,
+                         idempotency_key: "new-pick-#{@seq += 1}", occurred_at: at)
+  end
+
+  test "6e: 할당 시작 시각은 ref 가 수주 라인인 pick 이동의 가장 이른 시각이고, 없으면 nil 이다" do
+    lot = fg_stock(4 * U)
+    line = line_for("SO-T-1", 4 * U)
+    old_ship(lot, line, U) # ref 없는 pick + 수주 라인에 붙은 ship 은 시작 시각이 되지 못한다
+    assert_nil Simulation::Shipping.allocation_started_at
+
+    new_pick(lot, line, U, at: M0 - 1.hour)
+    new_pick(lot, line, U, at: M0 - 3.hours)
+    assert_equal M0 - 3.hours, Simulation::Shipping.allocation_started_at
+  end
+
+  test "6e: 시작 이전 출하가 많아도 시작 이후 이 라인이 피킹해 출하대에 있는 양은 load 로 계획된다" do
+    lot = fg_stock(3 * U)
+    line = line_for("SO-T-1", 5 * U)
+    old_ship(lot, line, 2 * U) # 옛 출하 2U — 로트·라인 기준 출하 합이 새 피킹(U)보다 크다
+    new_pick(lot, line, U)
+
+    assert_equal 1, plan[:load], "전체 출하(2U)를 빼면 가능량이 음수라 영영 안 실린다"
+    assert_equal [[line.id, U]], loads.map { |t| [t.ref_id, t.qty.to_i] }
+  end
+
+  test "6e: 시작 이전 출하가 있어도 다른 라인 피킹분은 싣지 않는다" do
+    lot = fg_stock(2 * U)
+    a = line_for("SO-T-A", 5 * U, due: Date.new(2026, 10, 9))
+    b = line_for("SO-T-B", 5 * U, due: Date.new(2026, 10, 10))
+    old_ship(lot, a, U)
+    new_pick(lot, b, U)
+
+    assert_equal 1, plan[:load]
+    assert_equal [b.id], loads.map(&:ref_id), "출하대 재고는 B 가 피킹한 것이다"
+  end
+
+  test "6e: 시작 이전 출하가 있는 라인은 주문 잔량(주문량 - 전체 출하)을 넘겨 계획하지 않는다" do
+    lot = fg_stock(3 * U)
+    line = line_for("SO-T-1", 2 * U)
+    old_ship(lot, line, U)
+    new_pick(lot, line, 2 * U) # 새 피킹이 잔량(U)보다 많다
+
+    assert_equal 1, plan[:load]
+    assert_equal [U], loads.map { |t| t.qty.to_i }
+  end
+
   test "6d: 상차가 MAX 번 취소된 라인·로트는 더 계획하지 않고 포기 로그는 1줄만 남긴다" do
     fg_stock(100)
     line_for("SO-T-1", 100)
