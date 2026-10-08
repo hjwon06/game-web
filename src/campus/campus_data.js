@@ -94,6 +94,8 @@ function applyCampus(c,same,withBins){
   if(!c||!c.buildings)throw new Error('/api/campus 모양이 맞지 않음');
   S.c=c;S.note=c.sim_note||'';
   if(same)return; // 304: 이미 처리한 응답
+  const hm=c.buildings.hall&&c.buildings.hall.machines; // 자재 대기: 기계 상태와 별개 표시(m.short = 대기 시작 시각 ms 또는 null)
+  if(Array.isArray(hm)){const by=new Map(hm.map(x=>[x.code,x]));M.forEach(m=>{const h=by.get(m.code);m.short=h&&h.material_short?tsOf(h.since):null;});}
   const st=tsOf(c.server_time),o=st==null?null:st-Date.now(); // 서버 시각 오프셋(급변은 완만히)
   if(o!=null){S.off=S.offSet?S.off*.7+o*.3:o;S.offSet=true;}
   if(Array.isArray(c.resources))S.res=c.resources;

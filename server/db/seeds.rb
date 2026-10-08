@@ -48,3 +48,6 @@ PutawayRule.ensure_defaults!
 
 # 공급사: 강판 1곳(리드타임 120초), 볼트·패킹 1곳(180초). 자재 품목이 있어야 연결되므로 역시 재고 시드 뒤에 둔다. 이미 있는 값은 건드리지 않는다.
 Supplier.ensure_defaults!
+
+# 재주문점: 원자재 3종 모두 15분 아래로 떨어지면 발주하고 30분어치까지 채운다. 이미 있는 규칙(바꿔 둔 값 포함)은 건드리지 않는다.
+ReorderRule.ensure_defaults!

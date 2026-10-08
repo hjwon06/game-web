@@ -26,7 +26,9 @@ module Simulation
 
       # 모든 단계는 자기 트랜잭션(savepoint)에 감싸 한 단계의 실패(PG 오류 포함)가 뒤 단계를 막지 않게 한다.
       # 같은 분·같은 대상의 멱등키가 이미 있으면 그 단계는 이번 분에 아무것도 하지 않는다(재계산 금지).
+      reset_state_for(epoch)
       step("backflush") { catch_up(epoch) }
+      step("material short") { update_material_short }
       step("order") { new_order }
       @logger.info("sim logistics #{@iso} #{@counts.map { |k, v| "#{k}=#{v}" }.join(' ')}")
       @counts
@@ -45,14 +47,26 @@ module Simulation
       @logger.error("sim logistics #{name} #{@iso}: #{e.class} #{e.message}")
     end
 
-    # 작업지시별 pending = good(EPOCH 이후 production_events) - done(produce 이동) - 버린 양 이 양수면 Backflush.
+    # rake sim:rebase 로 epoch 가 바뀌면 이전 epoch 의 버린 양·부족 분 수는 의미가 없다(남기면 새 pending 에서 또 빼게 된다).
+    def reset_state_for(epoch)
+      state = self.class.state
+      return if state[:epoch] == epoch
+
+      state[:discarded] = Hash.new(0)
+      state[:starved] = {}
+      state[:epoch] = epoch
+    end
+
+    # 작업지시별 pending = good(EPOCH 이후 production_events) - done(EPOCH 이후 produce 이동) - 버린 양 이 양수면 Backflush.
+    # good 과 done 이 같은 구간(EPOCH 이후)이라야 rebase 직후 pending 이 0 이다. done 은 이동의 occurred_at(= 그 분)으로 가른다.
     # 한 분에 처리하는 양(chunk)은 min(pending, 자재별 floor(line_side 재고 / qty_per) 의 최솟값, BACKFLUSH_CHUNK_MAX) 이다.
     # 0 이면 그 작업지시만 이번 분을 건너뛰고(skipped) 다른 작업지시는 진행한다. 남은 pending 은 다음 분에 이어서 처리한다.
     # 자재는 LineFeed 가 raw 칸에서 line_side 로 따로 채운다.
     # 이번 분 produce 키가 이미 있는 작업지시는 건드리지 않는다(남은 양은 다음 분 키로 처리된다).
     def catch_up(epoch)
       good = ProductionEvent.where(bucket_start: epoch...@minute).group(:work_order_id).sum(:good_qty)
-      done = StockMove.where(move_type: "produce", ref_type: "WorkOrder", ref_id: good.keys).group(:ref_id).sum(:qty)
+      done = StockMove.where(move_type: "produce", ref_type: "WorkOrder", ref_id: good.keys, occurred_at: epoch..)
+                      .group(:ref_id).sum(:qty)
       orders = WorkOrder.where(id: good.keys).includes(:item).index_by(&:id)
       keys = good.keys.index_with { |id| "produce:#{id}:#{@iso}" }
       minted = StockMove.where(idempotency_key: keys.values).pluck(:idempotency_key).to_set
@@ -117,6 +131,48 @@ module Simulation
                    "line_side #{BigDecimal(on_hand.fetch(line.component_id, 0).to_s).to_s('F')} / 1개당 #{line.qty_per.to_s('F')} (미소비 #{pending}개)")
     end
 
+    # 자재 대기 판단(매분). running 기계의 active 작업지시가 다음 60초에 만들 양(rate x 60 x qty_per, 자재별)을
+    # line_side 가 하나라도 못 대면 material_short_since 를 채우고(이미 있으면 유지), 다 대면 nil 로 되돌린다. 바뀔 때만 로그 1줄.
+    # 기계 state·version 은 건드리지 않는다(update_columns): version 이 바뀌면 누적기가 그 구간을 버리고, state 는 사용자 명령 대상이다.
+    # Runner 의 snapshot 이 이 값을 읽어 자재 대기 기계에는 생산을 쌓지 않는다.
+    def update_material_short
+      Machine.where.not(state: "running").where.not(material_short_since: nil).update_all(material_short_since: nil)
+      machines = Machine.where(state: "running").order(:id).to_a
+      return if machines.empty?
+
+      orders = WorkOrder.where(status: "active", machine_id: machines.map(&:id)).group_by(&:machine_id)
+      boms = BomLine.where("qty_per > 0").includes(:component).group_by(&:product_id)
+      on_hand = Quant.where(location_id: Location.find_by!(code: "line_side").id).group(:product_id).sum(:qty)
+
+      machines.each do |machine|
+        lacking = lacking_bom(machine, orders.fetch(machine.id, []), boms, on_hand)
+        if lacking
+          next if machine.material_short_since
+
+          machine.update_columns(material_short_since: @minute)
+          @logger.info("sim logistics #{@iso} #{machine.code} 자재 대기 시작: #{lacking[:line].component.sku} line_side " \
+                       "#{BigDecimal(lacking[:have].to_s).to_s('F')} / 다음 #{Config::MATERIAL_SHORT_CHECK_SECONDS}초 필요 #{lacking[:need].round(1)}")
+        elsif machine.material_short_since
+          minutes = ((@minute - machine.material_short_since) / 60).floor
+          machine.update_columns(material_short_since: nil)
+          @logger.info("sim logistics #{@iso} #{machine.code} 자재 대기 해제 (#{minutes}분)")
+        end
+      end
+    end
+
+    # 이 기계가 다음 구간에 못 대는 자재 [{ line:, have:, need: }]. 다 대면 nil.
+    def lacking_bom(machine, orders, boms, on_hand)
+      produce = Config.rate(machine.code) * Config::MATERIAL_SHORT_CHECK_SECONDS
+      orders.each do |order|
+        boms.fetch(order.product_id, []).each do |line|
+          have = on_hand.fetch(line.component_id, 0)
+          need = produce * line.qty_per
+          return { line: line, have: have, need: need } if have < need
+        end
+      end
+      nil
+    end
+
     # Inventory::Backflush 는 로트 없는 재고만 쓴다. 같은 일을 여기서 로트 단위로 한다:
     # BOM 자재를 line_side 에서 나눠 issue 하고(로트 없는 재고 → 오래된 로트 순) 완제품 produce 1건을 만든다.
     # 전체가 한 savepoint 라 자재가 하나라도 모자라면 InsufficientStock 과 함께 전부 되돌아간다.
@@ -127,7 +183,7 @@ module Simulation
       end
       Inventory::Move.call(product: product, lot: work_order_lot(product, order), from: "production",
                            to: Location.find_by!(code: "qc"), qty: delta, move_type: "produce",
-                           ref: order, idempotency_key: "produce:#{order.id}:#{@iso}")
+                           ref: order, idempotency_key: "produce:#{order.id}:#{@iso}", occurred_at: @minute)
     end
 
     # line_side 의 재고를 로트 없는 것 → 로트가 오래된 순으로 쓴다. 모자라면 InsufficientStock(부족분은 line_side 에 공급돼야 풀린다).

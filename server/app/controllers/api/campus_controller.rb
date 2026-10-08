@@ -171,9 +171,16 @@ module Api
         received_trucks_10m: pos[:arrived_10m] }
     end
 
+    # 쿼리 6: 기계 전부(상태별 수는 여기서 센다). machines = 기계별 자재 대기. state 는 기계 상태 그대로이고 자재 대기는 별도 표시다.
     def hall
-      counts = Machine.group(:state).count # 쿼리 6
-      Machine::STATES.to_h { |s| [s, counts.fetch(s, 0)] }
+      rows = Machine.order(:id).pluck(:code, :state, :material_short_since)
+      counts = rows.map { |_, state, _| state }.tally
+      Machine::STATES.to_h { |s| [s, counts.fetch(s, 0)] }.merge(
+        machines: rows.map do |code, state, since|
+          short = state == "running" && !since.nil?
+          { code: code, material_short: short, since: short ? iso(since) : nil }
+        end
+      )
     end
 
     def qc(loc, flow)

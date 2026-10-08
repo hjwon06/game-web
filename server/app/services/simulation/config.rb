@@ -38,7 +38,8 @@ module Simulation
     # 물류(자재 소비) 숫자.
     LOGISTICS_SECONDS = 60
     BACKFLUSH_CHUNK_MAX = 300                # 작업지시 1건이 한 분에 소비하는 완제품 수 상한. 밀린 분량은 이 크기로 나눠 처리한다
-    BACKLOG_CAP = 5_000                      # 작업지시별 미소비량(pending) 상한. 넘는 분량은 소급하지 않고 버린다
+    BACKLOG_CAP = BACKFLUSH_CHUNK_MAX * 2    # 작업지시별 미소비량(pending) 상한(2분어치). 넘는 분량은 소급하지 않고 버린다
+    MATERIAL_SHORT_CHECK_SECONDS = 60        # 자재 대기 판단 구간: 라인사이드가 이만큼의 생산분을 못 대면 그 기계는 선다
     STARVE_LOG_MINUTES = 10                  # 작업지시가 이만큼 연속으로 자재 부족이면 그 뒤 이 간격마다 로그 1줄
 
     # 입고(트럭 → 하차 → 칸 적치) 숫자. Runner 가 BUCKET_SECONDS(10초)마다 Inbound 를 부른다.
@@ -63,10 +64,10 @@ module Simulation
     NEW_ORDER_INTERVAL_SECONDS = 600
     CUSTOMERS = %w[한빛정공 대성기계 서진산업 미래오토].freeze # 시드 수주의 고객명. 순환해서 쓴다
 
-    # 이 시각 이전 생산은 재고로 소급하지 않는다. ENV 우선, 없으면 locations 첫 생성 시각. 둘 다 없으면 nil.
+    # 이 시각 이전 생산은 재고로 소급하지 않는다. ENV > 최신 sim_epochs(rake sim:rebase) > locations 첫 생성 시각. 모두 없으면 nil.
     def self.inventory_epoch
       raw = ENV["INVENTORY_EPOCH"].presence
-      return Location.minimum(:created_at) unless raw
+      return SimEpoch.latest&.started_at || Location.minimum(:created_at) unless raw
 
       Time.zone.parse(raw) or raise ArgumentError, "INVENTORY_EPOCH 를 시각으로 읽을 수 없다: #{raw}"
     end

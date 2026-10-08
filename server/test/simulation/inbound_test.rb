@@ -642,4 +642,76 @@ class InboundTest < ActiveSupport::TestCase
     assert_equal 1, PurchaseOrder.count
     assert_equal 1, @log.string.lines.grep(/sim inbound putaway .*적치 실패/).size
   end
+
+  # --- 재주문점(reorder_rules) ---------------------------------------------------------------
+
+  def reorder!(product, min: 15, max: 30) = ReorderRule.create!(product: product, min_minutes: min, max_minutes: max)
+
+  test "재주문점: 모든 자재의 coverage 가 min 이상이면 발주하지 않고 다음 판단 시각만 잡는다" do
+    roomy_bins!
+    reorder!(@steel)
+    reorder!(@bolt)
+    seed_bin(@steel, "RAW-A-01-01", 1500) # 15.9분 (분당 94.08)
+    seed_bin(@bolt, "RAW-A-01-02", 750)   # 15.9분 (분당 47.04)
+    due!(NOW)
+
+    result = inbound(NOW)
+
+    assert_equal 0, result[:orders]
+    assert_equal 0, PurchaseOrder.count
+    assert_operator InboundState.pick(:next_truck_at), :>, NOW
+  end
+
+  test "재주문점: min 아래로 떨어진 자재만 후보고, 발주량은 max 분어치까지 채운다" do
+    roomy_bins!
+    reorder!(@steel)
+    reorder!(@bolt)
+    seed_bin(@steel, "RAW-A-01-01", 500) # 5.3분 < 15
+    seed_bin(@bolt, "RAW-A-01-02", 750)  # 15.9분 ≥ 15: 후보가 아니다
+    due!(NOW)
+
+    inbound(NOW)
+
+    assert_equal ["RAW-S"], ordered_skus
+    assert_equal 5, ordered_pallets, "ceil((30 x 94.08 − 500) / 500) = 5. 규칙이 없으면 30분 수요만으로 6"
+    assert_operator 500 + (5 * P), :>=, 30 * 94.08
+    assert_operator 500 + (4 * P), :<, 30 * 94.08
+  end
+
+  test "재주문점: coverage 가 가장 작은 자재가 min 이상이면 건너뛰고 min 아래인 다른 자재를 주문한다" do
+    roomy_bins!
+    reorder!(@steel, min: 3, max: 30) # 강판 500/94.08 = 5.3분 ≥ 3: 가장 작지만 후보가 아니다
+    reorder!(@bolt)                   # 볼트 470/47.04 = 10.0분 < 15: 후보
+    seed_bin(@steel, "RAW-A-01-01", 500)
+    seed_bin(@bolt, "RAW-A-01-02", 470)
+    due!(NOW)
+
+    inbound(NOW)
+
+    assert_equal ["RAW-B"], ordered_skus
+  end
+
+  test "재주문점: 규칙이 없거나 비활성인 자재는 예전처럼 coverage 가 작은 것부터 후보다" do
+    roomy_bins!
+    reorder!(@steel).update!(active: false)
+    reorder!(@bolt)
+    seed_bin(@steel, "RAW-A-01-01", 2000) # 21.3분: 규칙이 살아 있었다면 min(15) 이상이라 후보가 아니다
+    seed_bin(@bolt, "RAW-A-01-02", 1000)  # 21.3분 ≥ 15: 후보가 아니다
+    due!(NOW)
+
+    inbound(NOW)
+
+    assert_equal ["RAW-S"], ordered_skus, "비활성 규칙은 무시되므로 강판은 필터 없이 후보로 남고 볼트만 빠진다"
+  end
+
+  test "재주문점: 발주량은 상한·칸 여유로 자른다" do
+    roomy_bins!
+    reorder!(@steel, min: 15, max: 600) # 600분어치 = 56,448 → 12팔레트 상한
+    due!(NOW)
+
+    inbound(NOW)
+
+    assert_equal ["RAW-S"], ordered_skus.first(1)
+    assert_equal 12, PurchaseOrderLine.where(product: @steel).sum(:qty_ordered) / P
+  end
 end

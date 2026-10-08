@@ -44,8 +44,9 @@ module Simulation
     private
 
     def snapshot
-      Machine.order(:id).pluck(:code, :state, :version).map do |code, state, version|
-        { code: code, state: state, version: version }
+      # 자재 대기(material_short_since)인 기계는 state 를 "waiting_material" 로 넘겨 누적기가 생산을 쌓지 않게 한다. DB 의 state 는 그대로다.
+      Machine.order(:id).pluck(:code, :state, :version, :material_short_since).map do |code, state, version, short_since|
+        { code: code, state: short_since && state == "running" ? "waiting_material" : state, version: version }
       end
     end
 

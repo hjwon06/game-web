@@ -100,7 +100,8 @@ module Simulation
     # ① 보유 분수(coverage = 보유량 / 분당 수요) 가 가장 작은 자재(수요 0 인 자재, 공급사가 없는 자재, 열린 발주가 있는 자재는 후보가 아니다).
     #    보유량에는 들어오는 중인 발주 수량이 들어 있어, 다른 자재의 순위를 가릴 때 이미 주문한 몫이 반영된다.
     #    동률이면 직전 발주와 다른 자재, 그래도 같으면 id 순.
-    # ② 팔레트 수 = ceil(그 자재 30분 수요 / 팔레트), PALLETS_PER_TRUCK 로 자른다.
+    #    재주문점(reorder_rules)이 있는 자재는 coverage 가 min_minutes 이상이면 후보에서 빠지고, 후보가 하나도 없으면 발주하지 않는다.
+    # ② 팔레트 수 = ceil(그 자재 30분 수요 / 팔레트). 재주문점이 있으면 ceil((max_minutes x 분당 수요 − 보유) / 팔레트). PALLETS_PER_TRUCK 로 자른다.
     # ③ 칸이 모자라면 남은 칸 용량만큼으로 줄인다(0 이면 발주하지 않는다).
     def next_load
       demand = demand_per_minute
@@ -115,16 +116,27 @@ module Simulation
       return nil if demand.empty?
 
       held = holdings(demand.keys)
+      rules = ReorderRule.by_product(demand.keys)
       coverage = demand.to_h { |id, per_minute| [id, held.fetch(id, 0) / per_minute] }
+      # 재주문점: coverage 가 min 이상인 자재는 후보가 아니다. 모두 min 이상이면 이번에는 발주하지 않는다(트럭이 계속 오지 않는다).
+      coverage = coverage.reject { |id, minutes| rules[id] && minutes >= rules[id].min_minutes }
+      return nil if coverage.empty?
+
       lowest = coverage.values.min
       tied = coverage.select { |_, minutes| minutes == lowest }.keys.sort
       last = PurchaseOrderLine.order(id: :desc).pick(:product_id)
       id = tied.find { |pid| pid != last } || tied.first
 
-      wanted = (demand.fetch(id) * (Config::FORECAST_SECONDS / 60.0) / Config::PALLET_QTY).ceil
+      wanted = wanted_pallets(demand.fetch(id), held.fetch(id, 0), rules[id])
       wanted = wanted.clamp(Config::PALLETS_PER_TRUCK.min, Config::PALLETS_PER_TRUCK.max)
       pallets = [wanted, free_pallets(id)].min
       pallets.positive? ? [Product.find(id), pallets, suppliers.fetch(id)] : nil
+    end
+
+    # 재주문점 규칙이 있으면 max_minutes 분어치까지 채우는 양, 없으면 FORECAST_SECONDS(30분) 수요. 팔레트로 올림.
+    def wanted_pallets(per_minute, held, rule)
+      need = rule ? (rule.max_minutes * per_minute) - held : per_minute * (Config::FORECAST_SECONDS / 60.0)
+      (need / Config::PALLET_QTY).ceil
     end
 
     # 자재별 보유량 = raw 칸 + line_side + 입고대 + 아직 입고대에 닿지 않은 것.

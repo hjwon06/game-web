@@ -246,8 +246,9 @@ class LogisticsTest < ActiveSupport::TestCase
     run_minute(0)
     18.times { |n| run_minute(n + 1) }
 
-    assert_equal 5000, moves("produce").sum(:qty), "8000 중 3000 은 버려 5000 만 소비한다"
-    assert_equal 1, @log.string.lines.grep(/3000개를 소급하지 않고 버림/).size
+    assert_equal 600, Simulation::Config::BACKLOG_CAP
+    assert_equal 600, moves("produce").sum(:qty), "8000 중 7400 은 버려 BACKLOG_CAP(600)만 소비한다"
+    assert_equal 1, @log.string.lines.grep(/7400개를 소급하지 않고 버림/).size
     assert_equal 0, run_minute(19)[:backflush], "다 소비한 뒤에는 따라잡을 것이 없다"
   end
 
@@ -267,6 +268,105 @@ class LogisticsTest < ActiveSupport::TestCase
     stock(@steel, 1000)
     run_minute(10)
     assert_equal 0, Simulation::Logistics.state[:starved].size, "소비가 재개되면 연속 분 수가 지워진다"
+  end
+
+  # M1 은 초당 0.8개 → 다음 60초 48개. 강판 2개·볼트 1개씩이라 강판 96, 볼트 48 이 필요하다.
+  test "line_side 가 다음 60초 생산분을 못 대면 material_short_since 를 분 시각으로 채우고, 이미 있으면 유지하며, 기계 state·version 은 그대로다" do
+    stock(@steel, 95) # 96 필요
+    stock(@bolt, 1000)
+    version = @machine.version
+
+    run_minute(0)
+    assert_equal M0, @machine.reload.material_short_since
+    assert_equal ["running", version], [@machine.state, @machine.version]
+    assert_equal 1, @log.string.lines.grep(/M1 자재 대기 시작: RAW-S line_side 95\.0 \/ 다음 60초 필요 96\.0/).size
+
+    run_minute(1)
+    assert_equal M0, @machine.reload.material_short_since, "이미 있으면 처음 시각을 유지한다"
+    assert_equal 1, @log.string.lines.grep(/자재 대기 시작/).size, "바뀔 때만 로그를 남긴다"
+  end
+
+  test "라인사이드가 보충되면 material_short_since 가 nil 이 되고 로그 1줄을 남긴다" do
+    stock(@bolt, 1000)
+    run_minute(0)
+    assert_not_nil @machine.reload.material_short_since
+
+    stock(@steel, 96)
+    run_minute(3)
+
+    assert_nil @machine.reload.material_short_since
+    assert_equal 1, @log.string.lines.grep(/M1 자재 대기 해제 \(3분\)/).size
+  end
+
+  test "정확히 필요량이면 자재 대기가 아니다. running 이 아닌 기계의 표시는 지운다" do
+    stock(@steel, 96)
+    stock(@bolt, 48)
+    run_minute(0)
+    assert_nil @machine.reload.material_short_since
+
+    @machine.update_columns(material_short_since: M0 - 600, state: "stopped")
+    run_minute(1)
+    assert_nil @machine.reload.material_short_since
+  end
+
+  test "자재 대기 기계에는 생산을 쌓지 않는 snapshot 을 넘긴다: 자재가 오면 재개한다" do
+    runner = Simulation::Runner.new(logger: Logger.new(@log))
+    @machine.update_columns(material_short_since: M0)
+
+    snapshot = runner.send(:snapshot)
+    assert_equal [{ code: "M1", state: "waiting_material", version: 0 }], snapshot
+
+    accumulator = Simulation::Accumulator.new
+    rng = Random.new(1)
+    60.times { accumulator.tick(snapshot, rng) }
+    assert_equal 0, accumulator.entry("M1").good_qty
+
+    @machine.update_columns(material_short_since: nil)
+    snapshot = runner.send(:snapshot)
+    assert_equal "running", snapshot.first[:state]
+    60.times { accumulator.tick(snapshot, rng) }
+    assert_operator accumulator.entry("M1").good_qty, :>, 0
+  end
+
+  test "epoch 는 ENV > 최신 sim_epochs > locations 첫 생성 순이다" do
+    ENV.delete("INVENTORY_EPOCH")
+    assert_equal Location.minimum(:created_at), Simulation::Config.inventory_epoch
+
+    SimEpoch.create!(started_at: M0 - 600)
+    SimEpoch.create!(started_at: M0)
+    assert_equal M0, Simulation::Config.inventory_epoch, "가장 늦은 started_at"
+
+    ENV["INVENTORY_EPOCH"] = (M0 + 5).iso8601
+    assert_equal M0 + 5, Simulation::Config.inventory_epoch
+  end
+
+  test "rebase 뒤에는 epoch 이후의 생산·소비만 센다: 이전 produce 이동이 pending 을 음수로 만들지 않는다" do
+    stock(@steel, 10_000)
+    stock(@bolt, 10_000)
+    event(M0 - 20, 100)
+    run_minute(0)
+    assert_equal [100], moves("produce").pluck(:qty).map(&:to_i)
+
+    ENV.delete("INVENTORY_EPOCH")
+    SimEpoch.create!(started_at: M0 + 30)
+    event(M0 + 40, 30)
+    run_minute(1)
+
+    assert_equal [100, 30], moves("produce").order(:id).pluck(:qty).map(&:to_i), "done 이 100 으로 잡혔다면 pending 이 음수라 30 이 소비되지 않는다"
+  end
+
+  test "rebase 직후 밀린 생산(pending)은 0 이다: 이전 생산은 소비하지도 상한 로그를 남기지도 않는다" do
+    stock(@steel, 100_000)
+    stock(@bolt, 100_000)
+    event(M0 - 20, 8000)
+    ENV.delete("INVENTORY_EPOCH")
+    SimEpoch.create!(started_at: M0 - 10)
+
+    result = run_minute(0)
+
+    assert_equal 0, result[:backflush]
+    assert_equal 0, moves("produce").count
+    assert_empty @log.string.lines.grep(/미소비/)
   end
 
   test "issue 멱등키는 issue:<작업지시>:<자재>:<line_side>:<로트>:<분 ISO> 이다" do

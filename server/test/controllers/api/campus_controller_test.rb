@@ -73,7 +73,7 @@ class CampusControllerTest < ActionDispatch::IntegrationTest
     assert_equal %w[hall material office qc shipping], body["buildings"].keys.sort
     assert_equal %w[open_pos orders recent recent_pos], body["buildings"]["office"].keys.sort
     assert_equal %w[raw_store received_trucks_10m receiving_qty], body["buildings"]["material"].keys.sort
-    assert_equal %w[broken running stopped], body["buildings"]["hall"].keys.sort
+    assert_equal %w[broken machines running stopped], body["buildings"]["hall"].keys.sort
     assert_equal %w[defect_ratio_60m fail_60m pass_60m qty], body["buildings"]["qc"].keys.sort
     assert_equal %w[fg_store partial_orders shipped_60m], body["buildings"]["shipping"].keys.sort
     assert_kind_of String, body["sim_note"]
@@ -182,6 +182,23 @@ class CampusControllerTest < ActionDispatch::IntegrationTest
     assert_equal raw.map { |r| r["sku"] }, raw.map { |r| r["sku"] }.sort
     assert_equal Quant.where(location: Location.find_by!(code: "receiving")).sum(:qty).to_i, b["material"]["receiving_qty"]
     assert_equal Machine.group(:state).count.fetch("running", 0), b["hall"]["running"]
+  end
+
+  test "생산동 기계 항목: running 이면서 material_short_since 가 있는 기계만 material_short 와 since 를 준다" do
+    sign_in_as create_user
+    since = Time.utc(2026, 10, 8, 12, 0, 0)
+    other = Machine.create!(code: "MCMP2", name: "캠퍼스기계2", state: "running")
+    @machine.update_columns(state: "running", material_short_since: since)
+
+    entries = tasks_of["buildings"]["hall"]["machines"].index_by { |m| m["code"] }
+
+    assert_equal({ "code" => "MCMP", "material_short" => true, "since" => "2026-10-08T12:00:00.000Z" }, entries["MCMP"])
+    assert_equal({ "code" => "MCMP2", "material_short" => false, "since" => nil }, entries["MCMP2"])
+
+    @machine.update_columns(state: "stopped") # 멈춘 기계는 자재 대기로 보이지 않는다
+    entries = tasks_of["buildings"]["hall"]["machines"].index_by { |m| m["code"] }
+    assert_equal false, entries["MCMP"]["material_short"]
+    assert_equal other.state, "running"
   end
 
   test "불합격 없는 검사만 있어도 불합격률은 이동 합계와 맞는다" do

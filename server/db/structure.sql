@@ -330,6 +330,7 @@ CREATE TABLE public.machines (
     version integer DEFAULT 0 NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
+    material_short_since timestamp with time zone,
     CONSTRAINT machines_state_check CHECK (((state)::text = ANY (ARRAY[('running'::character varying)::text, ('stopped'::character varying)::text, ('broken'::character varying)::text]))),
     CONSTRAINT machines_version_check CHECK ((version >= 0))
 );
@@ -2020,6 +2021,61 @@ ALTER TABLE ONLY public.cycle_counts
 ALTER TABLE ONLY public.cycle_counts
     ADD CONSTRAINT fk_rails_cycle_counts_task FOREIGN KEY (task_id) REFERENCES public.tasks(id) ON DELETE SET NULL;
 
+-- ⑥c 흐름 안정화 (마이그레이션 20261008080001 ~ 20261008080003; machines.material_short_since 는 위 machines 정의에 있다)
+
+CREATE TABLE public.reorder_rules (
+    id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    min_minutes integer NOT NULL,
+    max_minutes integer NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT reorder_rules_minutes_check CHECK (((min_minutes >= 0) AND (max_minutes >= min_minutes)))
+);
+
+CREATE SEQUENCE public.reorder_rules_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.reorder_rules_id_seq OWNED BY public.reorder_rules.id;
+
+ALTER TABLE ONLY public.reorder_rules ALTER COLUMN id SET DEFAULT nextval('public.reorder_rules_id_seq'::regclass);
+
+ALTER TABLE ONLY public.reorder_rules
+    ADD CONSTRAINT reorder_rules_pkey PRIMARY KEY (id);
+
+CREATE UNIQUE INDEX index_reorder_rules_on_product_id ON public.reorder_rules USING btree (product_id);
+
+ALTER TABLE ONLY public.reorder_rules
+    ADD CONSTRAINT fk_rails_reorder_rules_product FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+CREATE TABLE public.sim_epochs (
+    id bigint NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL
+);
+
+CREATE SEQUENCE public.sim_epochs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.sim_epochs_id_seq OWNED BY public.sim_epochs.id;
+
+ALTER TABLE ONLY public.sim_epochs ALTER COLUMN id SET DEFAULT nextval('public.sim_epochs_id_seq'::regclass);
+
+ALTER TABLE ONLY public.sim_epochs
+    ADD CONSTRAINT sim_epochs_pkey PRIMARY KEY (id);
+
+CREATE INDEX index_sim_epochs_on_started_at ON public.sim_epochs USING btree (started_at);
+
 
 --
 -- PostgreSQL database dump complete
@@ -2028,6 +2084,9 @@ ALTER TABLE ONLY public.cycle_counts
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20261008080003'),
+('20261008080002'),
+('20261008080001'),
 ('20261009000002'),
 ('20261008150003'),
 ('20261008150002'),

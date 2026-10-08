@@ -41,7 +41,9 @@ module Inventory
 
     def self.call(**args) = new(**args).call
 
-    def initialize(product:, lot:, from:, to:, qty:, move_type:, ref:, idempotency_key:)
+    # occurred_at 를 안 주면 DB 기본값(now())이다. 시뮬레이터가 "그 분"의 이동을 만들 때만 준다.
+    def initialize(product:, lot:, from:, to:, qty:, move_type:, ref:, idempotency_key:, occurred_at: nil)
+      @occurred_at = occurred_at
       @product = product
       @lot = lot
       @from = resolve_location(from)
@@ -71,10 +73,10 @@ module Inventory
         reject_insufficient!(from_quant) if @from.physical? && from_quant.qty < @qty
         check_capacity!(capacity) if capacity
 
-        move = StockMove.create!(
-          product: @product, lot: @lot, from_location: @from, to_location: @to, qty: @qty,
-          move_type: @move_type, ref_type: @ref&.class&.name, ref_id: @ref&.id, idempotency_key: @key
-        )
+        attrs = { product: @product, lot: @lot, from_location: @from, to_location: @to, qty: @qty,
+                  move_type: @move_type, ref_type: @ref&.class&.name, ref_id: @ref&.id, idempotency_key: @key }
+        attrs[:occurred_at] = @occurred_at if @occurred_at
+        move = StockMove.create!(**attrs)
         Quant.where(id: from_quant.id).update_all(["qty = qty - ?, updated_at = now()", @qty])
         Quant.where(id: quants.fetch(@to.id).id).update_all(["qty = qty + ?, updated_at = now()", @qty])
         move

@@ -51,10 +51,16 @@ function person(w,t){const [x,y]=P(w.x,w.y,6);const walk=w.moving?Math.sin(t/90)
   g.fillStyle='rgba(26,26,46,.2)';g.beginPath();g.ellipse(x,y,7*Z,3.5*Z,0,0,7);g.fill();g.fillStyle='#333A45';g.fillRect(x-4*Z,y-10*Z+walk*.3,3*Z,10*Z);g.fillRect(x+1*Z,y-10*Z-walk*.3,3*Z,10*Z);
   g.fillStyle='#4A6FB5';g.fillRect(x-5*Z,y-22*Z,10*Z,13*Z);g.fillStyle='#F1C9A5';g.beginPath();g.arc(x,y-26*Z,4.5*Z,0,7);g.fill();g.fillStyle=w.c;g.beginPath();g.arc(x,y-28*Z,5*Z,Math.PI,0);g.fill();
   if(w.job&&w.job.phase==='fix'){g.fillStyle='#FFE45C';for(let i=0;i<3;i++)g.fillRect(x+6*Z+Math.random()*8*Z,y-24*Z+Math.random()*10*Z,3*Z,3*Z);}}
-function drawBubbles(t){for(let i=bubbles.length-1;i>=0;i--){const b=bubbles[i],age=(t-b.t0)/2600;if(age>1){bubbles.splice(i,1);continue;}if(!b.m._top)continue;
+function paintBubble(x,yy,s,text,color,sx){
+  g.font=`700 ${11*s}px Pretendard`;const w=g.measureText(text).width+16*s;
+  g.fillStyle='#fff';g.fillRect(x-w/2+sx,yy-12*s,w,20*s);g.fillStyle=color;g.fillRect(x-w/2+sx,yy-12*s,3*s,20*s);g.fillStyle='#1A1A2E';g.textAlign='center';g.fillText(text,x+sx+2*s,yy+2*s);g.textAlign='left';}
+function drawBubbles(t){
+  // 자재 대기: 서버(/api/campus hall.machines)가 준 since 부터 센다. 사라지지 않는 말풍선이라 시간 경과가 아닌 값으로 그린다.
+  M.forEach(m=>{if(!m.short||m.st!=='running'||!m._top)return;const [x,y]=m._top,s=Math.max(Z,.7);
+    paintBubble(x,y-46*Z,s,`자재 대기 ${Math.max(0,Math.floor((srvNow()-m.short)/60000))}분`,'#C9A227',0);});
+  for(let i=bubbles.length-1;i>=0;i--){const b=bubbles[i],age=(t-b.t0)/2600;if(age>1){bubbles.splice(i,1);continue;}if(!b.m._top)continue;
   const [x,y]=b.m._top;const s=Math.max(Z,.7);const yy=y-62*Z-age*28*s;const sx=b.shake&&age<.3?Math.sin(age*90)*4*s:0;
-  g.globalAlpha=age<.1?age*10:age>.75?(1-age)*4:1;g.font=`700 ${11*s}px Pretendard`;const w=g.measureText(b.text).width+16*s;
-  g.fillStyle='#fff';g.fillRect(x-w/2+sx,yy-12*s,w,20*s);g.fillStyle=b.color;g.fillRect(x-w/2+sx,yy-12*s,3*s,20*s);g.fillStyle='#1A1A2E';g.textAlign='center';g.fillText(b.text,x+sx+2*s,yy+2*s);g.textAlign='left';g.globalAlpha=1;}}
+  g.globalAlpha=age<.1?age*10:age>.75?(1-age)*4:1;paintBubble(x,yy,s,b.text,b.color,sx);g.globalAlpha=1;}}
 // 작업자·지게차 움직임. 수리 작업이 끝나면 HOOK.repaired 로 서버에 수리 명령을 보낸다.
 function updateHall(dt,t){
   workers.forEach((w,i)=>{if(w.job){const m=w.job.m;w.tx=m.x;w.ty=m.row===0?m.y+1.05:m.y-1.05;}
