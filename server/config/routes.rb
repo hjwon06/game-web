@@ -24,6 +24,7 @@ Rails.application.routes.draw do
   post "setup", to: "setup#create"
 
   get "campus", to: "home#campus"
+  get "campus3d", to: "home#campus3d"
 
   get "v/:ver/*path", to: "static#show", format: false
 

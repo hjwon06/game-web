@@ -6,7 +6,8 @@ class HomeController < ApplicationController
   ROOT = Rails.root.join("..").expand_path.freeze
   INDEX = ROOT.join("index.html").freeze
   CAMPUS = ROOT.join("campus.html").freeze
-  VERSIONED = ["index.html", "campus.html", "styles.css", "src/*.js", "src/campus/*.js", "data/*.json"].freeze
+  CAMPUS3D = ROOT.join("campus3d.html").freeze
+  VERSIONED = ["index.html", "campus.html", "campus3d.html", "styles.css", "src/*.js", "src/campus/*.js", "src/c3d/*.js", "data/*.json"].freeze
 
   # 기동 시 1회 계산해 둔다(개발 환경은 파일을 고치며 쓰므로 매 요청 다시 계산).
   def self.version
@@ -26,6 +27,11 @@ class HomeController < ApplicationController
   # 단지 화면. 같은 방식으로 base 를 넣어 src/campus/*.js 도 /v/{VER}/ 아래에서 읽힌다.
   def campus
     render_with_base CAMPUS
+  end
+
+  # 3D 단지 화면. base 방식은 campus 와 같고 src/c3d/*.js 가 /v/{VER}/ 아래에서 읽힌다.
+  def campus3d
+    render_with_base CAMPUS3D
   end
 
   private
