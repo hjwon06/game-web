@@ -5,7 +5,8 @@
 class HomeController < ApplicationController
   ROOT = Rails.root.join("..").expand_path.freeze
   INDEX = ROOT.join("index.html").freeze
-  VERSIONED = ["index.html", "styles.css", "src/*.js", "data/*.json"].freeze
+  CAMPUS = ROOT.join("campus.html").freeze
+  VERSIONED = ["index.html", "campus.html", "styles.css", "src/*.js", "src/campus/*.js", "data/*.json"].freeze
 
   # 기동 시 1회 계산해 둔다(개발 환경은 파일을 고치며 쓰므로 매 요청 다시 계산).
   def self.version
@@ -19,8 +20,19 @@ class HomeController < ApplicationController
   end
 
   def show
+    render_with_base INDEX
+  end
+
+  # 단지 화면. 같은 방식으로 base 를 넣어 src/campus/*.js 도 /v/{VER}/ 아래에서 읽힌다.
+  def campus
+    render_with_base CAMPUS
+  end
+
+  private
+
+  def render_with_base(file)
     base = %(<base href="/v/#{self.class.version}/">)
-    html = INDEX.read.sub(/<head[^>]*>/i) { "#{$&}\n  #{base}" }
+    html = file.read.sub(/<head[^>]*>/i) { "#{$&}\n  #{base}" }
     render html: html.html_safe, layout: false
   end
 end

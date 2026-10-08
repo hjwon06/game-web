@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>공장 단지</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#DCE1DD;font-family:Pretendard,sans-serif;color:#1A1A2E;word-break:keep-all}
+canvas{display:block;cursor:grab}
+canvas.drag{cursor:grabbing}
+.pop{position:fixed;width:250px;background:#fff;border-radius:8px;padding:12px 14px;border:2px solid #1A1A2E;transition:opacity .15s}
+.pop.hide{opacity:0;pointer-events:none}
+.pop .hd{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+.pop .c{font-weight:800;font-size:16px}
+.pop .tag{margin-left:auto;font-size:10.5px;color:#6B7280;border:1px solid #E5E7EB;border-radius:4px;padding:1px 6px}
+.pop .row{display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:5px 0;border-top:1px solid #F1F2F4}
+.pop .row b{font-family:Outfit;font-weight:600;text-align:right}
+.pop .note{font-size:11px;color:#9CA3AF;margin-top:6px}
+.pop button{width:100%;height:32px;margin-top:8px;border-radius:4px;border:1px solid #1A1A2E;background:#1A1A2E;color:#fff;font:600 12.5px Pretendard;cursor:pointer;transition:transform .15s}
+.pop button:hover{transform:translateY(-2px)}
+.pop .btns{display:flex;gap:6px}
+.pop .btns button{background:#fff;color:#1A1A2E;border-color:#E5E7EB}
+.pop .btns button.pri{background:#1A1A2E;color:#fff;border-color:#1A1A2E}
+.pop .btns button:disabled{color:#B8BEC6;background:#F7F8F9;cursor:default}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="pop hide" id="pop"></div>
+<script src="src/campus/campus_data.js"></script>
+<script src="src/campus/campus_world.js"></script>
+<script src="src/campus/campus_hall.js"></script>
+<script src="src/campus/campus_flow.js"></script>
+<script type="module" src="src/campus/campus_pop.js"></script>
+</body>
+</html>

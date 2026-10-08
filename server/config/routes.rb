@@ -23,6 +23,8 @@ Rails.application.routes.draw do
   get "setup", to: "setup#new"
   post "setup", to: "setup#create"
 
+  get "campus", to: "home#campus"
+
   get "v/:ver/*path", to: "static#show", format: false
 
   root "home#show"
