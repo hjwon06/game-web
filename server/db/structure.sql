@@ -39,6 +39,20 @@ END;
 $$;
 
 
+--
+-- Name: tasks_assign_seq(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.tasks_assign_seq() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+      BEGIN
+        NEW.seq := nextval('tasks_seq');
+        RETURN NEW;
+      END;
+      $$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -176,7 +190,13 @@ CREATE TABLE public.locations (
     role character varying,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT locations_kind_check CHECK (((kind)::text = ANY ((ARRAY['physical'::character varying, 'virtual'::character varying])::text[])))
+    parent_id bigint,
+    level character varying,
+    capacity_units integer,
+    CONSTRAINT locations_capacity_units_check CHECK (((capacity_units IS NULL) OR (capacity_units > 0))),
+    CONSTRAINT locations_kind_check CHECK (((kind)::text = ANY ((ARRAY['physical'::character varying, 'virtual'::character varying])::text[]))),
+    CONSTRAINT locations_level_check CHECK (((level IS NULL) OR ((level)::text = ANY ((ARRAY['warehouse'::character varying, 'zone'::character varying, 'rack'::character varying, 'bin'::character varying])::text[])))),
+    CONSTRAINT locations_parent_not_self_check CHECK (((parent_id IS NULL) OR (parent_id <> id)))
 );
 
 
@@ -409,6 +429,40 @@ ALTER SEQUENCE public.quants_id_seq OWNED BY public.quants.id;
 
 
 --
+-- Name: resources; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.resources (
+    id bigint NOT NULL,
+    kind character varying NOT NULL,
+    code character varying NOT NULL,
+    home_location_id bigint,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT resources_kind_check CHECK (((kind)::text = ANY ((ARRAY['forklift'::character varying, 'dock_in'::character varying, 'dock_out'::character varying, 'worker'::character varying])::text[])))
+);
+
+
+--
+-- Name: resources_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.resources_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: resources_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.resources_id_seq OWNED BY public.resources.id;
+
+
+--
 -- Name: sales_order_lines; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -561,6 +615,70 @@ ALTER SEQUENCE public.stock_moves_id_seq OWNED BY public.stock_moves.id;
 
 
 --
+-- Name: tasks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tasks (
+    id bigint NOT NULL,
+    kind character varying NOT NULL,
+    status character varying DEFAULT 'planned'::character varying NOT NULL,
+    resource_id bigint,
+    product_id bigint NOT NULL,
+    lot_id bigint,
+    qty numeric(14,3) NOT NULL,
+    from_location_id bigint NOT NULL,
+    to_location_id bigint NOT NULL,
+    planned_at timestamp(6) without time zone NOT NULL,
+    started_at timestamp(6) without time zone,
+    finished_at timestamp(6) without time zone,
+    stock_move_id bigint,
+    ref_type character varying,
+    ref_id bigint,
+    seq bigint NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT tasks_finished_at_check CHECK ((((status)::text <> 'done'::text) OR (finished_at IS NOT NULL))),
+    CONSTRAINT tasks_kind_check CHECK (((kind)::text = ANY ((ARRAY['unload'::character varying, 'putaway'::character varying, 'pick'::character varying, 'feed'::character varying, 'inspect'::character varying, 'load'::character varying])::text[]))),
+    CONSTRAINT tasks_locations_differ_check CHECK ((from_location_id <> to_location_id)),
+    CONSTRAINT tasks_qty_check CHECK ((qty > (0)::numeric)),
+    CONSTRAINT tasks_started_at_check CHECK ((((status)::text <> ALL ((ARRAY['started'::character varying, 'done'::character varying])::text[])) OR (started_at IS NOT NULL))),
+    CONSTRAINT tasks_status_check CHECK (((status)::text = ANY ((ARRAY['planned'::character varying, 'started'::character varying, 'done'::character varying, 'cancelled'::character varying])::text[]))),
+    CONSTRAINT tasks_stock_move_done_check CHECK (((stock_move_id IS NULL) OR ((status)::text = 'done'::text)))
+);
+
+
+--
+-- Name: tasks_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.tasks_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: tasks_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.tasks_id_seq OWNED BY public.tasks.id;
+
+
+--
+-- Name: tasks_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.tasks_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
 -- Name: users; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -706,6 +824,13 @@ ALTER TABLE ONLY public.quants ALTER COLUMN id SET DEFAULT nextval('public.quant
 
 
 --
+-- Name: resources id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.resources ALTER COLUMN id SET DEFAULT nextval('public.resources_id_seq'::regclass);
+
+
+--
 -- Name: sales_order_lines id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -731,6 +856,13 @@ ALTER TABLE ONLY public.sessions ALTER COLUMN id SET DEFAULT nextval('public.ses
 --
 
 ALTER TABLE ONLY public.stock_moves ALTER COLUMN id SET DEFAULT nextval('public.stock_moves_id_seq'::regclass);
+
+
+--
+-- Name: tasks id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tasks ALTER COLUMN id SET DEFAULT nextval('public.tasks_id_seq'::regclass);
 
 
 --
@@ -836,6 +968,14 @@ ALTER TABLE ONLY public.quants
 
 
 --
+-- Name: resources resources_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.resources
+    ADD CONSTRAINT resources_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: sales_order_lines sales_order_lines_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -873,6 +1013,14 @@ ALTER TABLE ONLY public.sessions
 
 ALTER TABLE ONLY public.stock_moves
     ADD CONSTRAINT stock_moves_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tasks tasks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tasks
+    ADD CONSTRAINT tasks_pkey PRIMARY KEY (id);
 
 
 --
@@ -948,6 +1096,13 @@ CREATE UNIQUE INDEX index_locations_on_code ON public.locations USING btree (cod
 
 
 --
+-- Name: index_locations_on_parent_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_locations_on_parent_id ON public.locations USING btree (parent_id);
+
+
+--
 -- Name: index_lots_on_lot_no; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1008,6 +1163,20 @@ CREATE INDEX index_quants_on_lot_id ON public.quants USING btree (lot_id);
 --
 
 CREATE UNIQUE INDEX index_quants_unique_slot ON public.quants USING btree (product_id, COALESCE(lot_id, (0)::bigint), location_id);
+
+
+--
+-- Name: index_resources_on_code; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_resources_on_code ON public.resources USING btree (code);
+
+
+--
+-- Name: index_resources_on_home_location_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_resources_on_home_location_id ON public.resources USING btree (home_location_id);
 
 
 --
@@ -1081,6 +1250,34 @@ CREATE INDEX index_stock_moves_on_to_location_id ON public.stock_moves USING btr
 
 
 --
+-- Name: index_tasks_on_resource_id_and_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_tasks_on_resource_id_and_status ON public.tasks USING btree (resource_id, status);
+
+
+--
+-- Name: index_tasks_on_seq; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_tasks_on_seq ON public.tasks USING btree (seq);
+
+
+--
+-- Name: index_tasks_on_status_and_planned_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_tasks_on_status_and_planned_at ON public.tasks USING btree (status, planned_at);
+
+
+--
+-- Name: index_tasks_on_stock_move_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_tasks_on_stock_move_id ON public.tasks USING btree (stock_move_id);
+
+
+--
 -- Name: index_users_on_name; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1141,6 +1338,13 @@ CREATE TRIGGER stock_moves_no_truncate BEFORE TRUNCATE ON public.stock_moves FOR
 --
 
 CREATE TRIGGER stock_moves_no_update_delete BEFORE DELETE OR UPDATE ON public.stock_moves FOR EACH ROW EXECUTE FUNCTION public.stock_moves_append_only();
+
+
+--
+-- Name: tasks tasks_assign_seq; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tasks_assign_seq BEFORE INSERT OR UPDATE ON public.tasks FOR EACH ROW EXECUTE FUNCTION public.tasks_assign_seq();
 
 
 --
@@ -1344,12 +1548,79 @@ ALTER TABLE ONLY public.sales_order_lines
 
 
 --
+-- Name: locations fk_locations_parent; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.locations
+    ADD CONSTRAINT fk_locations_parent FOREIGN KEY (parent_id) REFERENCES public.locations(id);
+
+
+--
+-- Name: resources fk_resources_home_location; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.resources
+    ADD CONSTRAINT fk_resources_home_location FOREIGN KEY (home_location_id) REFERENCES public.locations(id);
+
+
+--
+-- Name: tasks fk_tasks_from_location; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tasks
+    ADD CONSTRAINT fk_tasks_from_location FOREIGN KEY (from_location_id) REFERENCES public.locations(id);
+
+
+--
+-- Name: tasks fk_tasks_lot; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tasks
+    ADD CONSTRAINT fk_tasks_lot FOREIGN KEY (lot_id) REFERENCES public.lots(id);
+
+
+--
+-- Name: tasks fk_tasks_product; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tasks
+    ADD CONSTRAINT fk_tasks_product FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+
+--
+-- Name: tasks fk_tasks_resource; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tasks
+    ADD CONSTRAINT fk_tasks_resource FOREIGN KEY (resource_id) REFERENCES public.resources(id);
+
+
+--
+-- Name: tasks fk_tasks_stock_move; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tasks
+    ADD CONSTRAINT fk_tasks_stock_move FOREIGN KEY (stock_move_id) REFERENCES public.stock_moves(id);
+
+
+--
+-- Name: tasks fk_tasks_to_location; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tasks
+    ADD CONSTRAINT fk_tasks_to_location FOREIGN KEY (to_location_id) REFERENCES public.locations(id);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20261010000003'),
+('20261010000002'),
+('20261010000001'),
 ('20261009000001'),
 ('20261008000010'),
 ('20261008000009'),

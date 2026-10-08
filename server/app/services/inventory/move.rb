@@ -5,7 +5,8 @@ module Inventory
     class InvalidPath < StandardError; end
 
     # move_type => [from 위치 code, to 위치 code]. 8번째 유형 추가 금지(StockMove::MOVE_TYPES 도 7개 동결).
-    # 위치는 고정 9개다(Location::DEFAULTS). 경로는 code 로 가르고, kind 도 그 9개의 kind 와 같아야 한다.
+    # 경로는 위치의 구역 code 로 가른다(Location#zone_code): 자기 자신이나 조상 중 raw_store/fg_store/receiving/qc/shipping,
+    # 가상 위치는 자기 code. 그래서 raw_store 아래 칸(bin)도 raw_store 로 취급한다. kind 는 구역 루트(Location::DEFAULTS)의 kind 와 같아야 한다.
     ALLOWED_PATHS = {
       "receive" => %w[supplier receiving],
       "putaway" => %w[receiving raw_store],
@@ -50,6 +51,9 @@ module Inventory
 
       # savepoint 로 감싼다. 바깥 트랜잭션(Backflush 등) 안에서 유니크 위반이 나도 바깥은 살아 있다.
       StockMove.transaction(requires_new: true) do
+        # 용량 있는 칸은 같은 칸으로 들어오는 이동끼리 직렬화한다. 품목이 다르면 quants 행이 달라 행 잠금만으로는 합계를 지킬 수 없다.
+        # FOR NO KEY UPDATE 는 FK 검사(KEY SHARE)와 충돌하지 않는다. 한 이동이 잡는 위치 잠금은 도착지 하나라 교착 고리가 없다.
+        capacity = lock_capacity
         quants = lock_quants
         # 잠금을 잡은 뒤 다시 본다. 같은 키가 동시에 오면 뒤 요청은 여기서 앞 요청의 결과를 본다.
         existing = StockMove.find_by(idempotency_key: @key)
@@ -57,6 +61,7 @@ module Inventory
 
         from_quant = quants.fetch(@from.id)
         reject_insufficient!(from_quant) if @from.physical? && from_quant.qty < @qty
+        check_capacity!(capacity) if capacity
 
         move = StockMove.create!(
           product: @product, lot: @lot, from_location: @from, to_location: @to, qty: @qty,
@@ -86,9 +91,12 @@ module Inventory
       raise ArgumentError, "qty 는 0보다 커야 한다: #{@qty}" unless @qty.positive?
 
       path = ALLOWED_PATHS[@move_type] or raise InvalidPath, "알 수 없는 move_type: #{@move_type}"
-      kinds_ok = [@from, @to].all? { |loc| KIND_BY_CODE[loc.code] == loc.kind }
-      unless [@from.code, @to.code] == path && kinds_ok
-        raise InvalidPath, "#{@move_type} 는 #{path.join('→')} 만 허용한다 (요청: #{@from.code}(#{@from.kind})→#{@to.code}(#{@to.kind}))"
+      from_zone = @from.zone_code
+      to_zone = @to.zone_code
+      kinds_ok = [[from_zone, @from], [to_zone, @to]].all? { |zone, loc| KIND_BY_CODE[zone] == loc.kind }
+      unless [from_zone, to_zone] == path && kinds_ok
+        raise InvalidPath, "#{@move_type} 는 #{path.join('→')} 만 허용한다 " \
+                           "(요청: #{@from.code}[#{from_zone}](#{@from.kind})→#{@to.code}[#{to_zone}](#{@to.kind}))"
       end
 
       if @lot && @lot.product_id != @product.id
@@ -109,6 +117,26 @@ module Inventory
       end
       Quant.where(product_id: @product.id, lot_id: @lot&.id, location_id: locations.map(&:id))
            .order(:location_id).lock.to_a.index_by(&:location_id)
+    end
+
+    # 도착지가 용량을 가질 때만 위치 행을 잠그고 잠근 뒤의 값을 돌려준다(없으면 nil). 잠금 뒤에 다시 읽어 용량 변경도 반영한다.
+    def lock_capacity
+      return nil unless @to.capacity_units
+
+      Location.where(id: @to.id).lock("FOR NO KEY UPDATE").pick(:capacity_units)
+    end
+
+    # 칸 안의 모든 품목·로트 현재고 합(단위 무관 qty 합) + 이번 수량이 용량을 넘으면 거부.
+    def check_capacity!(capacity)
+      on_hand = Quant.where(location_id: @to.id).sum(:qty)
+      return if on_hand + @qty <= capacity
+
+      Rails.logger.warn({
+        event: "inventory.move.rejected", reason: "capacity_exceeded", move_type: @move_type,
+        product_id: @product.id, lot_id: @lot&.id, from: @from.code, to: @to.code,
+        requested: @qty.to_s("F"), on_hand: on_hand.to_s("F"), capacity: capacity, idempotency_key: @key
+      }.to_json)
+      raise CapacityExceeded, "#{@to.code} 용량 초과: 용량 #{capacity} / 보유 #{on_hand.to_s('F')} / 요청 #{@qty.to_s('F')}"
     end
 
     def reject_insufficient!(from_quant)
