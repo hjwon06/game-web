@@ -1,11 +1,32 @@
 import * as THREE from 'three';
-import { BUILDINGS, DOCKS } from './layout.js';
+import { BUILDINGS, OPEN_WALL } from './layout.js';
 
 export const BLUE = 0x2563EB;
 
 const wall = new THREE.MeshStandardMaterial({ color: 0xF8FAFC, roughness: .9 });
 const band = new THREE.MeshStandardMaterial({ color: BLUE, roughness: .7 });
-const door = new THREE.MeshStandardMaterial({ color: 0x1A1A2E, roughness: .6 });
+
+function add(g, w, h, d, x, y, z, m) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+  mesh.position.set(x, y, z);
+  mesh.castShadow = mesh.receiveShadow = true;
+  g.add(mesh);
+}
+
+// 지붕 없는 건물: 바닥 위에 벽 네 면만 세우고 윗단에 블루 띠를 두른다(내부가 보인다)
+function openShell(g, b) {
+  const t = .2, h = OPEN_WALL;
+  add(g, b.w, h, t, 0, h / 2, -b.d / 2 + t / 2, wall); // 북
+  add(g, b.w, h, t, 0, h / 2, b.d / 2 - t / 2, wall);  // 남(도크 문이 붙는다)
+  add(g, t, h, b.d - 2 * t, -b.w / 2 + t / 2, h / 2, 0, wall);
+  add(g, t, h, b.d - 2 * t, b.w / 2 - t / 2, h / 2, 0, wall);
+  // 윗단 블루 띠(테두리 네 줄 — 가운데는 비워 둔다)
+  const r = .16, y = h + r / 2;
+  add(g, b.w + .06, r, t + .06, 0, y, -b.d / 2 + t / 2, band);
+  add(g, b.w + .06, r, t + .06, 0, y, b.d / 2 - t / 2, band);
+  add(g, t + .06, r, b.d - 2 * t, -b.w / 2 + t / 2, y, 0, band);
+  add(g, t + .06, r, b.d - 2 * t, b.w / 2 - t / 2, y, 0, band);
+}
 
 export function createBuildings() {
   const group = new THREE.Group();
@@ -15,7 +36,9 @@ export function createBuildings() {
     const g = new THREE.Group();
     g.name = b.id;
     g.position.set(b.x + b.w / 2, 0, b.y + b.d / 2);
-    g.userData = { id: b.id, name: b.name, real: b.real, api: b.api || null, kind: 'building' };
+    g.userData = { id: b.id, name: b.name, real: b.real, api: b.api || null, kind: 'building', open: !!b.open };
+
+    if (b.open) { openShell(g, b); group.add(g); return; }
 
     const body = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, b.d), wall);
     body.position.y = b.h / 2;
@@ -36,19 +59,6 @@ export function createBuildings() {
     g.add(roof);
 
     group.add(g);
-  });
-
-  // 도크 문 자리 표시(문 모델은 3D-②): 남쪽 면에 어두운 판
-  DOCKS.forEach(d => {
-    const b = BUILDINGS.find(x => x.id === d.building);
-    const host = group.getObjectByName(d.building);
-    d.slots.forEach(s => {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(s.w, Math.min(2.4, b.h * .6)), door);
-      const h = Math.min(2.4, b.h * .6);
-      m.position.set(s.x + s.w / 2 - host.position.x, h / 2, b.d / 2 + .08);
-      m.name = 'dock-door';
-      host.add(m);
-    });
   });
 
   return group;
