@@ -88,7 +88,7 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
     assert_equal [5400], SalesOrderLine.pluck(:ordered_qty) # 18000 x 0.3 = 5400 → 5400
   end
 
-  test "실측 규모(30분 양품 600): 수주 1건, 수량 > 0, ORDER_UNIT 의 배수" do
+  test "실측 규모(30분 양품 610): 수주 1건, 수량 > 0, ORDER_UNIT 의 배수" do
     produce_history(610) # 610 x 0.3 = 183 → 180
     assert_equal 1, run_minute(0)[:order]
 
@@ -140,6 +140,39 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
       assert_equal [expected] * k, lines.map(&:ordered_qty), "k=#{k}"
     end
     assert_not_empty seen
+  end
+
+  test "두 품목이 함께 골렸는데 한 품목이 보정·내림 후 0 이면 그 줄만 빠지고 수주는 1건 만들어진다" do
+    fg_b = Product.create!(sku: "FG-B", name: "품목B", uom: "ea", kind: "fg")
+    machine_b = Machine.create!(code: "M2", name: "기계2", state: "running")
+    order_b = WorkOrder.create!(code: "WO-F2", machine: machine_b, item: fg_b, product: "품목B", target_qty: 100_000,
+                                status: "active", started_at: M0)
+    # 룩백(30분)에 M0-10분 구간 하나만 들어가는 분은 0..20 이다.
+    ProductionEvent.create!(machine: @machine, work_order: @order, bucket_start: M0 - 600, bucket_end: M0 - 590,
+                            good_qty: 610, defect_qty: 0, machine_version: 0)
+    ProductionEvent.create!(machine: machine_b, work_order: order_b, bucket_start: M0 - 600, bucket_end: M0 - 590,
+                            good_qty: 10, defect_qty: 0, machine_version: 0)
+
+    # 수요 품목 n=2, 기본 수요: A = 610 x 0.3 = 183, B = 10 x 0.3 = 3
+    #   k=2 (둘 다 골림, 보정 2/2=1): A = 183 → 180, B = 3 → 0  → 줄 1개(A 180), B 줄은 필터로 빠진다
+    #   k=1 (하나만 골림, 보정 2/1=2): A = 366 → 360 (줄 1개), B = 6 → 0 (줄 없음 → 수주 0)
+    # 필터가 없으면 k=2 분에 B 의 ordered_qty 0 줄이 DB 체크 제약에 걸려 수주가 롤백되고(step 이 예외를 삼켜 수주 0),
+    # 180 짜리 수주는 한 번도 나오지 않는다. 180 은 보정이 1일 때, 즉 두 품목이 함께 골렸을 때만 나오는 수량이다.
+    both_picked = []
+    (0..20).each do |m|
+      SalesOrderLine.delete_all
+      SalesOrder.delete_all
+      run_minute(m)
+      lines = SalesOrderLine.all.to_a
+      next if lines.empty?
+
+      assert_equal 1, SalesOrder.count, "분 #{m}"
+      assert_equal [@fg.id], lines.map(&:product_id), "분 #{m}: 0 이 되는 B 는 줄이 없다"
+      assert_includes [180, 360], lines.first.ordered_qty, "분 #{m}"
+      both_picked << m if lines.first.ordered_qty == 180
+    end
+    puts "[3d6d2] 두 품목이 함께 골린 분: #{both_picked.inspect}" if ENV["VERBOSE_3D6D2"]
+    assert_not_empty both_picked, "0..20분 중 두 품목이 함께 골린 분이 없으면 이 테스트는 필터를 지키지 못한다"
   end
 
   test "생산이 0 이면 수주도 0 이다" do
