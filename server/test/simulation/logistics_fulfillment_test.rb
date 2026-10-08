@@ -91,7 +91,8 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
   end
 
   test "검사는 같은 분에 다시 불려도 늘지 않고 새 도착분만 다음 분에 검사한다" do
-    event(100, 0)
+    # 생산 good 을 qc 도착량(50)과 같게 둔다. 100 이면 B1 백플러시가 차액 50 을 따로 만들어 검사량이 섞인다
+    event(50, 0)
     produce_to_qc(50, M0 - 300)
     run_minute(0)
     before = StockMove.count
