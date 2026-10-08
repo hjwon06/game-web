@@ -337,8 +337,26 @@ class InspectionTest < ActiveSupport::TestCase
 
   def live_putaway_qtys = putaways.where.not(status: "cancelled").map { |t| t.qty.to_i }
 
+  # minitest 6 에는 Object#stub 이 없다(minitest/mock 분리). Ops::Plan.call 호출을 센다 — 0 이어야 한다.
+  module PlanCallCounter
+    def call(**kw)
+      PlanCallCounter.calls += 1 if PlanCallCounter.armed
+      super
+    end
+    class << self
+      attr_accessor :calls, :armed
+    end
+  end
+  Ops::Plan.singleton_class.prepend(PlanCallCounter)
+
   def plan_without_plan_calls
-    Ops::Plan.stub(:call, ->(**) { flunk "Ops::Plan 을 부르면 안 된다" }) { plan }
+    PlanCallCounter.calls = 0
+    PlanCallCounter.armed = true
+    result = plan
+    assert_equal 0, PlanCallCounter.calls, "Ops::Plan 을 부르면 안 된다"
+    result
+  ensure
+    PlanCallCounter.armed = false
   end
 
   test "6e: 검사 기록 합 > qc 실재고면 오래된 검사부터 실재고만큼만 적치하고, 나머지는 Plan 호출·예외 없이 종결해 다시 보지 않는다" do
