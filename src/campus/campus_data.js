@@ -68,9 +68,10 @@ function applyCampus(c,same){
   if(!c||!c.buildings||!Array.isArray(c.moves))throw new Error('/api/campus 모양이 맞지 않음');
   S.c=c;S.note=c.sim_note||'';
   if(same)return; // 304: 이미 처리한 이동
-  if(S.lastId!=null)enqueueMoves(c.moves); // 첫 응답은 지난 기록이라 움직이지 않는다
-  S.recent=S.recent.concat(c.moves).slice(-30);
-  S.lastId=c.last_move_id;
+  const seen=S.lastId,fresh=seen==null?c.moves:c.moves.filter(mv=>mv.id>seen); // 이미 본 id 이하는 다시 넣지 않는다
+  if(seen!=null)enqueueMoves(fresh); // 첫 응답은 지난 기록이라 움직이지 않는다
+  S.recent=S.recent.concat(fresh).slice(-30);
+  if(typeof c.last_move_id==='number')S.lastId=seen==null?c.last_move_id:Math.max(seen,c.last_move_id); // 단조 증가만
 }
 let busy=false;
 async function poll(){

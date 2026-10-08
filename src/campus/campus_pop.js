@@ -33,7 +33,7 @@ function draw(t){
 
 // ===================== 설비 조작 =====================
 async function send(m,k){
-  m.busy=true;renderPop();
+  m.busy=true;m.err=false;renderPop();
   try{
     await refreshNow(); // 서버 행 버전을 최신으로 (base_version)
     const st=getState(),sm=st&&st.machines.find(x=>x.id===m.code);
@@ -46,7 +46,8 @@ async function send(m,k){
     else if(r.status===409)bubble(m,`${KN[k]} 거절 · 409 버전 충돌${r.machine?` (이미 v${r.machine.version})`:''}`,'#C0392B',true);
     else if(r.status===0)bubble(m,`${KN[k]} 실패 · 서버에 닿지 않음`,'#C0392B',true);
     else bubble(m,`${KN[k]} 거절 · ${r.status}`,'#C0392B',true);
-  }finally{m.busy=false;poll();renderPop();}
+  }catch(e){m.err=true;bubble(m,'연결 실패 — 상태를 다시 읽는 중','#C0392B',true);}
+  finally{m.busy=false;renderPop();poll().then(()=>{if(!S.err)m.err=false;renderPop();});} // /api/hud 를 다시 읽어 카드를 맞춘다
 }
 function command(m,k){
   const ok={repair:'broken',start:'stopped',stop:'running'}[k];if(m.st!==ok||m.busy||workers.some(w=>w.job&&w.job.m===m))return;
@@ -56,7 +57,11 @@ function command(m,k){
 }
 HOOK.repaired=m=>send(m,'repair'); // 작업자가 도착해 손본 뒤에 서버로 보낸다
 HOOK.change=()=>renderPop();
-async function loadVersion(m){await refreshNow();const st=getState(),sm=st&&st.machines.find(x=>x.id===m.code);if(sm&&m.v!==sm.version){m.v=sm.version;renderPop();}}
+async function loadVersion(m){
+  try{await refreshNow();const st=getState(),sm=st&&st.machines.find(x=>x.id===m.code);if(sm&&m.v!==sm.version){m.v=sm.version;renderPop();}}
+  catch(e){m.err=true;renderPop();}
+  finally{poll().then(()=>{if(!S.err)m.err=false;renderPop();});}
+}
 
 // ===================== 입력 =====================
 let drag=null;
@@ -84,9 +89,9 @@ function buildingCard(b){
   if(!d)rows='<div class="note">불러오는 중</div>';
   else if(b.id==='office'){rows=row('대기 수주',d.orders.open)+row('부분 출하',d.orders.partial)+row('완료',d.orders.done)
     +d.recent.map(o=>row(`${o.so_no} · ${o.customer}`,o.status)).join('');}
-  else if(b.id==='mat'){const lastRecv=S.recent.slice().reverse().find(mv=>mv.type==='receive');
-    rows=d.raw_store.map(r=>row(`${r.name}`,fmt(r.qty))).join('')+row('입고대',fmt(d.receiving_qty))+row('10분 입고 트럭',`${d.received_trucks_10m}대`)
-      +row('최근 트럭',lastRecv?`${lastRecv.product} ${fmt(lastRecv.qty)} · ${clock(lastRecv.at)}`:'없음');}
+  else if(b.id==='mat'){const n=d.received_trucks_10m; // 트럭 표시는 이 값 하나에서만 만든다(이동 기록과 섞지 않음)
+    rows=d.raw_store.map(r=>row(`${r.name}`,fmt(r.qty))).join('')+row('입고대',fmt(d.receiving_qty))+row('10분 입고 트럭',`${n}대`)
+      +row('최근 트럭',n>0?`10분 안에 ${n}대 입고`:'없음');}
   else if(b.id==='qc'){const r=d.defect_ratio_60m;rows=row('검사 대기',fmt(d.qty))+row('양품 (60분)',fmt(d.pass_60m))+row('불량 (60분)',fmt(d.fail_60m))+row('불량률',r==null?'-':(r*100).toFixed(2)+'%');}
   else if(b.id==='ship'){rows=d.fg_store.map(r=>row(`${r.name}`,fmt(r.qty))).join('')+row('출하 (60분)',fmt(d.shipped_60m))+row('부분 출하 수주',d.partial_orders);}
   return `<div class="hd"><span class="c">${esc(b.name)}</span><span class="tag">실데이터</span></div>${rows}<div class="note">${esc(S.note)}</div>`;
@@ -96,7 +101,7 @@ function machineCard(m){
   const prim=m.st==='broken'?'repair':m.st==='stopped'?'start':'stop',lock=working||m.busy;
   return `<div class="hd"><span class="c">${m.code} ${m.name}</span><span class="tag" style="color:${STC[m.st]}">${working?'수리 중':STL[m.st]}</span></div>
      ${m.wo?row(`${m.wo[0]} · ${m.wo[1]}`,(p*100).toFixed(1)+'%'):row('작업지시','없음')}${row('행 버전',m.v==null?'-':'v'+m.v)}
-     <div class="btns">${['repair','start','stop'].map(k=>`<button class="${prim===k?'pri':''}" data-k="${k}" ${prim!==k||lock?'disabled':''}>${KN[k]}</button>`).join('')}</div>`;
+     <div class="btns">${['repair','start','stop'].map(k=>`<button class="${prim===k?'pri':''}" data-k="${k}" ${prim!==k||lock?'disabled':''}>${KN[k]}</button>`).join('')}</div>${m.err?'<div class="note">연결 실패 — 상태를 다시 읽는 중</div>':''}`;
 }
 function renderPop(){
   let html=null,m=null;

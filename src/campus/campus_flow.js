@@ -20,7 +20,9 @@ const polyLen=pts=>pts.slice(1).reduce((s,p,i)=>s+Math.hypot(p[0]-pts[i][0],p[1]
 function along(pts,len,u){let d=u*len;for(let i=0;i<pts.length-1;i++){const a=pts[i],b=pts[i+1],l=Math.hypot(b[0]-a[0],b[1]-a[1]);if(d<=l&&l>0)return[a[0]+(b[0]-a[0])*d/l,a[1]+(b[1]-a[1])*d/l];d-=l;}return pts[pts.length-1];}
 
 function enqueueMoves(ms){
-  ms.forEach(mv=>{QUEUE.push(mv);if(mv.type==='ship')S.shipAt.push(performance.now());});
+  const now=performance.now();
+  while(S.shipAt.length&&now-S.shipAt[0]>DOCK_MS)S.shipAt.shift(); // 탭이 숨겨져 rAF 가 멈춰도 길이가 커지지 않게 추가할 때 같이 정리
+  ms.forEach(mv=>{QUEUE.push(mv);if(mv.type==='ship')S.shipAt.push(now);});
   while(QUEUE.length>QUEUE_MAX)QUEUE.shift();
 }
 function spawn(mv,t){
