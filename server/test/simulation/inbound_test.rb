@@ -42,16 +42,6 @@ class InboundTest < ActiveSupport::TestCase
     InboundState.create!(next_truck_at: NOW + 1.day)
   end
 
-  # 발주를 내고 트럭이 그 자리에서 도착하게 해(expected_at = at) 하차 계획까지 만든다.
-  # 돌려주는 값은 예전 "트럭 도착" 호출 결과와 같은 모양이다: { trucks: 낸 발주 수, unload: 계획한 하차 수 }.
-  def truck!(at)
-    due!(at)
-    ordered = inbound(at)
-    PurchaseOrder.where(status: "confirmed").update_all(expected_at: at)
-    arrived = inbound(at)
-    { trucks: ordered[:orders], unload: arrived[:unload], arrived: arrived[:arrived] }
-  end
-
   # 발주 라인 순서대로 자재 sku. 발주할 때 고른 자재를 본다.
   def ordered_skus = PurchaseOrderLine.order(:id).includes(:product).map { |l| l.product.sku }
 
@@ -570,12 +560,14 @@ class InboundTest < ActiveSupport::TestCase
     assert_match(/coverage\[RAW-S=10\.0min RAW-B=0\.0min\] demand_per_min=141\.1 supply_per_min=0\.0 supply\/demand=0\.0/, line)
   end
 
-  test "소비가 없으면(기계 정지) 트럭이 오지 않는다" do
+  test "소비가 없으면(기계 정지) 발주도 트럭도 없다" do
     @machine.update!(state: "stopped")
     due!(NOW)
 
-    assert_equal 0, inbound(NOW)[:trucks]
+    assert_equal 0, inbound(NOW)[:orders]
+    assert_equal 0, PurchaseOrder.count
     assert_equal 0, Task.count
+    assert_operator InboundState.pick(:next_truck_at), :>, NOW, "발주는 안 해도 다음 판단 시각은 잡는다"
   end
 
   test "가장 모자란 자재를 싣는다: 다른 자재가 더 부족하면 그쪽이다" do
@@ -584,8 +576,11 @@ class InboundTest < ActiveSupport::TestCase
     due!(NOW)
 
     inbound(NOW)
+    quiet! # 새 발주 판단 없이 도착만 본다
+    inbound(NOW + 180) # 볼트 리드타임 180초 뒤 도착: 실려 온 로트도 같은 자재다
 
-    assert_equal ["R-202610081207-RAW-B"], truck_lots.pluck(:lot_no)
+    assert_equal ["RAW-B"], ordered_skus
+    assert_equal ["R-202610081210-RAW-B"], truck_lots.pluck(:lot_no)
   end
 
   test "line_side 에 있는 재고도 센다: line_side 가 넉넉한 자재는 raw 칸이 비어도 건너뛴다" do
@@ -597,7 +592,7 @@ class InboundTest < ActiveSupport::TestCase
 
     inbound(NOW)
 
-    assert_equal ["R-202610081207-RAW-B"], truck_lots.pluck(:lot_no)
+    assert_equal ["RAW-B"], ordered_skus, "강판은 line_side 에 넉넉하니 raw 칸이 비어도 볼트를 발주한다"
   end
 
   test "이미 계획된 하차분도 입고 예정으로 센다" do
@@ -609,26 +604,30 @@ class InboundTest < ActiveSupport::TestCase
 
     inbound(NOW)
 
-    assert_equal ["R-202610081207-RAW-S"], truck_lots.pluck(:lot_no)
+    assert_equal ["RAW-S"], ordered_skus, "볼트는 하차 계획분 1500 이 입고 예정으로 잡혀 강판이 더 모자라다"
   end
 
-  test "자원이 없어 계획이 실패하면 트럭 전체가 롤백되고 예외 없이 로그만 남으며, 자원이 생기면 다음 호출에 온다" do
+  test "자원이 없어 하차 계획이 실패하면 도착 처리 전체가 롤백되고 예외 없이 로그만 남으며, 자원이 생기면 다음 호출에 도착한다" do
     Resource.delete_all
-    due!(NOW)
+    po = make_po(@steel, @steel_supplier, pallets: 2, expected_at: NOW - 10)
+    quiet!
 
     result = inbound(NOW)
 
-    assert_equal 0, result[:trucks]
+    assert_equal [0, 0], [result[:arrived], result[:unload]]
     assert_equal 0, Task.count
     assert_equal 0, truck_lots.count, "로트도 같이 롤백된다"
-    assert_operator InboundState.pick(:next_truck_at), :<=, NOW, "아직 도착 전으로 남는다"
-    assert_equal 1, @log.string.lines.grep(/sim inbound truck .*NoResource/).size
+    assert_equal ["confirmed", nil], [po.reload.status, po.arrived_at], "발주는 아직 도착 전으로 남는다"
+    assert_equal 1, @log.string.lines.grep(/sim inbound arrive .*NoResource/).size
 
     Resource.ensure_defaults!
-    assert_equal 1, inbound(NOW + 10)[:trucks]
+    again = inbound(NOW + 10)
+
+    assert_equal [1, 2], [again[:arrived], again[:unload]]
+    assert_equal "arrived", po.reload.status
   end
 
-  test "적치 단계가 실패해도 같은 호출의 트럭은 온다" do
+  test "적치 단계가 실패해도 같은 호출의 발주는 나간다" do
     done_unload(@steel, NOW - 10)
     due!(NOW)
     original = Simulation::Inbound.instance_method(:plan_putaways)
@@ -639,7 +638,8 @@ class InboundTest < ActiveSupport::TestCase
       Simulation::Inbound.send(:define_method, :plan_putaways, original)
     end
 
-    assert_equal 1, result[:trucks]
+    assert_equal 1, result[:orders]
+    assert_equal 1, PurchaseOrder.count
     assert_equal 1, @log.string.lines.grep(/sim inbound putaway .*적치 실패/).size
   end
 end

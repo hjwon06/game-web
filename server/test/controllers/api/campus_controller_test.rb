@@ -71,7 +71,7 @@ class CampusControllerTest < ActionDispatch::IntegrationTest
     body = response.parsed_body
     assert_equal %w[buildings last_move_id last_seq moves resources server_time sim_note tasks], body.keys.sort
     assert_equal %w[hall material office qc shipping], body["buildings"].keys.sort
-    assert_equal %w[orders recent], body["buildings"]["office"].keys.sort
+    assert_equal %w[open_pos orders recent recent_pos], body["buildings"]["office"].keys.sort
     assert_equal %w[raw_store received_trucks_10m receiving_qty], body["buildings"]["material"].keys.sort
     assert_equal %w[broken running stopped], body["buildings"]["hall"].keys.sort
     assert_equal %w[defect_ratio_60m fail_60m pass_60m qty], body["buildings"]["qc"].keys.sort
@@ -140,7 +140,15 @@ class CampusControllerTest < ActionDispatch::IntegrationTest
   test "건물 숫자가 DB 와 맞는다 (수주 상태, 불합격률, 출하, 입고)" do
     sign_in_as create_user
     run_flow
-    2.times { move("receive", qty: 7) }
+    2.times { move("receive", qty: 7) } # 팔레트 단위 입고 이동 2건. 트럭 수는 이동이 아니라 발주(PO) 도착으로 센다.
+    supplier = Supplier.create!(code: "SUP-CMP", name: "캠퍼스공급사", lead_time_seconds: 120)
+    now = Time.current
+    [["PO-CMP-1", "done", now - 5.minutes], ["PO-CMP-2", "arrived", now - 1.minute], ["PO-CMP-3", "done", now - 9.minutes],
+     ["PO-CMP-4", "done", now - 30.minutes], ["PO-CMP-5", "confirmed", nil]].each do |po_no, status, arrived_at|
+      po = PurchaseOrder.create!(po_no: po_no, supplier: supplier, status: status, ordered_at: now - 1.hour,
+                                 expected_at: now - 1.minute, arrived_at: arrived_at)
+      po.lines.create!(product: @raw, qty_ordered: 10)
+    end
 
     get "/api/campus"
     b = response.parsed_body["buildings"]
@@ -163,8 +171,13 @@ class CampusControllerTest < ActionDispatch::IntegrationTest
     assert_operator b["shipping"]["fg_store"].size, :<=, 5
     assert_equal 3, b["shipping"]["fg_store"].find { |r| r["sku"] == "FG-CMP" }["qty"]
 
-    assert_equal StockMove.where(move_type: "receive", occurred_at: 10.minutes.ago..).count,
-                 b["material"]["received_trucks_10m"]
+    assert_equal PurchaseOrder.where(arrived_at: 10.minutes.ago..).count, b["material"]["received_trucks_10m"]
+    assert_equal 3, b["material"]["received_trucks_10m"], "최근 10분 arrived_at 인 발주만(done 포함). 30분 전 도착분과 아직 안 온 발주는 뺀다"
+    assert_not_equal StockMove.where(move_type: "receive").count, b["material"]["received_trucks_10m"], "receive 이동 건수가 아니다"
+    assert_equal PurchaseOrder.where(status: PurchaseOrder::OPEN).count, b["office"]["open_pos"]
+    assert_equal 2, b["office"]["open_pos"]
+    assert_equal %w[PO-CMP-5 PO-CMP-4 PO-CMP-3], b["office"]["recent_pos"].map { |o| o["po_no"] }, "발주 시각이 같으면 id 큰 순 3건"
+    assert_equal %w[expected_at po_no status supplier], b["office"]["recent_pos"].first.keys.sort
     raw = b["material"]["raw_store"]
     assert_equal raw.map { |r| r["sku"] }, raw.map { |r| r["sku"] }.sort
     assert_equal Quant.where(location: Location.find_by!(code: "receiving")).sum(:qty).to_i, b["material"]["receiving_qty"]

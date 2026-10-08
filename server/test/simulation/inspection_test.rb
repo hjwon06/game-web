@@ -273,9 +273,10 @@ class InspectionTest < ActiveSupport::TestCase
     assert_equal 1, inspects.count
     assert_equal 2, putaways.count
 
-    putaways.where(status: "planned").update_all(status: "cancelled")
+    # update_all 은 Task 콜백(예약 해제)을 건너뛴다. 실제 취소 경로(Ops::Tick)처럼 모델로 취소해야 qc 재고를 잡은 예약이 풀린다.
+    putaways.where(status: "planned").each { |t| t.update!(status: "cancelled", cancel_reason: "test") }
     plan
-    putaways.where(status: "planned").update_all(status: "cancelled")
+    putaways.where(status: "planned").each { |t| t.update!(status: "cancelled", cancel_reason: "test") }
     assert_equal 0, plan[:putaway], "취소가 3번이면 더 계획하지 않는다"
     assert_equal 3, putaways.count
   end
