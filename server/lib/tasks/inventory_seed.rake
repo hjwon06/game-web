@@ -55,6 +55,8 @@ module InventorySeed
       end
     end
 
+    seed_open_order_boms(raws)
+
     receive_raw(raws)
     lots = produce_fg(raws, fgs)
     ship_orders(fgs, lots)
@@ -67,6 +69,22 @@ module InventorySeed
   def product(sku, name, kind)
     Product.where("lower(regexp_replace(btrim(name), '\\s+', ' ', 'g')) = ?", name.squish.downcase).first ||
       Product.create!(sku: sku, name: name, uom: "ea", kind: kind)
+  end
+
+  # 끝나지 않은(active·queued) 작업지시의 완제품 중 BOM 이 하나도 없는 것에 자재 1~2개를 붙인다.
+  # 품목 id 로 자재·수량을 정하므로 재실행해도 같은 결과이고, 이미 BOM 이 있는 품목은 건드리지 않는다.
+  # 자재는 기존 raw 3종을 재사용한다(새 품목 없음). 자재 순서는 sku 정렬.
+  def seed_open_order_boms(raws)
+    materials = raws.sort.map(&:last)
+    Product.where(kind: "fg", id: WorkOrder.where(status: %w[active queued]).select(:product_id))
+           .where.not(id: BomLine.select(:product_id)).order(:id).each do |p|
+      count = p.id.even? ? 2 : 1
+      count.times do |i|
+        BomLine.find_or_create_by!(product: p, component: materials[(p.id + i) % materials.size]) do |b|
+          b.qty_per = ((p.id + i) % 3) + 1
+        end
+      end
+    end
   end
 
   def move(**args)

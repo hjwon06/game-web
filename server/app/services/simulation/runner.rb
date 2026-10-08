@@ -4,9 +4,10 @@ module Simulation
     MAX_FAILURES = 3
     MAX_PENDING = 6 # 10초 구간 6개 = 1분
 
-    def initialize(logger: Rails.logger, flusher: Flusher)
+    def initialize(logger: Rails.logger, flusher: Flusher, logistics: Logistics)
       @logger = logger
       @flusher = flusher
+      @logistics = logistics
       @pending = []
       @accumulator = Accumulator.new
       @rng = Random.new(Config::SEED)
@@ -48,6 +49,14 @@ module Simulation
       @pending << { bucket: bucket, accumulator: current, failures: 0 }
       drop_overflow
       @pending.shift while @pending.any? && settled?(@pending.first)
+      logistics(bucket + Config::BUCKET_SECONDS) if ((bucket.to_i + Config::BUCKET_SECONDS) % Config::LOGISTICS_SECONDS).zero?
+    end
+
+    # 60초 경계마다 Flusher 다음에 한 번. 실패해도 Runner·Flusher 는 멈추지 않는다.
+    def logistics(boundary)
+      @logistics.call(now: boundary, logger: @logger)
+    rescue StandardError => e
+      @logger.error("sim logistics failed #{boundary.utc.iso8601}: #{e.class} #{e.message}")
     end
 
     def drop_overflow

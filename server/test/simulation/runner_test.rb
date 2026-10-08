@@ -154,4 +154,55 @@ class RunnerTest < ActiveSupport::TestCase
     assert_match(/dropped bucket #{Regexp.escape(bucket(-6).to_s)}: pending over 6/, @log.string)
     assert_equal [bucket(-5)], flusher.calls, "맨 앞만 시도하고 멈춘다"
   end
+
+  class RecordingLogistics
+    attr_reader :calls, :events_seen
+
+    def initialize(error: nil)
+      @error = error
+      @calls = []
+      @events_seen = []
+    end
+
+    def call(now:, logger:)
+      @calls << now
+      @events_seen << ProductionEvent.count
+      raise @error if @error
+    end
+  end
+
+  test "Logistics 는 60초 경계에서만, Flusher 다음에 부른다" do
+    logistics = RecordingLogistics.new
+    runner = Simulation::Runner.new(logger: Logger.new(@log), logistics: logistics)
+
+    5.times { |window| run_window(runner, window) }
+    assert_empty logistics.calls, "50초까지는 부르지 않는다"
+
+    run_window(runner, 5)
+    assert_equal [T0 + 60], logistics.calls
+    assert_equal [6], logistics.events_seen, "Logistics 가 불릴 때 그 경계의 구간은 이미 기록돼 있다"
+
+    6.times { |i| run_window(runner, 6 + i) }
+    assert_equal [T0 + 60, T0 + 120], logistics.calls
+  end
+
+  test "Logistics 가 예외를 던져도 Runner 와 다음 Flusher 는 정상이다" do
+    logistics = RecordingLogistics.new(error: RuntimeError.new("boom"))
+    runner = Simulation::Runner.new(logger: Logger.new(@log), logistics: logistics)
+
+    18.times { |window| run_window(runner, window) }
+
+    assert_equal [T0 + 60, T0 + 120, T0 + 180], logistics.calls
+    assert_equal 18, ProductionEvent.count, "예외 뒤 구간도 계속 기록된다"
+    assert_equal ProductionEvent.sum(:good_qty), @order.reload.produced_qty
+    assert_equal 3, @log.string.scan(/sim logistics failed .*RuntimeError boom/).size
+  end
+
+  test "Logistics 실제 구현도 같은 경계에서 돌고 Flusher 를 막지 않는다" do
+    runner = build_runner(Simulation::Flusher)
+    7.times { |window| run_window(runner, window) }
+    assert_equal 7, ProductionEvent.count
+    assert_no_match(/logistics failed/, @log.string)
+    assert_equal 1, @log.string.scan(/sim logistics 2026-10-06T12:01:00Z/).size
+  end
 end

@@ -62,6 +62,30 @@ class Inventory::SeedReconcileTest < ActiveSupport::TestCase
     assert_equal StockMove::MOVE_TYPES.sort, StockMove.distinct.pluck(:move_type).sort
   end
 
+  test "끝나지 않은 작업지시의 모든 완제품에 raw 자재 1~2개 BOM 이 붙고, 재실행해도 같다" do
+    machine = Machine.create!(code: "SD2", name: "시드기 2")
+    WorkOrder.create!(code: "WO-9001", machine: machine, product: "기어 Z", target_qty: 100, status: "active")
+    WorkOrder.create!(code: "WO-9002", machine: machine, product: "커버 Y", target_qty: 100, status: "queued")
+    WorkOrder.create!(code: "WO-9003", machine: machine, product: "끝난 품목", target_qty: 100, status: "done")
+
+    seed!
+    boms = BomLine.all.map { |b| [b.product_id, b.component_id, b.qty_per] }.sort
+
+    WorkOrder.where.not(status: "done").includes(:item).each do |wo|
+      lines = BomLine.where(product_id: wo.product_id)
+      assert_includes 1..2, lines.count, "#{wo.item.name} BOM"
+      assert_equal ["raw"], lines.map { |l| l.component.kind }.uniq
+      assert_equal ["ea"], lines.map { |l| l.component.uom }.uniq
+    end
+    assert_equal 0, BomLine.where(product_id: Product.find_by!(name: "끝난 품목").id).count, "끝난 지시 품목은 건드리지 않는다"
+    assert_equal 3, Product.where(kind: "raw").count, "새 자재 품목을 만들지 않았다"
+
+    seed!
+    seed!
+    assert_equal boms, BomLine.all.map { |b| [b.product_id, b.component_id, b.qty_per] }.sort
+    assert_equal [], Inventory::Reconcile.call
+  end
+
   test "재실행해도 아무것도 늘지 않는다(2회 더)" do
     seed!
     first = counts
