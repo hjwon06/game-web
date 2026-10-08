@@ -44,7 +44,7 @@ Rails.application.configure do
   config.active_support.report_deprecations = false
 
   # ops 응답 1초 공유 캐시용 프로세스 내 저장소(프로세스마다 따로지만 값은 1초 단위 계산이라 같다).
-  config.cache_store = :memory_store, { size: 32.megabytes }
+  config.cache_store = :memory_store, { size: 32 * 1024 * 1024 } # 32MB (설정 로드 시점엔 Integer#megabytes 가 없다)
 
   # Replace the default in-process and non-durable queuing backend for Active Job.
   # config.active_job.queue_adapter = :resque
