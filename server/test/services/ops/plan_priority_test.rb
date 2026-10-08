@@ -42,6 +42,7 @@ class OpsPlanPriorityTest < ActiveSupport::TestCase
     running = make(@a, status: "started", from_s: -25, secs: 45) # now+20 에 끝난다
     queued = 5.times.map { |i| make(@a, status: "planned", from_s: 20 + 45 * i, secs: 45, priority: 40) }
     before = queued.map { |t| [t.planned_at, t.expected_finish_at] }
+    running.reload # seq 는 DB 트리거(tasks_seq)가 채운다 — 다시 읽어야 값이 있다
     run_before = [running.planned_at, running.started_at, running.expected_finish_at, running.seq]
 
     feed = plan("feed")
