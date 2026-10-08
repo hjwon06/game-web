@@ -138,7 +138,7 @@ class InspectionTest < ActiveSupport::TestCase
     a, b, c = multi_lots(3)
     [a, b, c].each_with_index { |lot, i| produce(lot, 40, M0 + (i * 60)) }
 
-    plan(M0 + 600)
+    plan(M0 + WAIT + 300) # 세 로트 모두 대기 상한(WAIT)을 넘긴 시각
 
     assert_equal [40, 40, 40], inspects.map { |t| t.qty.to_i }
     assert_equal [a.id, b.id, c.id], inspects.map(&:lot_id)
@@ -151,19 +151,19 @@ class InspectionTest < ActiveSupport::TestCase
     arrival_queries = []
     counter = ->(*, payload) { arrival_queries << payload[:sql] if payload[:sql].include?("substring(idempotency_key from") }
 
-    ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { plan(M0 + 600) }
+    ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { plan(M0 + WAIT + 300) }
 
-    assert_equal 3, inspects.count, "세 로트 모두 5분을 넘겨 검사가 계획됐다"
+    assert_equal 3, inspects.count, "세 로트 모두 대기 상한(WAIT)을 넘겨 검사가 계획됐다"
     # 도착 시각식(ARRIVED_AT_SQL)을 쓰는 쿼리: 로트별 도착 조회 1회 + 작업지시별 미검사량(EPOCH 필터, ⑥d) 1회. 로트 수와 무관하게 2회다
     assert_equal 2, arrival_queries.size
   end
 
-  test "D3: 로트별 도착 시각이 따로 계산된다 — 5분 안 된 로트는 건너뛰고 지난 로트만 검사한다" do
+  test "D3: 로트별 도착 시각이 따로 계산된다 — 대기 상한이 안 된 로트는 건너뛰고 지난 로트만 검사한다" do
     a, b = multi_lots(2)
     produce(a, 30, M0)
-    produce(b, 30, M0 + 250)
+    produce(b, 30, M0 + WAIT - 50)
 
-    plan(M0 + 310)
+    plan(M0 + WAIT + 10)
 
     assert_equal [a.id], inspects.map(&:lot_id), "b 는 60초밖에 안 됐다"
   end
@@ -285,7 +285,7 @@ class InspectionTest < ActiveSupport::TestCase
     assert_equal ["FG-A-01-02"], putaways.map { |t| t.to_location.code }, "01 칸은 다른 품목이 있어 다음 빈 칸"
     tick
 
-    produce_to_qc(100, M0 - 240)
+    produce_to_qc(100, M0 - WAIT + 60) # plan(M0 + 60) 시점에 대기 상한(WAIT)에 닿는다
     plan(M0 + 60)
     tick
     plan(M0 + 60)

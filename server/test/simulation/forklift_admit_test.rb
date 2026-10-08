@@ -7,6 +7,12 @@ class ForkliftAdmitTest < ActiveSupport::TestCase
   Config = Simulation::Config
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
 
+  # Ops::Plan 은 next_free 기준에 벽시계(Time.current)를 쓴다. M0 가 벽시계보다 과거가 되면 계획이 벽시계 뒤로 밀려 큐가 부풀어
+  # 오늘 정오 이후에만 실패하는 시한폭탄이 된다(2026-10-08 12:03 UTC 에 실제로 터짐). 시각을 M0 에 고정한다.
+  include ActiveSupport::Testing::TimeHelpers
+  setup { travel_to M0 }
+  teardown { travel_back }
+
   setup do
     Ops::Plan.reseed!(3)
     @fg = Product.create!(sku: "FG-AD", name: "브래킷", uom: "ea", kind: "fg")
