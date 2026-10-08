@@ -35,3 +35,9 @@ MACHINES.each do |code, name, state, active, queued|
   seed_order(machine, active, "active")
   seed_order(machine, queued, "queued")
 end
+
+# 재고 시드는 위 작업지시 품목(브래킷 A 등)을 재사용하므로 반드시 뒤에 둔다. 모든 변동은 Inventory::Move 를 거친다.
+require "rake"
+Rails.application.load_tasks unless Rake::Task.task_defined?("inventory:seed")
+Rake::Task["inventory:seed"].reenable
+Rake::Task["inventory:seed"].invoke

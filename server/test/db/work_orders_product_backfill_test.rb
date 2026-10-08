@@ -32,6 +32,32 @@ class WorkOrdersProductBackfillTest < ActiveSupport::TestCase
     assert column.key?("sales_order_line_id")
   end
 
+  test "실제 db/seeds.rb 를 2회 돌려도 작업지시 24건 전부 품목에 매칭되고 중복이 없다" do
+    silence_warnings { 2.times { load Rails.root.join("db/seeds.rb") } } # MACHINES 상수 재정의 경고만 끈다
+
+    assert_equal 24, WorkOrder.where("code ~ '^WO-[12][0-9]{3}$'").count
+    unmatched = WorkOrder.connection.select_value(<<~SQL).to_i
+      SELECT count(*) FROM work_orders w
+      LEFT JOIN products p ON p.id = w.product_id
+      WHERE p.id IS NULL OR #{NORM % 'p.name'} <> #{NORM % 'w.product'}
+    SQL
+    assert_equal 0, unmatched
+    # 품목명 정규화 기준으로 같은 이름이 둘 이상 있으면 백필 매칭이 모호해진다
+    dup_names = Product.connection.select_value(<<~SQL).to_i
+      SELECT count(*) FROM (SELECT 1 FROM products GROUP BY #{NORM % 'name'} HAVING count(*) > 1) d
+    SQL
+    assert_equal 0, dup_names
+    assert_equal [], Inventory::Reconcile.call
+  end
+
+  test "이미 있는 품목과 공백·대소문자만 다른 작업지시는 새 품목을 만들지 않고 그 품목에 붙는다" do
+    existing = Product.create!(sku: "BF-EXIST", name: "Seed Item", uom: "ea", kind: "fg")
+    wo = WorkOrder.create!(code: "BF-5", machine: @machine, product: "  seed   ITEM ", target_qty: 5)
+
+    assert_equal existing.id, wo.product_id
+    assert_equal 1, Product.where("lower(name) = 'seed item'").count
+  end
+
   test "stock_moves UPDATE/DELETE 는 DB 트리거가 막는다" do
     p = Product.create!(sku: "T-1", name: "시험품", uom: "ea", kind: "raw")
     from = Location.find_by!(code: "supplier")
