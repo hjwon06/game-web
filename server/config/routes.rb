@@ -12,6 +12,7 @@ Rails.application.routes.draw do
   namespace :api do
     get "state", to: "state#show"
     get "hud", to: "hud#show"
+    get "campus", to: "campus#show"
     post "commands", to: "commands#create"
     get "me", to: "me#show"
   end
