@@ -623,7 +623,7 @@ CREATE TABLE public.stock_moves (
     occurred_at timestamp with time zone DEFAULT now() NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT stock_moves_locations_differ_check CHECK ((from_location_id <> to_location_id)),
-    CONSTRAINT stock_moves_move_type_check CHECK (((move_type)::text = ANY (ARRAY[('receive'::character varying)::text, ('putaway'::character varying)::text, ('issue'::character varying)::text, ('produce'::character varying)::text, ('qc_pass'::character varying)::text, ('qc_fail'::character varying)::text, ('ship'::character varying)::text]))),
+    CONSTRAINT stock_moves_move_type_check CHECK (((move_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'feed'::character varying, 'issue'::character varying, 'produce'::character varying, 'qc_pass'::character varying, 'qc_fail'::character varying, 'pick'::character varying, 'ship'::character varying])::text[]))),
     CONSTRAINT stock_moves_qty_check CHECK ((qty > (0)::numeric))
 );
 
@@ -1307,6 +1307,13 @@ CREATE INDEX index_stock_moves_on_to_location_id ON public.stock_moves USING btr
 
 
 --
+-- Name: index_tasks_on_ref; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX index_tasks_on_ref ON public.tasks USING btree (ref_type, ref_id);
+
+
+--
 -- Name: index_tasks_on_resource_id_and_status; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1680,6 +1687,7 @@ INSERT INTO "schema_migrations" (version) VALUES
 ('20261008130003'),
 ('20261008130002'),
 ('20261008130001'),
+('20261008050000'),
 ('20261008044000'),
 ('20261008000010'),
 ('20261008000009'),
