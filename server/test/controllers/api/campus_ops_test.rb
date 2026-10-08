@@ -285,7 +285,11 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
   test "ops 쿼리 수는 상한 이하이고 작업·발주·수주 건수와 무관하다" do
     truck_scenario
     plain = count_queries { get "/api/campus" }
-    small = count_queries { get "/api/campus", params: { include: "ops" } }
+    # 비어 있는 컬렉션은 조회를 건너뛰므로(조건부 0쿼리) 비교 기준은 "데이터가 있는 상태"여야 한다.
+    # 각 종류를 1건씩 채운 뒤 재고, 그다음 수십 배로 늘려 같은지 본다(루미 실측: 30건씩 3회 늘려도 17 고정).
+    task!(kind: "putaway", status: "planned", resource: "FORK-01", from: "receiving", to: "RAW-A-01-01", expected: @t)
+    po!("PO-OPS-BASE", "confirmed", 1)
+    small = count_queries { get "/api/campus", params: { include: "ops", so: "SO-OPS-1" } }
     assert_response :ok
 
     30.times { |i| task!(kind: "putaway", status: "planned", resource: "FORK-01", from: "receiving", to: "RAW-A-01-01", expected: @t + i.seconds) }
