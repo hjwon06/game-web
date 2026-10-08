@@ -74,27 +74,72 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
     end
   end
 
-  test "신규 수주 수량 = 최근 30분 양품 생산량 x 10/30 x 0.9 를 PICK_QTY 단위로 내림" do
+  test "신규 수주 수량 = 최근 30분 양품 생산량 x 10/30 x 0.9 를 ORDER_UNIT 단위로 내림" do
     produce_history(9000) # 분 0 의 룩백(M0-30분..M0)에는 M0-10분 구간 하나만 들어간다
     run_minute(0)
 
-    assert_equal [2500], SalesOrderLine.pluck(:ordered_qty) # 9000 x 0.3 = 2700 → 2500
+    assert_equal [2700], SalesOrderLine.pluck(:ordered_qty) # 9000 x 0.3 = 2700 → 2700
   end
 
   test "신규 수주 수량은 생산량에 비례한다" do
     produce_history(18_000)
     run_minute(0)
 
-    assert_equal [5000], SalesOrderLine.pluck(:ordered_qty) # 18000 x 0.3 = 5400 → 5000
+    assert_equal [5400], SalesOrderLine.pluck(:ordered_qty) # 18000 x 0.3 = 5400 → 5400
   end
 
-  test "생산이 PICK_QTY 단위에 못 미치면 수주 0 이고 룩백 밖 생산은 세지 않는다" do
-    produce_history(1000) # 1000 x 0.3 = 300 < 500
+  test "실측 규모(30분 양품 600): 수주 1건, 수량 > 0, ORDER_UNIT 의 배수" do
+    produce_history(610) # 610 x 0.3 = 183 → 180
+    assert_equal 1, run_minute(0)[:order]
+
+    assert_equal [180], SalesOrderLine.pluck(:ordered_qty)
+    assert SalesOrderLine.pluck(:ordered_qty).all? { |q| q.positive? && (q % Simulation::Config::ORDER_UNIT).zero? }
+  end
+
+  test "실측 규모(30분 양품 1018, 수요 품목 1개) → 305.4 를 300 으로 내림. n=1 이면 보정 없음" do
+    produce_history(1018) # 1018 x 0.3 = 305.4 → 300
+    run_minute(0)
+
+    assert_equal [300], SalesOrderLine.pluck(:ordered_qty)
+  end
+
+  test "생산이 보정 후에도 ORDER_UNIT 에 못 미치면 줄이 없고 수주 0 이다. 룩백 밖 생산은 세지 않는다" do
+    produce_history(20) # 20 x 0.3 = 6 < 10
     ProductionEvent.create!(machine: @machine, work_order: @order, bucket_start: M0 - 7200, bucket_end: M0 - 7190,
                             good_qty: 90_000, defect_qty: 0, machine_version: 0)
 
     assert_equal 0, run_minute(0)[:order]
     assert_equal 0, SalesOrder.count
+    assert_equal 0, SalesOrderLine.count
+  end
+
+  test "수요 품목 5개 중 k 개를 고르면 고른 품목 수량에 5/k 를 곱한 뒤 ORDER_UNIT 으로 내린다" do
+    orders = [@order] + (2..5).map do |i|
+      fg = Product.create!(sku: "FG-#{i}", name: "품목#{i}", uom: "ea", kind: "fg")
+      machine = Machine.create!(code: "M#{i}", name: "기계#{i}", state: "running")
+      WorkOrder.create!(code: "WO-F#{i}", machine: machine, item: fg, product: "품목#{i}", target_qty: 100_000,
+                        status: "active", started_at: M0)
+    end
+    orders.each do |wo|
+      ProductionEvent.create!(machine: wo.machine, work_order: wo, bucket_start: M0 - 600, bucket_end: M0 - 590,
+                              good_qty: 610, defect_qty: 0, machine_version: 0)
+    end
+
+    seen = []
+    (0..9).each do |m|
+      SalesOrderLine.delete_all
+      SalesOrder.delete_all
+      run_minute(m)
+      lines = SalesOrderLine.all.to_a
+      next if lines.empty?
+
+      k = lines.size
+      seen << k
+      # 품목당 기본 수요 610 x 0.3 = 183. k=1 → 183 x 5 = 915 → 910, k=2 → 183 x 5/2 = 457.5 → 450
+      expected = { 1 => 910, 2 => 450 }.fetch(k)
+      assert_equal [expected] * k, lines.map(&:ordered_qty), "k=#{k}"
+    end
+    assert_not_empty seen
   end
 
   test "생산이 0 이면 수주도 0 이다" do

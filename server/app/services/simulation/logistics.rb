@@ -232,27 +232,34 @@ module Simulation
       window = @minute - Config::NEW_ORDER_INTERVAL_SECONDS
       return if SalesOrder.where("created_at > ? AND created_at <= ?", window, @minute).exists?
 
-      quantities = order_quantities
-      return if quantities.empty?
+      demands = order_demands
+      return if demands.empty?
 
       rng = Random.new(Config::SEED + (@minute.to_i / 60))
-      product_ids = quantities.keys.sort.sample(rng.rand(1..2), random: rng)
+      product_ids = demands.keys.sort.sample(rng.rand(1..2), random: rng)
+
+      # 1~2개만 고르므로 고른 품목에 n/k 를 곱해야 품목별 기대 수요가 생산 x RATIO 가 된다. ORDER_UNIT 내림 뒤 0 이면 줄을 만들지 않는다.
+      boost = Rational(demands.size, product_ids.size)
+      lines = product_ids.to_h { |product_id| [product_id, (demands.fetch(product_id) * boost / Config::ORDER_UNIT).floor * Config::ORDER_UNIT] }
+                         .select { |_, qty| qty.positive? }
+      return if lines.empty?
 
       SalesOrder.transaction do
         order = SalesOrder.create!(so_no: next_so_no, customer: Config::CUSTOMERS[SalesOrder.count % Config::CUSTOMERS.size],
                                    due_date: (@minute + rng.rand(1..3).days).to_date, status: "open", created_at: @minute)
-        product_ids.each { |product_id| order.lines.create!(product_id: product_id, ordered_qty: quantities.fetch(product_id)) }
+        lines.each { |product_id, qty| order.lines.create!(product_id: product_id, ordered_qty: qty) }
       end
       @counts[:order] += 1
     end
 
-    # 품목별 수주 수량 = 최근 NEW_ORDER_LOOKBACK_SECONDS 의 양품 생산량 x (수주 간격 / 룩백) x NEW_ORDER_RATIO 를 PICK_QTY 단위로 내림.
-    # 단위에 못 미치면(0) 그 품목은 수주하지 않는다. 생산이 없으면 빈 해시.
-    def order_quantities
+    # 품목별 기본 수요(ea, 내림 전) = 최근 NEW_ORDER_LOOKBACK_SECONDS 의 양품 생산량 x (수주 간격 / 룩백) x NEW_ORDER_RATIO.
+    # 양품이 있는 품목만 담는다. 생산이 없으면 빈 해시. ORDER_UNIT 내림은 n/k 보정 뒤 new_order 에서 한다.
+    def order_demands
       good = ProductionEvent.joins(:work_order).where(bucket_start: (@minute - Config::NEW_ORDER_LOOKBACK_SECONDS)...@minute)
                             .group("work_orders.product_id").sum(:good_qty)
-      scale = Config::NEW_ORDER_INTERVAL_SECONDS.to_f / Config::NEW_ORDER_LOOKBACK_SECONDS * Config::NEW_ORDER_RATIO
-      good.to_h { |product_id, qty| [product_id, (qty * scale / Config::PICK_QTY).floor * Config::PICK_QTY] }.select { |_, qty| qty.positive? }
+      # 유리수로 계산한다: 부동소수 0.3 이 2699.999… 로 나와 경계값이 한 단위 낮게 내림되는 일을 막는다.
+      scale = Rational(Config::NEW_ORDER_INTERVAL_SECONDS, Config::NEW_ORDER_LOOKBACK_SECONDS) * Config::NEW_ORDER_RATIO.rationalize(Rational(1, 1000))
+      good.select { |_, qty| qty.positive? }.transform_values { |qty| qty.to_r * scale }
     end
 
     # 같은 연월 접두사(SO-YYMM-)의 마지막 번호 + 1. 잠금이 없다: Logistics 는 bin/sim 단일 프로세스에서만 돈다는 전제.

@@ -65,7 +65,9 @@ module Simulation
     PICKS_PER_LINE = 5
     SHIP_LINES_LIMIT = 50
 
-    # 수주 한 줄의 수량 = 최근 NEW_ORDER_LOOKBACK_SECONDS 의 완제품 양품 생산량 x (NEW_ORDER_INTERVAL_SECONDS / 룩백) x NEW_ORDER_RATIO 를 PICK_QTY 단위로 내림.
+    # 수주 한 줄의 수량 = 최근 NEW_ORDER_LOOKBACK_SECONDS 의 완제품 양품 생산량 x (NEW_ORDER_INTERVAL_SECONDS / 룩백) x NEW_ORDER_RATIO
+    # (수요 품목 n개 중 k개만 고르면 x n/k 보정: 안 하면 장기 수요가 생산의 k/n 로 줄어든다) 를 ORDER_UNIT 단위로 내림. pick 단위(PICK_QTY)와 무관 — 생산이 pick 단위보다 작아도 수주가 끊기지 않게 한다.
+    ORDER_UNIT = 10                          # 수주 수량 단위(ea)
     NEW_ORDER_INTERVAL_SECONDS = 600
     NEW_ORDER_LOOKBACK_SECONDS = 1800
     NEW_ORDER_RATIO = 0.9                    # 출하 수요를 생산의 90% 로 맞춰 완제품이 서서히 쌓이게 한다
