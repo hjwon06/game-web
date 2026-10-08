@@ -39,6 +39,7 @@ function drawGround(){
   g.strokeStyle='#B5BDB4';g.lineWidth=1.2*Z;g.beginPath();g.moveTo(...P(.4,.4,10));g.lineTo(...P(GW-.4,.4,10));g.lineTo(...P(GW-.4,14.8,10));g.moveTo(...P(GW-.4,17.6,10));g.lineTo(...P(GW-.4,GH-.4,10));g.lineTo(...P(.4,GH-.4,10));g.lineTo(...P(.4,.4,10));g.stroke();
   [[1,33],[4,33],[8,33],[12,33],[18,33],[22,33],[30,33],[34,33],[38,33],[42,33],[45,30],[45,26],[45,22],[45,8],[45,4]].forEach(([x,y])=>tree(x,y));
   box(12.4,13.7,.25,.25,10,'#C0392B'); // 소화전
+  for(let i=0;i<3;i++){plane(16.7+i*2.8,10.2,1.1,1.9,'#C3C9D1');plane(36.2+i*2.4,24.3,1.1,1.9,'#C3C9D1');} // 자재창고·출하장 도크 칸
 }
 function tree(x,y){box(x-.08,y-.08,.16,.16,10,'#8B5E3C');const c=P(x,y,24);g.fillStyle='#7FA48A';g.beginPath();g.arc(c[0],c[1],10*Z,0,7);g.fill();g.fillStyle='#93B59C';g.beginPath();g.arc(c[0]-3*Z,c[1]-3*Z,6*Z,0,7);g.fill();}
 function building(b,t){
@@ -69,12 +70,12 @@ function signLine(b){
 }
 function sign(b){
   const [x,y]=b._sign;const k=Math.max(.75,Math.min(1.25,Z/0.42));
-  const lines=[b.name],l2=signLine(b);if(l2)lines.push(l2);
+  const lines=[b.name],l2=signLine(b),l3=b.real?nowDoing(b.id):null;if(l2)lines.push(l2);if(l3)lines.push('지금 · '+l3);
   const w=Math.max(...lines.map((l,i)=>{g.font=i?`600 ${10.5*k}px Pretendard`:`800 ${12*k}px Pretendard`;return g.measureText(l).width;}))+18*k;
-  const h=(lines.length>1?36:20)*k;
+  const h=(20+16*(lines.length-1))*k;
   g.fillStyle=b.real?'#1A1A2E':'rgba(255,255,255,.85)';g.fillRect(x-w/2,y-h,w,h);
   g.textAlign='center';g.fillStyle=b.real?'#fff':'#6B7280';g.font=`800 ${12*k}px Pretendard`;g.fillText(lines[0],x,y-h+14*k);
-  if(lines[1]){g.fillStyle='#9FB6D3';g.font=`600 ${10.5*k}px Pretendard`;g.fillText(lines[1],x,y-h+29*k);}g.textAlign='left';
+  g.font=`600 ${10.5*k}px Pretendard`;lines.slice(1).forEach((l,i)=>{g.fillStyle=l===l3?'#F2D98B':'#9FB6D3';g.fillText(l,x,y-h+(29+16*i)*k);});g.textAlign='left';
   if(b.real){g.fillStyle='#1A1A2E';g.beginPath();g.moveTo(x-5*k,y);g.lineTo(x+5*k,y);g.lineTo(x,y+6*k);g.fill();}
 }
 function drawFlow(){
@@ -88,5 +89,6 @@ function hallSign(){if(Z>.75)return;const k=Math.max(.75,Math.min(1.25,Z/0.42));
 // 바닥 글씨: 둘째 줄이 sim_note
 function floorText(){
   const note=(S.err?'연결 끊김 · 마지막 값 · ':'')+(S.note||(dataReady()?'':'불러오는 중'));
-  onFloor(2.2,32.6,()=>{g.fillStyle='rgba(26,26,46,.4)';g.font='600 13px Pretendard';g.fillText('건물을 눌러 보기 · 생산동은 눌러서 들어가기 · 끌어서 이동',0,0);g.fillStyle='rgba(26,26,46,.3)';g.font='500 11px Pretendard';g.fillText(note,0,18);});
+  const clock=S.offSet?'공장 시계 '+new Date(srvNow()).toLocaleTimeString('ko-KR',{hour12:false}):'공장 시계 -'; // 서버 시각 기준
+  onFloor(2.2,32.6,()=>{g.fillStyle='rgba(26,26,46,.4)';g.font='600 13px Pretendard';g.fillText('건물을 눌러 보기 · 생산동·자재창고는 눌러서 들어가기 · 끌어서 이동',0,0);g.fillStyle='rgba(26,26,46,.3)';g.font='500 11px Pretendard';g.fillText(note,0,18);g.fillStyle='rgba(26,26,46,.45)';g.font='700 12px Outfit';g.fillText(clock,0,35);});
 }

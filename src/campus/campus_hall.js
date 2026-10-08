@@ -1,6 +1,6 @@
 // 생산동 안쪽: 설비·작업자·지게차·벨트·말풍선. 설비 상태와 작업지시는 /api/hud 값(M)이다.
 const workers=[{x:6,y:5.3,tx:6,ty:5.3,c:'#C9A227',job:null},{x:12,y:5.2,tx:12,ty:5.2,c:'#2563EB',job:null},{x:9,y:10.4,tx:9,ty:10.4,c:'#C9A227',job:null},{x:3,y:4.8,tx:3,ty:4.8,c:'#0E7C86',job:null}];
-const fork={u:0};const bubbles=[];
+const bubbles=[];
 function bubble(m,text,color,shake){bubbles.push({m,text,color,t0:performance.now(),shake});}
 const loop=[[BX0,ROWY[0]],[BX1,ROWY[0]],[BX1,ROWY[1]],[BX0,ROWY[1]]];
 const woPct=m=>m.wo&&m.wo[3]>0?Math.min(1,m.wo[2]/m.wo[3]):0;
@@ -21,7 +21,7 @@ function drawHall(t){
   for(let i=0;i<3;i++){const a=loop[i],b=loop[i+1];const x0=Math.min(a[0],b[0])-.34,x1=Math.max(a[0],b[0])+.34,y0=Math.min(a[1],b[1])-.34,y1=Math.max(a[1],b[1])+.34;box(x0,y0,x1-x0,y1-y0,5,'#7C8796',6);}
   const r=run/M.length;for(let i=0;i<30;i++){const u=(i/30+(t/50000)*r)%1;const [x,y]=beltAt(u);box(x-.1,y-.1,.2,.2,8,['#C9A227','#D7DCE3','#8B5E3C'][i%3],11);}
   for(let i=0;i<3;i++)box(2+i*1.05,10.4,.85,.85,10+((i*7)%3)*6,'#A8794F',6); // 팔레트
-  const ents=[];M.forEach(m=>ents.push({d:m.x+m.y,f:()=>drawMachine(m,t)}));workers.forEach(w=>ents.push({d:w.x+w.y,f:()=>person(w,t)}));ents.push({d:forkX()+5.3,f:drawFork});
+  const ents=[];M.forEach(m=>ents.push({d:m.x+m.y,f:()=>drawMachine(m,t)}));workers.forEach(w=>{if(V.zoomedIn||w.job)ents.push({d:w.x+w.y,f:()=>person(w,t)});}); // 단지 전체 화면에선 수리 중인 사람만(운반 주체 수 상한)
   ents.sort((a,b)=>a.d-b.d).forEach(e=>e.f());
 }
 function beltAt(u){let L=0;const s=[];for(let i=0;i<3;i++){const a=loop[i],b=loop[i+1],l=Math.hypot(b[0]-a[0],b[1]-a[1]);s.push([a,b,l]);L+=l;}let d=u*L;for(const [a,b,l] of s){if(d<=l)return[a[0]+(b[0]-a[0])*d/l,a[1]+(b[1]-a[1])*d/l];d-=l;}return loop[3];}
@@ -51,8 +51,6 @@ function person(w,t){const [x,y]=P(w.x,w.y,6);const walk=w.moving?Math.sin(t/90)
   g.fillStyle='rgba(26,26,46,.2)';g.beginPath();g.ellipse(x,y,7*Z,3.5*Z,0,0,7);g.fill();g.fillStyle='#333A45';g.fillRect(x-4*Z,y-10*Z+walk*.3,3*Z,10*Z);g.fillRect(x+1*Z,y-10*Z-walk*.3,3*Z,10*Z);
   g.fillStyle='#4A6FB5';g.fillRect(x-5*Z,y-22*Z,10*Z,13*Z);g.fillStyle='#F1C9A5';g.beginPath();g.arc(x,y-26*Z,4.5*Z,0,7);g.fill();g.fillStyle=w.c;g.beginPath();g.arc(x,y-28*Z,5*Z,Math.PI,0);g.fill();
   if(w.job&&w.job.phase==='fix'){g.fillStyle='#FFE45C';for(let i=0;i<3;i++)g.fillRect(x+6*Z+Math.random()*8*Z,y-24*Z+Math.random()*10*Z,3*Z,3*Z);}}
-const forkX=()=>{const k=fork.u<.5?fork.u*2:2-fork.u*2;return 2+14.3*k;};
-function drawFork(){const x=forkX(),y=5.3;box(x-.3,y-.22,.6,.44,14,'#C9A227',8);box(x-.3,y-.22,.24,.44,26,'#333A45',22);box(x+.32,y-.18,.3,.36,10,'#A8794F',15);}
 function drawBubbles(t){for(let i=bubbles.length-1;i>=0;i--){const b=bubbles[i],age=(t-b.t0)/2600;if(age>1){bubbles.splice(i,1);continue;}if(!b.m._top)continue;
   const [x,y]=b.m._top;const s=Math.max(Z,.7);const yy=y-62*Z-age*28*s;const sx=b.shake&&age<.3?Math.sin(age*90)*4*s:0;
   g.globalAlpha=age<.1?age*10:age>.75?(1-age)*4:1;g.font=`700 ${11*s}px Pretendard`;const w=g.measureText(b.text).width+16*s;
@@ -64,5 +62,4 @@ function updateHall(dt,t){
     if(w.moving){const s=Math.min(d,dt*1.6);w.x+=dx/d*s;w.y+=dy/d*s;}
     else if(w.job){if(w.job.phase==='walk'){w.job.phase='fix';w.job.until=t+1600;}else if(t>w.job.until){const m=w.job.m;w.job=null;if(HOOK.repaired)HOOK.repaired(m);}}
     else if(Math.random()<dt*.35){w.tx=2.5+Math.random()*14;w.ty=i===2?9.9+Math.random()*.9:4.6+Math.random()*1.5;}});
-  fork.u=(fork.u+dt/26)%1;
 }
