@@ -120,7 +120,7 @@ module Ops
     def move(task, move_type)
       Inventory::Move.call(
         product: task.product, lot: task.lot, from: task.from_location, to: task.to_location, qty: task.qty,
-        move_type: move_type, ref: task, idempotency_key: "task:#{task.id}"
+        move_type: move_type, ref: task, idempotency_key: "task:#{task.id}", reserved_by_task_id: task.id
       )
     end
 
@@ -146,8 +146,8 @@ module Ops
       fail_qty = Simulation::Inspection.fail_qty(order, task.qty)
       return nil unless fail_qty.positive?
 
-      Inventory::Inspect.call(lot: task.lot, work_order: order, pass_qty: 0, fail_qty: fail_qty, idempotency_key: "task:#{task.id}")
-                        .first.stock_move
+      Inventory::Inspect.call(lot: task.lot, work_order: order, pass_qty: 0, fail_qty: fail_qty, idempotency_key: "task:#{task.id}",
+                              reserved_by_task_id: task.id, inspected_at: task.expected_finish_at).first.stock_move
     end
 
     # 합격 적치(ref = 검사 작업, 그 ref = 작업지시)가 끝나면 검사 기록(pass)을 이동에 붙인다.
@@ -160,6 +160,8 @@ module Ops
         i.lot = task.lot
         i.work_order = order
         i.result = "pass"
+        i.qty = move.qty
+        i.inspected_at = task.expected_finish_at if task.expected_finish_at
         i.defect_qty = 0
       end
     end

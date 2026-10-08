@@ -224,17 +224,22 @@ class InboundTest < ActiveSupport::TestCase
     assert_equal 1, inbound(NOW + 10)[:orders]
   end
 
-  test "도착 전 confirmed 발주 수량도 칸을 차지할 몫으로 센다: 다른 자재의 팔레트 수가 그만큼 줄어든다" do
+  test "8b K5: 다른 자재의 도착 전 발주·하차 계획·입고대 대기는 이 자재의 칸 여유에서 빼지 않는다(자재별 계산)" do
     codes = Simulation::Inbound.bins_under("raw_store").pluck(:code)
     Location.where(code: codes).update_all(capacity_units: P) # 칸마다 팔레트 1개
     codes.first(codes.size - 3).each { |code| seed_bin(@steel, code, P) } # 강판이 점유: 빈 칸은 3개
-    make_po(@steel, @steel_supplier, pallets: 2, expected_at: NOW + 600) # 아직 도착 전인 강판 2팔레트가 빈 칸 2개를 차지할 몫이다
+    make_po(@steel, @steel_supplier, pallets: 2, expected_at: NOW + 600) # 아직 도착 전인 강판 2팔레트
+    Inventory::Move.call(product: @steel, lot: nil, from: "supplier", to: "receiving", qty: P, move_type: "receive",
+                         ref: nil, idempotency_key: next_key) # 강판 1팔레트는 입고대에서 적치 대기(적치 작업은 아직 없다)
+    Task.create!(kind: "unload", status: "planned", resource: Resource.find_by!(code: "DOCK-IN-01"), product: @steel, qty: P,
+                 from_location: Location.find_by!(code: "supplier"), to_location: Location.find_by!(code: "receiving"),
+                 planned_at: NOW, expected_finish_at: NOW + 90) # 하차 계획분도 강판
     due!(NOW)
 
     inbound(NOW)
 
     assert_equal %w[RAW-S RAW-B], ordered_skus
-    assert_equal 1, ordered_pallets, "볼트 4팔레트를 원했지만 빈 칸 3개 - 강판 도착 예정 2팔레트 = 1"
+    assert_equal 3, ordered_pallets, "볼트 4팔레트를 원했고 빈 칸 3개 — 강판 입고 대기는 볼트 몫을 깎지 않는다"
   end
 
   test "한 호출에 발주 1건만 도착한다: 밀린 발주는 10초 뒤 호출이 이어서 도착시킨다" do

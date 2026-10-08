@@ -5,7 +5,11 @@ module Inventory
     def self.call(**args) = new(**args).call
 
     # idempotency_key 를 주면 재호출이 안전하다. 안 주면 호출마다 새 검사로 본다.
-    def initialize(lot:, work_order:, pass_qty:, fail_qty:, idempotency_key: SecureRandom.uuid)
+    # reserved_by_task_id: 이 검사가 어떤 inspect 작업의 완료일 때 그 작업 id(자기 예약은 가용에서 뺀다).
+    def initialize(lot:, work_order:, pass_qty:, fail_qty:, idempotency_key: SecureRandom.uuid, reserved_by_task_id: nil,
+                   inspected_at: nil)
+      @reserved_by_task_id = reserved_by_task_id
+      @inspected_at = inspected_at
       @lot = lot
       @work_order = work_order
       @pass = BigDecimal(pass_qty.to_s)
@@ -27,11 +31,13 @@ module Inventory
       StockMove.transaction do
         results.map do |result, move_type, qty, dest|
           move = Move.call(product: @lot.product, lot: @lot, from: qc, to: dest, qty: qty, move_type: move_type,
-                           ref: @work_order, idempotency_key: "#{move_type}:#{@key}")
+                           ref: @work_order, idempotency_key: "#{move_type}:#{@key}", reserved_by_task_id: @reserved_by_task_id)
           Inspection.find_or_create_by!(stock_move_id: move.id) do |i|
             i.lot = @lot
             i.work_order = @work_order
             i.result = result
+            i.qty = qty
+            i.inspected_at = @inspected_at if @inspected_at
             i.defect_qty = result == "fail" ? qty : 0
           end
         end

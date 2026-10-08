@@ -153,7 +153,7 @@ module Simulation
       ids.to_h { |id| [id, in_stock.fetch(id, 0) + receiving.fetch(id, 0) + coming.fetch(id, 0) + ordered.fetch(id, 0)] }
     end
 
-    # 이 자재 팔레트가 더 들어갈 수 있는 칸 용량(팔레트 수) - 이미 들어오는 중이라 칸을 차지할 팔레트(입고대 + 하차 계획분 + 도착 전 confirmed 발주).
+    # 이 자재 팔레트가 더 들어갈 수 있는 칸 용량(팔레트 수) - 이 자재가 이미 들어오는 중이라 칸을 차지할 팔레트(입고대 + 하차 계획분 + 도착 전 confirmed 발주).
     # 들어갈 수 있는 칸은 적치 규칙이 이 자재에 열어 둔 칸뿐이다(남의 전용 랙의 빈 칸은 세지 않는다).
     def free_pallets(product_id)
       cap = Config::PALLETS_PER_TRUCK.max
@@ -164,9 +164,10 @@ module Simulation
                end
         (free / Config::PALLET_QTY).clamp(0, cap).floor
       end
-      receiving = Quant.where(location_id: Location.where(code: "receiving").select(:id)).sum(:qty)
-      coming = Task.where(kind: "unload", status: %w[planned started]).sum(:qty)
-      ordered = PurchaseOrderLine.joins(:purchase_order).where(purchase_orders: { status: "confirmed" }).sum(:qty_ordered)
+      # 들어오는 중인 양도 이 자재 몫만 뺀다. 다른 자재의 입고대·하차 계획·발주가 이 자재의 칸 여유를 깎지 않는다.
+      receiving = Quant.where(product_id: product_id, location_id: Location.where(code: "receiving").select(:id)).sum(:qty)
+      coming = Task.where(kind: "unload", status: %w[planned started], product_id: product_id).sum(:qty)
+      ordered = PurchaseOrderLine.joins(:purchase_order).where(purchase_orders: { status: "confirmed" }, product_id: product_id).sum(:qty_ordered)
       fit - ((receiving + coming + ordered).to_f / Config::PALLET_QTY).ceil
     end
 

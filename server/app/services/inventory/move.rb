@@ -42,8 +42,11 @@ module Inventory
     def self.call(**args) = new(**args).call
 
     # occurred_at 를 안 주면 DB 기본값(now())이다. 시뮬레이터가 "그 분"의 이동을 만들 때만 준다.
-    def initialize(product:, lot:, from:, to:, qty:, move_type:, ref:, idempotency_key:, occurred_at: nil)
+    # reserved_by_task_id: 이 이동이 어떤 작업의 완료일 때 그 작업의 id. 그 작업 자신의 active 예약은 가용 계산에서 뺀다.
+    # 안 주면 멱등키가 "task:<id>" 꼴일 때 그 id 를 쓴다(Inventory::Ship 처럼 인자를 못 넘기는 경로).
+    def initialize(product:, lot:, from:, to:, qty:, move_type:, ref:, idempotency_key:, occurred_at: nil, reserved_by_task_id: nil)
       @occurred_at = occurred_at
+      @own_task_id = reserved_by_task_id || idempotency_key.to_s[/\Atask:(\d+)\z/, 1]&.to_i
       @product = product
       @lot = lot
       @from = resolve_location(from)
@@ -70,7 +73,12 @@ module Inventory
         next same_as_request!(existing) if existing
 
         from_quant = quants.fetch(@from.id)
-        reject_insufficient!(from_quant) if @from.physical? && from_quant.qty < @qty
+        if @from.physical?
+          reject_insufficient!(from_quant) if from_quant.qty < @qty
+          # from quant 를 잠근 뒤에 본다. 다른 작업이 잡아 둔 수량은 이 이동이 가져갈 수 없다.
+          held = held_by_others
+          reject_reserved!(from_quant, held) if held.positive? && from_quant.qty - held < @qty
+        end
         check_capacity!(capacity) if capacity
 
         attrs = { product: @product, lot: @lot, from_location: @from, to_location: @to, qty: @qty,
@@ -148,6 +156,22 @@ module Inventory
         requested: @qty.to_s("F"), on_hand: on_hand.to_s("F"), capacity: capacity, idempotency_key: @key
       }.to_json)
       raise CapacityExceeded, "#{@to.code} 용량 초과: 용량 #{capacity} / 보유 #{on_hand.to_s('F')} / 요청 #{@qty.to_s('F')}"
+    end
+
+    # 같은 (품목, 로트, 출발 칸)을 잡은 active 예약 합 - 이 이동 자신의 작업 몫. 예약이 없으면 0 이라 예약 없는 칸은 예전과 같다.
+    def held_by_others
+      scope = Reservation.active.where(product_id: @product.id, lot_id: @lot&.id, location_id: @from.id)
+      scope = scope.where.not(task_id: @own_task_id) if @own_task_id
+      BigDecimal(scope.sum(:qty).to_s)
+    end
+
+    def reject_reserved!(from_quant, held)
+      Rails.logger.warn({
+        event: "inventory.move.rejected", reason: "reserved_by_other_task", move_type: @move_type,
+        product_id: @product.id, lot_id: @lot&.id, from: @from.code, to: @to.code,
+        requested: @qty.to_s("F"), on_hand: from_quant.qty.to_s("F"), reserved: held.to_s("F"), idempotency_key: @key
+      }.to_json)
+      raise InsufficientStock, "#{@from.code} 가용 부족: 보유 #{from_quant.qty.to_s('F')} - 다른 작업 예약 #{held.to_s('F')} / 요청 #{@qty.to_s('F')}"
     end
 
     def reject_insufficient!(from_quant)

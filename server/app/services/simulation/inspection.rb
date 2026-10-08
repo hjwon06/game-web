@@ -5,8 +5,8 @@ module Simulation
   #
   # 검사 시점: 미검사 수량이 팔레트(PALLET_QTY) 이상이거나, 그 수량 중 가장 오래된 도착분이 INSPECT_MAX_WAIT_SECONDS 를 넘었을 때.
   # 1건 수량은 min(미검사량, PALLET_QTY)라 합격분 적치도 팔레트 단위다(더 쌓였으면 다음 호출에 이어서 계획한다).
-  # 미검사 수량 = min(원장 기준(qc 로 들어온 produce 합 - 검사 작업 합), qc 현재고 - 이미 맡겨진 수량). 둘 중 작은 쪽이라
-  # 검사 작업 기록이 지워져도(Task.prune!) qc 재고보다 많이 검사하지 않고, 적치가 취소돼 qc 에 남은 합격분을 다시 검사하지도 않는다.
+  # 미검사 수량 = min(원장 기준(qc 로 들어온 produce 합 - inspections 원장 합 - 진행 중 검사), qc 현재고 - 이미 맡겨진 수량). 둘 중 작은 쪽이라
+  # 작업 기록이 지워져도(Task.prune!) 미검사량이 변하지 않고, qc 재고보다 많이 검사하지도 않는다.
   # 상태 기반이라 같은 시각에 다시 불려도 작업이 늘지 않는다.
   class Inspection
     # 반환: { inspect:, putaway:, waiting: } (이번 호출에서 계획한 검사·적치 수, 칸이 없어 qc 에 남은 합격분 수)
@@ -102,20 +102,41 @@ module Simulation
       inspecting.merge(leaving) { |_, a, b| a + b }
     end
 
-    # { 작업지시 id => EPOCH 이후 qc 로 들어온 양 - EPOCH 이후 계획된 검사 작업(취소 제외)의 양 }
-    # 원인(루미 dev 확인, 2026-10-08): 이전 식은 두 합 모두 전 기간이었다. 그런데 produce 이동은 1단계(작업 큐 이전, 01:01 UTC~)부터 있고
-    # inspect 작업은 2단계(05:56 UTC~)부터만 있다 — 1단계 검사는 작업 없이 처리됐다. 그래서 "미검사량"이 영구히 크게 남아 qc 에 있는 재고가
-    # 검사가 끝나는 대로 다시 검사 대상이 됐다(30분 검사 29,511 / 생산 2,405). Task.prune! 으로 옛 작업이 지워져도 같은 일이 생긴다.
-    # 두 합을 EPOCH 이후로 맞추고, EPOCH 는 작업 큐 도입 이후여야 한다(sim:rebase).
+    # { 작업지시 id => EPOCH 이후 qc 로 들어온 양 - 검사한 양 }
+    # 검사한 양 = 원장(inspections: 검사 1행 = 이동 1건, qty 포함, EPOCH 이후) + 진행 중 검사 작업(planned/started) + 합격분이 아직 원장에 없는 최근 완료 검사.
+    # 지워지는 tasks 가 아니라 inspections 로 센다(Task.prune! 으로 done 작업이 지워져도 미검사량이 늘지 않는다).
+    # 합격 행은 적치(qc_pass)가 끝나야 생기므로, 검사는 끝났지만 합격분이 아직 qc 에 있는 동안만 완료 작업(최근 INSPECT_LOOKBACK_SECONDS)에서 메운다.
+    # 이력(1단계): produce 이동은 작업 큐 이전부터 있어 두 합을 EPOCH 이후로 맞춘다(sim:rebase).
     def uninspected_by_order(qc, order_ids)
       epoch = Config.inventory_epoch&.utc
       moves = StockMove.where(move_type: "produce", ref_type: "WorkOrder", ref_id: order_ids, to_location_id: qc.id)
       moves = moves.where("(#{ARRIVED_AT_SQL}) >= ?", epoch.iso8601) if epoch
       produced = moves.group(:ref_id).sum(:qty)
-      tasks = Task.where(kind: "inspect", ref_type: "WorkOrder", ref_id: order_ids, status: %w[planned started done])
-      tasks = tasks.where(planned_at: epoch..) if epoch
-      inspected = tasks.group(:ref_id).sum(:qty)
+      ledger = Inspection.where(work_order_id: order_ids)
+      ledger = ledger.where(inspected_at: epoch..) if epoch
+      inspected = ledger.group(:work_order_id).sum(:qty)
+      open = Task.where(kind: "inspect", ref_type: "WorkOrder", ref_id: order_ids, status: %w[planned started])
+      open = open.where(planned_at: epoch..) if epoch
+      open.group(:ref_id).sum(:qty).each { |id, qty| inspected[id] = inspected.fetch(id, 0) + qty }
+      passed_in_flight(order_ids, epoch).each { |id, qty| inspected[id] = inspected.fetch(id, 0) + qty }
       produced.to_h { |id, qty| [id, qty - inspected.fetch(id, 0)] }
+    end
+
+    # { 작업지시 id => 검사는 끝났지만 합격 이동(qc_pass)이 원장에 아직 없는 수량 }. 완료 검사의 합격분(검사량 - 불량 이동) - 끝난 적치의 합격 행.
+    def passed_in_flight(order_ids, epoch)
+      cutoff = @now - Config::INSPECT_LOOKBACK_SECONDS
+      done = Task.where(kind: "inspect", ref_type: "WorkOrder", ref_id: order_ids, status: "done", planned_at: [cutoff - 600, epoch].compact.max..)
+                 .where("finished_at > ?", cutoff).includes(:stock_move).to_a
+      return {} if done.empty?
+
+      moves = Task.where(kind: "putaway", ref_type: "Task", ref_id: done.map(&:id), status: "done").where.not(stock_move_id: nil)
+                  .pluck(:ref_id, :stock_move_id)
+      recorded = Inspection.where(stock_move_id: moves.map(&:last), result: "pass").pluck(:stock_move_id, :qty).to_h
+      landed = moves.group_by(&:first).transform_values { |rows| rows.sum { |_, move_id| recorded.fetch(move_id, 0) } }
+      done.each_with_object(Hash.new(0)) do |task, sums|
+        left = task.qty - (task.stock_move&.qty || 0) - landed.fetch(task.id, 0)
+        sums[task.ref_id] += left if left.positive?
+      end
     end
 
     # arrivals: arrivals_by_lot 의 이 로트 몫(최근 도착 순 [수량, 도착 ISO]). 배치 수량 이상이면 도착 시각을 보지 않는다.

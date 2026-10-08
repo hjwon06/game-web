@@ -187,7 +187,9 @@ CREATE TABLE public.inspections (
     stock_move_id bigint NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
+    qty numeric(14,3) DEFAULT 0.0 NOT NULL,
     CONSTRAINT inspections_defect_qty_check CHECK ((defect_qty >= (0)::numeric)),
+    CONSTRAINT inspections_qty_check CHECK ((qty >= (0)::numeric)),
     CONSTRAINT inspections_result_check CHECK (((result)::text = ANY (ARRAY[('pass'::character varying)::text, ('fail'::character varying)::text])))
 );
 
@@ -2084,6 +2086,7 @@ CREATE INDEX index_sim_epochs_on_started_at ON public.sim_epochs USING btree (st
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20261008160001'),
 ('20261008080003'),
 ('20261008080002'),
 ('20261008080001'),

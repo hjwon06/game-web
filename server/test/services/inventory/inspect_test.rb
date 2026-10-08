@@ -21,6 +21,7 @@ class Inventory::InspectTest < ActiveSupport::TestCase
 
     assert_equal %w[pass fail], inspections.map(&:result)
     assert_equal [0, 2], inspections.map { |i| i.defect_qty.to_i }
+    assert_equal [8, 2], inspections.map { |i| i.qty.to_i }, "검사 1행 = 이동 1건의 수량"
     assert_equal 8, qty_at("fg_store")
     assert_equal 2, qty_at("scrap")
     assert_equal 0, qty_at("qc")

@@ -12,7 +12,6 @@ module Simulation
 
     OPEN = %w[planned started].freeze
     LIVE = (OPEN + %w[done]).freeze
-    RETENTION_WINDOW = Task::RETENTION # 이보다 오래된 done 작업은 Task.prune! 이 지운다
 
     # 상차 취소가 MAX 에 닿아 포기 로그를 이미 남긴 [라인 id, 로트 id]. 프로세스 메모리(재시작하면 1줄 더 남는다).
     def self.gave_up = (@gave_up ||= Set.new)
@@ -52,45 +51,52 @@ module Simulation
 
     # --- load ------------------------------------------------------------------------------------
 
-    # pick 이 끝났고 열린 pick 이 없는 라인마다, 로트별로 (끝난 pick 합 - 취소 아닌 load 합) 이 양수면 load 를 계획한다.
+    # 상차 대상은 지워지는 pick 기록이 아니라 출하대(shipping) 실재고다: 로트별로 (shipping 현재고 - 열린 load 합) 이 양수면 그 양을
+    # 열린 수주 라인(납기 순)의 잔량(= 주문량 - 출하한 양 - 열린 load 합)과 맞춰 라인마다 load 를 계획한다. 열린 pick 이 있는 라인은 pick 이 끝날 때까지 기다린다.
+    # (Task.prune! 이 done pick 을 지워도 대상이 변하지 않는다. 출하한 양은 stock_moves 원장에서 센다.)
     def plan_loads
-      line_ids = open_lines.pluck(:id)
-      return if line_ids.empty?
+      shipping = Location.find_by!(code: "shipping")
+      stock = Quant.where(location_id: shipping.id).where.not(lot_id: nil).where("qty > 0").pluck(:product_id, :lot_id, :qty)
+      return if stock.empty?
 
-      picked = line_tasks("pick", line_ids, "done").where(planned_at: (@now - RETENTION_WINDOW)..).group(:ref_id, :lot_id).sum(:qty)
-      return if picked.empty?
+      open_by_lot = Task.where(kind: "load", status: OPEN, from_location_id: shipping.id).group(:product_id, :lot_id).sum(:qty)
+      free = stock.filter_map { |product_id, lot_id, qty| [[product_id, lot_id], qty - open_by_lot.fetch([product_id, lot_id], 0)] }
+                  .select { |_, qty| qty.positive? }.to_h
+      return if free.empty?
 
-      loaded = line_tasks("load", line_ids, LIVE).group(:ref_id, :lot_id).sum(:qty)
+      lines = candidate_lines(free.keys.map(&:first).uniq).to_a
+      return if lines.empty?
+
+      line_ids = lines.map(&:id)
       picking = line_tasks("pick", line_ids, OPEN).distinct.pluck(:ref_id).to_set
-      lines = SalesOrderLine.where(id: picked.keys.map(&:first)).includes(:product).index_by(&:id)
-      lots = Lot.where(id: picked.keys.map(&:last).compact).index_by(&:id)
       cancels = line_tasks("load", line_ids, "cancelled").group(:ref_id, :lot_id).count
-      # 라인의 주문 잔량 = 주문량 - (출하한 양 + 이미 계획된 load 합). 같은 라인의 앞 로트가 방금 계획한 양도 뺀다(아래에서 차감).
       shipped = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id).sum(:qty)
       open_loads = line_tasks("load", line_ids, OPEN).group(:ref_id).sum(:qty)
+      lots = Lot.where(id: free.keys.map(&:last)).index_by(&:id)
 
-      picked.sort_by { |(line_id, lot_id), _| [line_id, lot_id || 0] }.each do |(line_id, lot_id), qty|
-        waiting = qty - loaded.fetch([line_id, lot_id], 0)
-        next if picking.include?(line_id) || lot_id.nil? || !waiting.positive?
+      lines.each do |line|
+        next if picking.include?(line.id)
 
-        line = lines.fetch(line_id)
-        # load 수량 = min(남은 pick 분, 주문 잔량). 잔량이 0 이면 계획하지 않는다(Inventory::Ship 이 OverShipment 로 취소하던 경우).
-        remaining = line.ordered_qty - shipped.fetch(line_id, 0) - open_loads.fetch(line_id, 0)
-        qty_to_load = [waiting, remaining].min
-        next unless qty_to_load.positive?
+        free.select { |(product_id, _), _| product_id == line.product_id }.sort_by { |(_, lot_id), _| lot_id }.each do |(_, lot_id), available|
+          # load 수량 = min(출하대에 남은 로트 재고, 주문 잔량). 잔량이 0 이면 계획하지 않는다(Inventory::Ship 이 OverShipment 로 취소하던 경우).
+          remaining = line.ordered_qty - shipped.fetch(line.id, 0) - open_loads.fetch(line.id, 0)
+          qty_to_load = [available, remaining].min
+          next unless qty_to_load.positive?
 
-        if cancels.fetch([line_id, lot_id], 0) >= Config::MAX_LOAD_CANCELS
-          # 취소가 계속되는 라인·로트는 더 계획하지 않는다. 10초마다 같은 로그가 반복되지 않도록 (라인, 로트)당 프로세스에서 1줄만 남긴다.
-          if self.class.gave_up.add?([line_id, lot_id])
-            @logger.warn("sim shipping #{@now.iso8601} 수주 라인 #{line_id} 로트 #{lot_id} 상차가 #{Config::MAX_LOAD_CANCELS}회 취소돼 더 계획하지 않음")
+          if cancels.fetch([line.id, lot_id], 0) >= Config::MAX_LOAD_CANCELS
+            # 취소가 계속되는 라인·로트는 더 계획하지 않는다. 10초마다 같은 로그가 반복되지 않도록 (라인, 로트)당 프로세스에서 1줄만 남긴다.
+            if self.class.gave_up.add?([line.id, lot_id])
+              @logger.warn("sim shipping #{@now.iso8601} 수주 라인 #{line.id} 로트 #{lot_id} 상차가 #{Config::MAX_LOAD_CANCELS}회 취소돼 더 계획하지 않음")
+            end
+            next
           end
-          next
-        end
 
-        Ops::Plan.call(kind: "load", product: line.product, lot: lots.fetch(lot_id), qty: qty_to_load, from: "shipping", to: "customer",
-                       ref: line, earliest_at: @now)
-        open_loads[line_id] = open_loads.fetch(line_id, 0) + qty_to_load
-        @counts[:load] += 1
+          Ops::Plan.call(kind: "load", product: line.product, lot: lots.fetch(lot_id), qty: qty_to_load, from: "shipping", to: "customer",
+                         ref: line, earliest_at: @now)
+          free[[line.product_id, lot_id]] = available - qty_to_load
+          open_loads[line.id] = open_loads.fetch(line.id, 0) + qty_to_load
+          @counts[:load] += 1
+        end
       end
     end
 
