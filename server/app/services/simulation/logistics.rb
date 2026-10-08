@@ -8,6 +8,11 @@ module Simulation
     # 반환: { backflush:, skipped:, order: } (이번 호출에서 실제로 한 일)
     def self.call(now:, logger: Rails.logger) = new(now: now, logger: logger).call
 
+    # 프로세스 메모리 상태: discarded[작업지시] = 상한을 넘어 버린 수량, starved[작업지시] = { minutes:, at: } 연속 부족 분.
+    def self.state = (@state ||= { discarded: Hash.new(0), starved: {} })
+
+    def self.reset_state! = @state = nil
+
     def initialize(now:, logger:)
       @minute = now.utc.beginning_of_minute
       @iso = @minute.iso8601
@@ -40,8 +45,10 @@ module Simulation
       @logger.error("sim logistics #{name} #{@iso}: #{e.class} #{e.message}")
     end
 
-    # 작업지시별 good(EPOCH 이후 production_events) - done(produce 이동) 이 양수면 그만큼 Backflush.
-    # 자재가 모자란 작업지시는 이번 분을 건너뛴다(skipped). 자재는 LineFeed 가 raw 칸에서 line_side 로 따로 채운다.
+    # 작업지시별 pending = good(EPOCH 이후 production_events) - done(produce 이동) - 버린 양 이 양수면 Backflush.
+    # 한 분에 처리하는 양(chunk)은 min(pending, 자재별 floor(line_side 재고 / qty_per) 의 최솟값, BACKFLUSH_CHUNK_MAX) 이다.
+    # 0 이면 그 작업지시만 이번 분을 건너뛰고(skipped) 다른 작업지시는 진행한다. 남은 pending 은 다음 분에 이어서 처리한다.
+    # 자재는 LineFeed 가 raw 칸에서 line_side 로 따로 채운다.
     # 이번 분 produce 키가 이미 있는 작업지시는 건드리지 않는다(남은 양은 다음 분 키로 처리된다).
     def catch_up(epoch)
       good = ProductionEvent.where(bucket_start: epoch...@minute).group(:work_order_id).sum(:good_qty)
@@ -53,20 +60,61 @@ module Simulation
       good.sort.each do |order_id, good_qty|
         next if minted.include?(keys.fetch(order_id))
 
-        delta = good_qty.to_i - done.fetch(order_id, 0).to_i
-        next unless delta.positive?
-
-        backflush(orders.fetch(order_id), delta)
+        order = orders.fetch(order_id)
+        pending = cap_backlog(order, good_qty.to_i - done.fetch(order_id, 0).to_i - self.class.state[:discarded][order_id])
+        if pending.positive?
+          backflush(order, pending)
+        else
+          self.class.state[:starved].delete(order_id)
+        end
       end
     end
 
-    def backflush(order, delta)
-      savepoint { consume_and_produce(order, delta) }
+    # pending 이 BACKLOG_CAP 을 넘으면 넘는 만큼은 EPOCH 를 앞당긴 것처럼 버리고(소급하지 않는다) 로그 1줄.
+    # 버린 양은 프로세스 메모리에 둔다(bin/sim 단일 프로세스 전제). 재시작하면 pending 이 다시 계산돼 같은 규칙으로 또 잘린다.
+    def cap_backlog(order, pending)
+      excess = pending - Config::BACKLOG_CAP
+      return pending unless excess.positive?
+
+      self.class.state[:discarded][order.id] += excess
+      @logger.info("sim logistics #{@iso} #{order.code} 미소비 #{pending}개가 상한 #{Config::BACKLOG_CAP}개를 넘어 #{excess}개를 소급하지 않고 버림")
+      Config::BACKLOG_CAP
+    end
+
+    def backflush(order, pending)
+      bom = BomLine.where(product_id: order.item.id).where("qty_per > 0").order(:component_id).includes(:component).to_a
+      on_hand = line_side_on_hand(bom)
+      limits = bom.to_h { |line| [line, (on_hand.fetch(line.component_id, 0) / line.qty_per).floor] }
+      scarcest, can_make = limits.min_by { |_, count| count }
+      chunk = [pending, Config::BACKFLUSH_CHUNK_MAX, can_make || pending].min
+      return starve(order, pending, scarcest, on_hand) unless chunk.positive?
+
+      savepoint { consume_and_produce(order, chunk) }
+      self.class.state[:starved].delete(order.id)
       @counts[:backflush] += 1
     rescue Inventory::InsufficientStock
       @counts[:skipped] += 1
     rescue StandardError => e # 한 작업지시 때문에 나머지를 막지 않는다
       @logger.error("sim logistics backflush #{order.code} #{@iso}: #{e.class} #{e.message}")
+    end
+
+    def line_side_on_hand(bom)
+      line_side = Location.find_by!(code: "line_side")
+      Quant.where(location_id: line_side.id, product_id: bom.map(&:component_id)).group(:product_id).sum(:qty)
+    end
+
+    # 자재 부족으로 건너뜀. 작업지시별 연속 분 수를 세고(같은 분 재호출은 다시 세지 않는다), 10분 이상이면 10분마다 무엇이 부족한지 로그 1줄.
+    def starve(order, pending, line, on_hand)
+      @counts[:skipped] += 1
+      entry = self.class.state[:starved][order.id] ||= { minutes: 0, at: nil }
+      return if entry[:at] == @minute
+
+      entry[:minutes] += 1
+      entry[:at] = @minute
+      return unless entry[:minutes] >= Config::STARVE_LOG_MINUTES && (entry[:minutes] % Config::STARVE_LOG_MINUTES).zero?
+
+      @logger.warn("sim logistics #{@iso} #{order.code} 자재 부족 연속 #{entry[:minutes]}분: #{line.component.sku} " \
+                   "line_side #{BigDecimal(on_hand.fetch(line.component_id, 0).to_s).to_s('F')} / 1개당 #{line.qty_per.to_s('F')} (미소비 #{pending}개)")
     end
 
     # Inventory::Backflush 는 로트 없는 재고만 쓴다. 같은 일을 여기서 로트 단위로 한다:

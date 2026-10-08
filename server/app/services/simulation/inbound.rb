@@ -74,13 +74,15 @@ module Simulation
       state.update!(next_truck_at: following)
     end
 
-    # (칸 재고 + 입고대 + 하차 계획분) 이 다음 30분 예상 소비량에 가장 못 미치는 자재. 모자란 자재가 없으면 nil.
+    # (raw 칸 재고 + line_side 재고 + 입고대 + 하차 계획분) 이 다음 30분 예상 소비량에 가장 못 미치는 자재. 모자란 자재가 없으면 nil.
+    # 진행 중 feed 는 완료 전까지 raw 칸 재고에 그대로 들어 있어 따로 더하지 않는다(더하면 이중으로 센다).
     def most_short_material
       need = consumption_per_second.transform_values { |per_second| per_second * Config::FORECAST_SECONDS }
       return nil if need.empty?
 
       ids = need.keys
-      in_stock = Quant.where(product_id: ids, location_id: store_location_ids).group(:product_id).sum(:qty)
+      in_stock = Quant.where(product_id: ids, location_id: store_location_ids + Location.where(code: "line_side").pluck(:id))
+                      .group(:product_id).sum(:qty)
       receiving = Quant.where(product_id: ids, location_id: Location.where(code: "receiving").select(:id)).group(:product_id).sum(:qty)
       coming = Task.where(kind: "unload", status: %w[planned started], product_id: ids).group(:product_id).sum(:qty)
 

@@ -32,6 +32,9 @@ module Simulation
 
     # 물류(자재 소비) 숫자.
     LOGISTICS_SECONDS = 60
+    BACKFLUSH_CHUNK_MAX = 300                # 작업지시 1건이 한 분에 소비하는 완제품 수 상한. 밀린 분량은 이 크기로 나눠 처리한다
+    BACKLOG_CAP = 5_000                      # 작업지시별 미소비량(pending) 상한. 넘는 분량은 소급하지 않고 버린다
+    STARVE_LOG_MINUTES = 10                  # 작업지시가 이만큼 연속으로 자재 부족이면 그 뒤 이 간격마다 로그 1줄
 
     # 입고(트럭 → 하차 → 칸 적치) 숫자. Runner 가 BUCKET_SECONDS(10초)마다 Inbound 를 부른다.
     FORECAST_SECONDS = 1800                  # 이만큼의 예상 소비량 대비 (칸 재고 + 들어오는 중) 이 가장 모자란 자재를 싣는다

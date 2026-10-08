@@ -23,9 +23,11 @@ class LogisticsTest < ActiveSupport::TestCase
     # 용량은 line_feed_test·move_capacity_test 에서 본다
     Location.where(id: Simulation::Inbound.bins_under("raw_store").select(:id)).update_all(capacity_units: 1_000_000)
     Location.where(id: @line_side.id).update_all(capacity_units: 1_000_000)
+    Simulation::Logistics.reset_state!
   end
 
   teardown do
+    Simulation::Logistics.reset_state!
     @old_epoch.nil? ? ENV.delete("INVENTORY_EPOCH") : ENV["INVENTORY_EPOCH"] = @old_epoch
   end
 
@@ -42,8 +44,8 @@ class LogisticsTest < ActiveSupport::TestCase
                          ref: nil, idempotency_key: "test-feed-#{tag}")
   end
 
-  def event(at, good)
-    ProductionEvent.create!(machine: @machine, work_order: @order, bucket_start: at, bucket_end: at + 10,
+  def event(at, good, order: @order)
+    ProductionEvent.create!(machine: order.machine, work_order: order, bucket_start: at, bucket_end: at + 10,
                             good_qty: good, defect_qty: 0, machine_version: 0)
   end
 
@@ -142,23 +144,22 @@ class LogisticsTest < ActiveSupport::TestCase
     assert_equal [30, 10], moves("produce").order(:id).pluck(:qty).map(&:to_i)
   end
 
-  test "line_side 가 부족하면 그 분은 건너뛰고(이동 0), 공급되면 다음 분에 소비를 재개한다" do
-    stock(@steel, 10) # 100개 생산에 200 필요
-    stock(@bolt, 10_000)
+  test "자재 하나가 line_side 에 0 이면 그 분은 건너뛰고(이동 0), 공급되면 다음 분에 소비를 재개한다" do
+    stock(@bolt, 10_000) # 강판은 line_side 에 없다
     event(M0 - 20, 100)
 
     a = run_minute(0)
     assert_equal [0, 1], [a[:backflush], a[:skipped]]
     assert_equal 0, moves("produce").count
-    assert_equal 0, moves("issue").count, "볼트는 충분했지만 전체가 롤백돼 아무것도 빠지지 않는다"
-    assert_equal 10, qty_at(@steel, "line_side")
+    assert_equal 0, moves("issue").count, "볼트는 충분했지만 아무것도 빠지지 않는다"
+    assert_equal 0, qty_at(@steel, "line_side")
     assert_equal 0, moves("receive").where("idempotency_key LIKE 'sim:%'").count, "Logistics 는 트럭을 부르지 않는다"
 
     stock(@steel, 500, bin: "RAW-A-01-02") # feed 완료 = line_side 에 들어옴
     b = run_minute(1)
     assert_equal [1, 0], [b[:backflush], b[:skipped]]
     assert_equal 100, moves("produce").sum(:qty)
-    assert_equal 310, qty_at(@steel, "line_side")
+    assert_equal 300, qty_at(@steel, "line_side")
     assert_equal 0, Quant.joins(:location).where(locations: { kind: "physical" }).where("quants.qty < 0").count
     assert_equal [], Inventory::Reconcile.call
   end
@@ -192,6 +193,79 @@ class LogisticsTest < ActiveSupport::TestCase
     assert_equal 50, qty_at(@steel, "line_side")
     assert_equal 400, qty_at(@bolt, "line_side")
     assert_equal [], Inventory::Reconcile.call
+  end
+
+  test "백플러시 분할: pending 5,000 에 자재가 일부뿐이면 자재가 허용하는 만큼(상한 300)만 소비하고 다음 분에 이어서 소비한다" do
+    stock(@steel, 1000) # 강판 2개당 1개 → 500개분
+    stock(@bolt, 10_000)
+    event(M0 - 20, 5000)
+
+    assert_equal [1, 0], run_minute(0).values_at(:backflush, :skipped)
+    assert_equal [300], moves("produce").pluck(:qty).map(&:to_i), "min(5000, 500, 300)"
+    assert_equal 400, qty_at(@steel, "line_side")
+
+    assert_equal 1, run_minute(1)[:backflush]
+    assert_equal [300, 200], moves("produce").order(:id).pluck(:qty).map(&:to_i), "강판 400 → 200개분이 상한보다 작다"
+    assert_equal 0, qty_at(@steel, "line_side")
+
+    assert_equal [0, 1], run_minute(2).values_at(:backflush, :skipped)
+    assert_equal 500, moves("produce").sum(:qty)
+
+    stock(@steel, 2000, bin: "RAW-A-01-02")
+    assert_equal 1, run_minute(3)[:backflush]
+    assert_equal 800, moves("produce").sum(:qty), "공급되자 상한 300 만큼 이어서 소비"
+    assert_equal [], Inventory::Reconcile.call
+  end
+
+  test "자재 하나가 0 이면 그 작업지시만 0 이고 다른 작업지시는 진행한다" do
+    nut = Product.create!(sku: "RAW-N", name: "너트", uom: "ea", kind: "raw")
+    fg2 = Product.create!(sku: "FG-NT", name: "너트세트", uom: "ea", kind: "fg")
+    BomLine.create!(product: fg2, component: nut, qty_per: 1)
+    machine2 = Machine.create!(code: "M2", name: "프레스", state: "running")
+    order2 = WorkOrder.create!(code: "WO-L2", machine: machine2, item: fg2, product: "너트세트", target_qty: 100_000,
+                               status: "active", started_at: M0)
+    stock(@bolt, 1000) # 강판 0 → 첫 작업지시는 못 만든다
+    stock(nut, 1000)
+    event(M0 - 20, 100)
+    event(M0 - 20, 100, order: order2)
+
+    result = run_minute(0)
+
+    assert_equal [1, 1], result.values_at(:backflush, :skipped)
+    assert_equal [order2.id], moves("produce").pluck(:ref_id)
+    assert_equal 900, qty_at(nut, "line_side")
+    assert_equal 1000, qty_at(@bolt, "line_side"), "첫 작업지시는 볼트도 쓰지 않는다"
+  end
+
+  test "BACKLOG_CAP 을 넘는 pending 은 소급하지 않고 버리며 로그 1줄을 남긴다" do
+    stock(@steel, 100_000)
+    stock(@bolt, 100_000)
+    event(M0 - 20, 8000)
+
+    run_minute(0)
+    18.times { |n| run_minute(n + 1) }
+
+    assert_equal 5000, moves("produce").sum(:qty), "8000 중 3000 은 버려 5000 만 소비한다"
+    assert_equal 1, @log.string.lines.grep(/3000개를 소급하지 않고 버림/).size
+    assert_equal 0, run_minute(19)[:backflush], "다 소비한 뒤에는 따라잡을 것이 없다"
+  end
+
+  test "작업지시가 10분 연속 자재 부족이면 부족한 자재를 로그 1줄로 남기고, 같은 분 재호출은 세지 않는다" do
+    stock(@bolt, 1000)
+    event(M0 - 20, 100)
+
+    9.times { |n| run_minute(n) }
+    run_minute(8) # 같은 분 재호출
+    assert_empty @log.string.lines.grep(/자재 부족 연속/)
+
+    run_minute(9)
+    lines = @log.string.lines.grep(/자재 부족 연속/)
+    assert_equal 1, lines.size
+    assert_match(/WO-L1 자재 부족 연속 10분: RAW-S line_side 0\.0 /, lines.first)
+
+    stock(@steel, 1000)
+    run_minute(10)
+    assert_equal 0, Simulation::Logistics.state[:starved].size, "소비가 재개되면 연속 분 수가 지워진다"
   end
 
   test "issue 멱등키는 issue:<작업지시>:<자재>:<line_side>:<로트>:<분 ISO> 이다" do

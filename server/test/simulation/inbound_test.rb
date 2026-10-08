@@ -252,6 +252,18 @@ class InboundTest < ActiveSupport::TestCase
     assert_equal ["R-202610081207-RAW-B"], truck_lots.pluck(:lot_no)
   end
 
+  test "line_side 에 있는 재고도 센다: line_side 가 넉넉한 자재는 raw 칸이 비어도 건너뛴다" do
+    roomy_bins!
+    seed_bin(@steel, "RAW-A-01-01", 3000)
+    Inventory::Move.call(product: @steel, lot: nil, from: "RAW-A-01-01", to: "line_side", qty: 3000, move_type: "feed",
+                         ref: nil, idempotency_key: next_key) # raw 칸 0, line_side 3000(필요 2822.4 이상)
+    due!(NOW)
+
+    inbound(NOW)
+
+    assert_equal ["R-202610081207-RAW-B"], truck_lots.pluck(:lot_no)
+  end
+
   test "이미 계획된 하차분도 입고 예정으로 센다" do
     roomy_bins!
     seed_bin(@steel, "RAW-A-01-01", 2800) # 부족 22.4

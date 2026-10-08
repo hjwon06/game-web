@@ -16,10 +16,11 @@ module Simulation
     end
 
     def call
-      need = consumption_per_second.transform_values { |per_second| per_second * Config::LINE_FEED_FORECAST_SECONDS }
+      rates = consumption_per_second
+      need = rates.transform_values { |per_second| per_second * Config::LINE_FEED_FORECAST_SECONDS }
       if need.any?
         line_side = Location.find_by!(code: "line_side")
-        shortfall = short_materials(line_side, need)
+        shortfall = short_materials(line_side, need, rates)
         plan_feeds(line_side, shortfall) if shortfall.any?
       end
       @logger.info("sim line_feed #{@now.iso8601} #{@counts.map { |k, v| "#{k}=#{v}" }.join(' ')}") if @counts.values.any?(&:positive?)
@@ -37,14 +38,15 @@ module Simulation
 
     private
 
-    # { product_id => 부족분 } 부족분 큰 순. 진행 중 feed 가 있는 자재는 뺀다.
-    def short_materials(line_side, need)
+    # { product_id => 부족분 }. line_side 재고 / 분당 소비(버틸 수 있는 분 수)가 작은 자재부터. 진행 중 feed 가 있는 자재는 뺀다.
+    # line_side 여유(room)가 모자라 다 못 채울 때 가장 급한 자재가 먼저 채워지게 하는 순서다.
+    def short_materials(line_side, need, rates)
       ids = need.keys
       on_hand = Quant.where(location_id: line_side.id, product_id: ids).group(:product_id).sum(:qty)
       feeding = Task.where(kind: "feed", status: %w[planned started], product_id: ids).distinct.pluck(:product_id).to_set
       @room = room_in(line_side)
       need.filter_map { |id, qty| [id, qty - on_hand.fetch(id, 0)] if on_hand.fetch(id, 0) < qty && !feeding.include?(id) }
-          .sort_by { |id, short| [-short, id] }.to_h
+          .sort_by { |id, _| [on_hand.fetch(id, 0) / (rates.fetch(id) * 60), id] }.to_h
     end
 
     # line_side 에 더 들어갈 수 있는 수량: 용량 - 현재고(전 품목) - 진행 중 feed(전 품목).

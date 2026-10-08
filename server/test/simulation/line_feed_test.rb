@@ -137,6 +137,19 @@ class LineFeedTest < ActiveSupport::TestCase
     assert_equal [60], feeds.where(product_id: @steel.id).map { |t| t.qty.to_i }
   end
 
+  test "line_side 재고 / 분당 소비가 가장 작은 자재부터 계획한다: 부족분이 더 커도 버틸 시간이 긴 자재는 뒤다" do
+    line_stock(@steel, 300) # 분당 94.08 → 3.2분 버틴다. 부족분 640.8
+    line_stock(@bolt, 100)  # 분당 47.04 → 2.1분 버틴다. 부족분 370.4
+    raw_stock(@steel, BIN1, 500)
+    raw_stock(@bolt, BIN1, 500)
+    Location.where(id: @line_side.id).update_all(capacity_units: 900) # 보유 400 → 여유 500: 한 자재만 채울 수 있다
+
+    result = feed
+
+    assert_equal [1, 1], [result[:feed], result[:waiting]]
+    assert_equal [@bolt.id], feeds.map(&:product_id)
+  end
+
   test "원천 재고가 없는 자재는 계획하지 않고 waiting 으로 센다" do
     raw_stock(@steel, BIN1, 500)
 
