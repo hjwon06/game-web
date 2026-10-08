@@ -62,7 +62,7 @@ module Simulation
         # 꺼낼 칸은 Ops::Removal 이 고른다: raw 칸(+ raw_store 자체) 중 FIFO 로 가용(현재고 - active 예약)이 있는 (칸, 로트).
         # 팔레트 1개만큼 있는 칸이 먼저고, 없으면 가용이 있는 가장 오래된 칸에서 남은 만큼이다.
         want = [Config::PALLET_QTY, @room].min
-        source = want.positive? && Ops::Removal.choose(product: products.fetch(product_id), qty: want, from_scope: "raw_store", partial: true)
+        source = want.positive? ? Ops::Removal.choose(product: products.fetch(product_id), qty: want, from_scope: "raw_store", partial: true) : nil
         qty = source && [want, source.available].min
         unless qty&.positive?
           @counts[:waiting] += 1
