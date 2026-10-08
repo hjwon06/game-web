@@ -232,6 +232,22 @@ export function setLamp(m, status) {
   l.material.color.setHex(c); l.material.emissive.setHex(c);
 }
 
+// ── 검사 작업자: 원통 몸 + 구 머리 + 안전모(2D drawWorker 와 같은 색) ──
+const sphereGeo = new THREE.SphereGeometry(1, 10, 8);
+export function worker() {
+  const g = new THREE.Group();
+  g.name = 'worker';
+  const part3 = (geo, color, x, y, z, sx = 1, sy = 1, sz = 1) => {
+    const m = shadow(new THREE.Mesh(geo, mat(color, .8)));
+    m.position.set(x, y, z); m.scale.set(sx, sy, sz); g.add(m); return m;
+  };
+  for (const sx of [-1, 1]) part3(cylGeo(.07, .42, 8), 0x333A45, sx * .09, .21, 0);        // 다리
+  part3(cylGeo(.17, .5, 10), 0x4A6FB5, 0, .67, 0);                                         // 몸
+  part3(sphereGeo, 0xF1C9A5, 0, 1.06, 0, .13, .13, .13);                                    // 머리
+  part3(sphereGeo, 0x0E7C86, 0, 1.1, 0, .145, .1, .145);                                    // 안전모
+  return g;
+}
+
 // ── 소품 ──
 export function cone() {
   const g = new THREE.Group();

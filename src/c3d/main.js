@@ -5,6 +5,9 @@ import { createGround } from './ground.js';
 import { createBuildings } from './buildings.js';
 import { createCampus, addKenneyParts, binSlots, dockSpots, machines } from './campus.js';
 import { CENTER } from './layout.js';
+import { initData, startPolling } from './data.js';
+import { createHaul } from './haul.js';
+import { createStock } from './stock.js';
 
 const capture = new URLSearchParams(location.search).get('capture') === '1';
 const canvas = document.getElementById('c3d');
@@ -61,6 +64,8 @@ function countTriangles() {
   return Math.round(n);
 }
 
+// 3D-③ 실시간 연결: 데이터(폴링·서버 시계) → 지게차·트럭·작업자(haul) · 칸/라인사이드 팔레트·기계 램프(stock)
+initData(clock.now);
 const ready = addKenneyParts(campus).then(() => {
   const tri = countTriangles();
   console.info(`[c3d] triangles ${tri} (budget 60000)`);
@@ -68,14 +73,22 @@ const ready = addKenneyParts(campus).then(() => {
   frame(0);
 }, e => console.error('[c3d] kenney load failed', e));
 
+const haul = createHaul(campus, { kenneyReady: ready });
+const stock = createStock(campus);
+tickers.push(haul.tick, stock.tick);
+startPolling();
+// 루미 검증용: {forks:[{code,task,pos}], trucks:[{code,state}], carriers:n} (+ 팔레트 수 등 보조 값)
+const state = () => ({ ...haul.state(), stock: stock.state() });
+
 if (capture) {
   window.__c3d = {
     step(ms = 16) { clock.advance(ms); frame(ms); return clock.now(); },
     now: () => clock.now(),
-    scene, camera, ready, binSlots, dockSpots, machines, view: VIEW,
+    scene, camera, ready, binSlots, dockSpots, machines, view: VIEW, state,
   };
   frame(0);
 } else {
+  window.__c3d = { now: () => clock.now(), state };
   (function loop() {
     requestAnimationFrame(loop);
     const dt = clock.now() - last;

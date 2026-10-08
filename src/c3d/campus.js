@@ -12,6 +12,11 @@ export const binSlots = {};
 // 도크 코드 → { position: 트럭 중심, rotationY, door }  (트럭 뒤쪽이 문에 닿는다)
 export const dockSpots = {};
 export const machines = {}; // 'M1' → machine Group
+// 기계 코드 → { x, z, sign }: 라인사이드 노란 판 중심과 기계에서 멀어지는 쪽(z 부호). 3D-③ 이 팔레트를 얹는다
+export const linesideSpots = {};
+// 3D-② 가 모양만 보이려고 놓은 정지 소품(랙 팔레트·야적 지게차·장식 트럭). 실데이터가 들어오면 hideDemo() 로 숨긴다
+const demo = [];
+export function hideDemo() { demo.forEach(o => { o.visible = false; }); demo.length = 0; }
 
 const pick = i => ITEM_COLORS[i % ITEM_COLORS.length];
 
@@ -25,7 +30,7 @@ function stock(group, spots) {
     deck.setMatrixAt(i, o.matrix); boxes.setMatrixAt(i, o.matrix);
     boxes.setColorAt(i, c.setHex(pick(i)));
   });
-  for (const m of [deck, boxes]) { m.castShadow = m.receiveShadow = true; group.add(m); }
+  for (const m of [deck, boxes]) { m.castShadow = m.receiveShadow = true; group.add(m); demo.push(m); }
 }
 
 // 건물 안에 랙 4개(세로 방향)를 세운다. prefix = 'RAW-A' | 'FG-A'
@@ -95,6 +100,7 @@ function hall(group) {
     group.add(g);
     machines[m.code] = g;
     lineside.push([cx, cz + (m.row === 0 ? MACHINE.d / 2 + .55 : -MACHINE.d / 2 - .55), m]);
+    linesideSpots[m.code] = { x: cx, z: lineside[lineside.length - 1][1], sign: m.row === 0 ? 1 : -1 };
   });
 
   // 라인사이드 적치 구역: 기계 앞 바닥의 노란 판
@@ -111,6 +117,7 @@ function hall(group) {
   fk.position.set(x + 6.5, .06, y + 6.1);
   fk.rotation.y = Math.PI / 2;
   group.add(fk);
+  demo.push(fk);
   { const b = barrier(1.8); b.position.set(x + 8.2, 0, y + .5); group.add(b); } // position 은 읽기 전용이라 set 으로
 }
 
@@ -122,7 +129,8 @@ function matYard(group) {
   const p = pallet(ITEM_COLORS[1]);
   fk.getObjectByName('load').add(p);
   group.add(fk);
-  [[16.6, 8.9, 0], [17.4, 8.9, 2]].forEach(([px, pz, ci]) => { const p2 = pallet(pick(ci)); p2.position.set(px, .06, pz); group.add(p2); });
+  demo.push(fk);
+  [[16.6, 8.9, 0], [17.4, 8.9, 2]].forEach(([px, pz, ci]) => { const p2 = pallet(pick(ci)); p2.position.set(px, .06, pz); group.add(p2); demo.push(p2); });
 }
 
 export function createCampus() {
@@ -147,7 +155,7 @@ export function createCampus() {
   return group;
 }
 
-// Kenney 자산이 필요한 것(트럭·장식). 로드 후 group 에 붙인다. 정지 상태 — 3D-③ 이 대체한다
+// Kenney 자산이 필요한 것(트럭·장식). 로드 후 group 에 붙인다. 트럭 2대는 정지 소품이라 실데이터가 들어오면 숨긴다(haul.js 가 움직이는 트럭을 따로 만든다)
 export async function addKenneyParts(group) {
   await loadTrucks();
   const decor = await addDecor(group);
@@ -158,6 +166,7 @@ export async function addKenneyParts(group) {
   t1.rotation.y = s1.rotationY;
   t1.name = 'truck-dock';
   group.add(t1);
+  demo.push(t1);
   setShutter(s1.door, 1);
   // 정문 밖 도로 1대: 단지 쪽(-x)을 향해 서 있다
   const t2 = truck('flat', 0x2563EB);
@@ -165,5 +174,6 @@ export async function addKenneyParts(group) {
   t2.rotation.y = -Math.PI / 2;
   t2.name = 'truck-road';
   group.add(t2);
+  demo.push(t2);
   return { decor, trucks: [t1, t2] };
 }
