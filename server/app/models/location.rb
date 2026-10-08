@@ -6,6 +6,33 @@ class Location < ApplicationRecord
   # 이동 경로를 가르는 물리 구역 5개. 칸·랙·구역은 조상 중 이 코드를 가진 위치의 구역으로 본다.
   ZONE_ROOTS = %w[receiving raw_store line_side qc fg_store shipping].freeze
   MAX_DEPTH = 8 # 순환 데이터가 들어와도 재귀 조회가 멈추게 하는 상한
+
+  # 화면 건물 판정. 위치 code 또는 조상 code 로 가른다(칸·랙·구역은 조상의 건물을 따른다).
+  BUILDING_BY_CODE = {
+    "supplier" => "gate", "customer" => "gate",
+    "receiving" => "material", "raw_store" => "material",
+    "line_side" => "hall", "production" => "hall",
+    "qc" => "qc", "scrap" => "qc",
+    "fg_store" => "shipping_wh", "shipping" => "shipping_dock"
+  }.freeze
+
+  # [[id, code, parent_id], ...] 전체 위치를 이미 읽어 둔 호출자가 쿼리 없이 { id => 건물 } 을 얻는다. 판정 못 하면 nil.
+  def self.buildings_by_id(rows)
+    by_id = rows.index_by(&:first)
+    rows.to_h do |id, _code, _parent|
+      node = by_id[id]
+      building = nil
+      (MAX_DEPTH + 1).times do
+        break unless node
+
+        building = BUILDING_BY_CODE[node[1]]
+        break if building
+
+        node = by_id[node[2]]
+      end
+      [id, building]
+    end
+  end
   LINE_SIDE_CAPACITY = Simulation::Config::LINE_SIDE_CAPACITY # 라인 공급대 하나의 용량(품목 무관 qty 합). 칸(BIN_CAPACITY)이 아니라 루트에 직접 걸린다
 
   # 위치 10개는 스키마가 아니라 데이터다. line_side 는 ③b 에서 늘었다(마이그레이션 20261008050000 도 같은 값을 넣는다).

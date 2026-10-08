@@ -11,7 +11,7 @@ module ActiveSupport
     fixtures :all
 
     # 위치 9개는 구조 덤프가 아니라 데이터다. fixture 로 넣으면 FK 검증이 superuser 권한을 요구하므로 매 테스트 보장한다.
-    setup { Location.ensure_defaults! }
+    setup { Location.ensure_defaults!; Resource.ensure_defaults! }
 
     # Add more helper methods to be used by all tests here...
   end
