@@ -133,7 +133,7 @@ module Simulation
         Config::PICKS_PER_LINE.times do
           break unless remaining.positive?
 
-          unless Ops::Plan.forklift_admit?
+          unless Ops::Plan.forklift_admit?(now: @now)
             full = true
             deferred += 1
             break
@@ -154,7 +154,7 @@ module Simulation
       end
       return unless deferred.positive?
 
-      @logger.info("sim shipping #{@now.iso8601} 지게차 대기 #{Ops::Plan.queue_seconds('forklift').round}초 > #{Config::FORKLIFT_ADMIT_SECONDS}초라 pick #{deferred}라인 보류")
+      @logger.info("sim shipping #{@now.iso8601} 지게차 대기 #{Ops::Plan.queue_seconds('forklift', now: @now).round}초 > #{Config::FORKLIFT_ADMIT_SECONDS}초라 pick #{deferred}라인 보류")
     end
 
     # fg 칸(+ 칸이 생기기 전 재고가 있을 수 있는 fg_store 자체)에 로트 있는 재고가 있는 품목 id.

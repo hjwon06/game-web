@@ -16,11 +16,12 @@ class ForkliftAdmitTest < ActiveSupport::TestCase
   end
 
   # 지게차 전부에 now + seconds 에 끝나는 일을 걸어 대기열을 그 길이로 만든다.
-  def fill_forklifts(seconds)
+  # base 는 그 테스트가 시뮬에 넘기는 now 와 같아야 한다(queue_seconds 는 now 기준).
+  def fill_forklifts(seconds, base: Time.current)
     Resource.where(kind: "forklift").find_each do |resource|
       Task.create!(kind: "pick", status: "planned", resource: resource, product: @fg, qty: 1,
                    from_location: Location.find_by!(code: "receiving"), to_location: Location.find_by!(code: "qc"),
-                   planned_at: Time.current, expected_finish_at: Time.current + seconds)
+                   planned_at: base, expected_finish_at: base + seconds)
     end
   end
 
@@ -73,7 +74,7 @@ class ForkliftAdmitTest < ActiveSupport::TestCase
   test "큐가 FORKLIFT_ADMIT_SECONDS 를 넘으면 pick 을 만들지 않고 로그 1줄, 큐가 비면 다시 만든다" do
     fg_stock(3 * Config::PICK_QTY)
     open_order(3 * Config::PICK_QTY)
-    fill_forklifts(Config::FORKLIFT_ADMIT_SECONDS + 120)
+    fill_forklifts(Config::FORKLIFT_ADMIT_SECONDS + 120, base: M0)
 
     result = Simulation::Shipping.call(now: M0, logger: logger)
 
@@ -92,10 +93,12 @@ class ForkliftAdmitTest < ActiveSupport::TestCase
     picks = Simulation::Shipping.call(now: M0, logger: logger)[:pick]
 
     assert_operator picks, :<, Config::PICKS_PER_LINE # 2대 x 40초: 5건이면 큐 ≈ 100초라 그 전에 멈춘다
-    assert_operator Ops::Plan.queue_seconds("forklift"), :<=, Config::FORKLIFT_ADMIT_SECONDS + 50
+    assert_operator Ops::Plan.queue_seconds("forklift", now: M0), :<=, Config::FORKLIFT_ADMIT_SECONDS + 50
   end
 
   test "큐가 길면 원자재 putaway 도 만들지 않고, 큐가 비면 만든다" do
+    # 적치 규칙이 없으면 칸을 못 골라 큐와 무관하게 0 이다(InboundTest setup 과 같은 공용 규칙).
+    PutawayRule.create!(product: nil, location: Location.find_by!(code: "raw_store"), priority: 100)
     done_unload
     fill_forklifts(Config::FORKLIFT_ADMIT_SECONDS + 120)
 

@@ -192,7 +192,7 @@ module Simulation
         next unless (task.qty - (task.stock_move&.qty || 0)).positive?
 
         # 진입 제한: 지게차 대기열이 길면 새 적치를 만들지 않고 qc 에 둔 채 다음 호출로 미룬다(feed 가 먼저 지게차를 받게 한다).
-        unless Ops::Plan.forklift_admit?
+        unless Ops::Plan.forklift_admit?(now: @now)
           deferred += 1
           next
         end
@@ -207,7 +207,7 @@ module Simulation
       end
       @counts[:waiting] = stuck
       if deferred.positive?
-        @logger.info("sim inspection #{@now.iso8601} 지게차 대기 #{Ops::Plan.queue_seconds('forklift').round}초 > #{Config::FORKLIFT_ADMIT_SECONDS}초라 적치 #{deferred}건 보류")
+        @logger.info("sim inspection #{@now.iso8601} 지게차 대기 #{Ops::Plan.queue_seconds('forklift', now: @now).round}초 > #{Config::FORKLIFT_ADMIT_SECONDS}초라 적치 #{deferred}건 보류")
       end
       return unless stuck.positive? || settled.positive?
 
