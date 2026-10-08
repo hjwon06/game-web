@@ -54,7 +54,10 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
     [order, SalesOrderLine.create!(sales_order: order, product: @fg, ordered_qty: qty)]
   end
 
+  # 통합 테스트는 요청 사이에 같은 DB 연결을 써서 AR 쿼리 캐시가 남는다. 같은 SQL 이 cached 로 와서 0으로 세지지 않게 먼저 비운다
+  # (루미 실측: 두 번째 search 요청도 SQL 7개를 실행했는데 전부 cached 로 표시돼 0으로 집계됐다).
   def count_queries
+    ActiveRecord::Base.connection.clear_query_cache
     count = 0
     counter = lambda do |*, payload|
       next if payload[:name] == "SCHEMA" || payload[:cached]
