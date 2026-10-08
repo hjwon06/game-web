@@ -8,7 +8,8 @@ import { CENTER } from './layout.js';
 import { initData, startPolling } from './data.js';
 import { createHaul } from './haul.js';
 import { createStock } from './stock.js';
-import { createUi } from './ui.js';
+import { createUi, OPS } from './ui.js';
+import { createNav } from './nav.js';
 
 const capture = new URLSearchParams(location.search).get('capture') === '1';
 const canvas = document.getElementById('c3d');
@@ -22,7 +23,7 @@ controls.target.set(CENTER.x, 0, CENTER.z);
 controls.enableDamping = !capture; // 캡처에서는 step 마다 결과가 같아야 한다
 controls.minPolarAngle = THREE.MathUtils.degToRad(35);
 controls.maxPolarAngle = THREE.MathUtils.degToRad(65);
-controls.minDistance = 20;
+controls.minDistance = 6; // 지게차·칸 앞까지 다가갈 수 있게(3D-⑥)
 controls.maxDistance = 220;
 
 // 첫 화면 구도. 사용자가 카메라를 만지기 전까지는 창 크기가 바뀔 때마다 다시 맞춘다.
@@ -55,16 +56,18 @@ const clock = capture
 
 // 다음 단계(애니메이션)가 매 프레임 불리는 곳에 붙는다: tick(now, dt)
 const tickers = [];
+let nav = null; // createNav 가 아래에서 채운다(frame/onResize 가 먼저 불려도 안전)
 let last = clock.now();
 function frame(dt) {
   const now = clock.now();
   tickers.forEach(fn => fn(now, dt));
   controls.update();
   renderer.render(scene, camera);
+  if (nav) nav.render(); // 이름표(CSS2D)
   last = now;
 }
 
-function onResize() { resize(); if (!touched) fit(); frame(0); }
+function onResize() { resize(); if (nav) nav.resize(); if (!touched) fit(); frame(0); }
 addEventListener('resize', onResize); // orientationchange 는 회전 전 값을 봐서 쓰지 않는다
 resize();
 fit();
@@ -89,11 +92,14 @@ const ready = addKenneyParts(campus).then(() => {
   frame(0);
 }, e => console.error('[c3d] kenney load failed', e));
 
-const haul = createHaul(campus, { kenneyReady: ready });
+const haul = createHaul(campus, { kenneyReady: ready, opsTrucks: () => (OPS.data && OPS.data.trucks) || [] });
 const stock = createStock(campus);
-tickers.push(haul.tick, stock.tick);
+// 3D-⑥ 조작: 키 비행 · 클릭 선택 · 추적 · 이름표 · 투어. 위치가 정해진 뒤(haul.tick 다음)에 돌아야 한다
+nav = createNav({ scene, camera, controls, canvas, haul, now: clock.now, setTouched: v => { touched = v; } });
+nav.resize();
+tickers.push(haul.tick, stock.tick, nav.tick);
 startPolling();
-createUi({ zoomIn, zoomOut, home: resetView }); // 3D-⑤ 관제 UI(별도 2초 폴링)
+createUi({ zoomIn, zoomOut, home: nav.home }); // 3D-⑤ 관제 UI(별도 2초 폴링)
 // 루미 검증용: {forks:[{code,task,pos}], trucks:[{code,state}], carriers:n} (+ 팔레트 수 등 보조 값)
 const state = () => ({ ...haul.state(), stock: stock.state() });
 
@@ -102,10 +108,11 @@ if (capture) {
     step(ms = 16) { clock.advance(ms); frame(ms); return clock.now(); },
     now: () => clock.now(),
     scene, camera, ready, binSlots, dockSpots, machines, view: VIEW, state,
+    camera: nav.camera, tour: nav.tour,
   };
   frame(0);
 } else {
-  window.__c3d = { now: () => clock.now(), state };
+  window.__c3d = { now: () => clock.now(), state, camera: nav.camera, tour: nav.tour };
   (function loop() {
     requestAnimationFrame(loop);
     const dt = clock.now() - last;

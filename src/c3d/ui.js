@@ -4,7 +4,11 @@
 import { MS, S } from './data.js';
 
 const OPS_MS = 2000, LOST_MS = 10000, STAGES = [['received', '접수'], ['picked', '피킹'], ['staged', '출하대 집결'], ['loaded', '상차'], ['shipped', '출하']];
-const SITE_NAME = { mat: '자재창고', ship: '출하장', qc: '품질검사', prod: '생산동' };
+const SITE_NAME = { mat: '자재창고', ship: '출하장', qc: '품질검사', prod: '생산동', office: '수주 사무동', maint: '정비동', util: '유틸리티' };
+// 폴링한 ops 를 nav.js(이름표 상태)·haul.js(트럭 번호)도 읽는다
+export const OPS = { data: null };
+// 검색 결과 building → 건물 키(단지 건물)
+const SEARCH_SITE = { office: 'office', material: 'mat', shipping_dock: 'ship', shipping_wh: 'ship', shipping: 'ship', qc: 'qc', hall: 'prod', production: 'prod' };
 const MACHINE_ST = { running: ['가동 중', 'ok'], stopped: ['정지', ''], broken: ['고장', 'bad'] };
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -55,26 +59,68 @@ export function createUi({ zoomIn, zoomOut, home }) {
   tickClock(); setInterval(tickClock, 1000);
   fetch('/api/me', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null).then(m => { if (m && m.name) $('me').textContent = m.name; }).catch(() => {});
 
-  // ---- 검색: 입력 + 결과 목록까지(이동은 ⑥) ----
+  // ---- 검색: 결과 클릭·Enter(첫 결과) → 대상 선택(비행·추적은 nav.js 가 'c3d:select' 로 받는다) ----
   const inEl = $('search-in'), resEl = $('search-res');
-  let sTimer = 0, sCtl = null;
+  let sTimer = 0, sCtl = null, found = [];
+  const site = code => select('site', code);
+  // 검색 결과 한 건 → 선택 이벤트 한 번
+  function go(x) {
+    const code = String(x.code || ''), trucks = (ops && ops.trucks) || [];
+    if (x.type === 'resource') {
+      if (/^DOCK/i.test(code)) { // 트럭이 서 있으면 그 트럭, 아니면 도크가 있는 건물
+        const d = ((ops && ops.docks) || []).find(y => y.code === code), no = d && d.truck && (d.truck.no || d.truck);
+        if (no) select('truck', String(no)); else site(/^DOCK-OUT/i.test(code) ? 'ship' : 'mat');
+      } else if (/^F(ORK)?-/i.test(code) || ((ops && ops.forklifts) || []).some(f => f.code === code)) select('forklift', code);
+      else return false;
+    } else if (x.type === 'po' || x.type === 'so') { // 단지에 와 있으면 트럭, 아니면 해당 도크가 있는 건물(PO 자재창고 · SO 출하장)
+      const t = trucks.find(y => String(y.no) === code && y.status !== 'en_route');
+      if (t) select('truck', code); else site(x.type === 'po' ? 'mat' : 'ship');
+    } else if (x.type === 'bin') select('bin', code);
+    else if (x.type === 'product') { // 그 품목 재고가 가장 많은 건물
+      let best = null;
+      Object.entries((ops && ops.sites) || {}).forEach(([k, s]) => {
+        const q = (s.items || []).filter(i => i.product === x.label || i.sku === code || i.product === code).reduce((a, i) => a + (Number(i.qty) || 0), 0);
+        if (q > 0 && (!best || q > best[1])) best = [k, q];
+      });
+      site(best ? best[0] : SEARCH_SITE[x.building] || 'mat');
+    } else return false;
+    return true;
+  }
+  function pick(x) {
+    if (!go(x)) return;
+    found = []; resEl.replaceChildren(); inEl.blur(); // 입력창 포커스가 남으면 숫자 키 비행이 막힌다
+  }
+  let sRun = null; // 진행 중인 검색(Enter 가 기다린다)
+  const runSearch = q => (sRun = search(q));
+  async function search(q) {
+    if (sCtl) sCtl.abort();
+    sCtl = new AbortController();
+    try {
+      const r = await fetch('/api/campus/search?q=' + encodeURIComponent(q), { headers: { Accept: 'application/json' }, signal: sCtl.signal });
+      if (!r.ok) throw new Error(r.status);
+      found = ((await r.json()).results || []).slice(0, 20);
+      if (!found.length) { const li = el('li'); li.append(el('span', 'sub', '검색 결과가 없습니다')); resEl.replaceChildren(li); return; }
+      resEl.replaceChildren(...found.map(x => {
+        const li = el('li'); li.tabIndex = 0; li.style.cursor = 'pointer'; li.append(el('span', null, x.label || x.code), el('span', 'sub', x.code || ''));
+        li.addEventListener('click', () => pick(x)); li.addEventListener('keydown', e => { if (e.key === 'Enter') pick(x); });
+        return li;
+      }));
+    } catch (e) { if (e.name !== 'AbortError') { found = []; const li = el('li'); li.append(el('span', 'sub', '검색을 불러오지 못했습니다')); resEl.replaceChildren(li); } }
+  }
   inEl.addEventListener('input', () => {
     clearTimeout(sTimer);
     const q = inEl.value.trim();
-    if (!q) { resEl.replaceChildren(); return; }
-    sTimer = setTimeout(async () => {
-      if (sCtl) sCtl.abort();
-      sCtl = new AbortController();
-      try {
-        const r = await fetch('/api/campus/search?q=' + encodeURIComponent(q), { headers: { Accept: 'application/json' }, signal: sCtl.signal });
-        if (!r.ok) throw new Error(r.status);
-        const list = (await r.json()).results || [];
-        if (!list.length) { const li = el('li'); li.append(el('span', 'sub', '검색 결과가 없습니다')); resEl.replaceChildren(li); return; }
-        resEl.replaceChildren(...list.slice(0, 20).map(x => { const li = el('li'); li.append(el('span', null, x.label || x.code), el('span', 'sub', x.code || '')); return li; }));
-      } catch (e) { if (e.name !== 'AbortError') { const li = el('li'); li.append(el('span', 'sub', '검색을 불러오지 못했습니다')); resEl.replaceChildren(li); } }
-    }, 250);
+    if (!q) { found = []; if (sCtl) sCtl.abort(); resEl.replaceChildren(); return; }
+    sTimer = setTimeout(() => { sTimer = 0; runSearch(q); }, 250);
   });
-  inEl.addEventListener('keydown', e => { if (e.key === 'Escape') { inEl.value = ''; resEl.replaceChildren(); inEl.blur(); } });
+  inEl.addEventListener('keydown', async e => {
+    if (e.key === 'Escape') { inEl.value = ''; found = []; resEl.replaceChildren(); inEl.blur(); }
+    else if (e.key === 'Enter' && !e.isComposing) { // 디바운스를 기다리지 않고 바로 검색해 첫 결과로 간다
+      const q = inEl.value.trim(); if (!q) return;
+      if (sTimer) { clearTimeout(sTimer); sTimer = 0; await runSearch(q); } else if (sRun) await sRun;
+      if (inEl.value.trim() === q && found[0]) pick(found[0]); // 기다리는 동안 입력이 바뀌었으면 가지 않는다
+    }
+  });
 
   // ---- 렌더 ----
   function renderTop() {
@@ -196,7 +242,7 @@ export function createUi({ zoomIn, zoomOut, home }) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
       if (!j.ops) throw new Error('ops 없음');
-      ops = j.ops; okAt = Date.now();
+      ops = OPS.data = j.ops; okAt = Date.now();
       renderTop(); renderDetail(); renderShip(); renderTabs();
     } catch (e) { /* 끊김 칩이 알린다 */ }
     finally { clearTimeout(to); busy = false; }

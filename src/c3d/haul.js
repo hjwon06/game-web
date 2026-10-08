@@ -2,7 +2,7 @@
 // src/campus/campus_haul.js 의 규칙을 3D 로 옮겼다: 위치는 작업(tasks)의 started_at~expected_finish_at(4~10초)을 서버 시계로 보간하고,
 // 모든 위치·방향·포크 높이는 "시계의 함수"다(프레임 누적 없음) → capture 모드에서 step 크기와 무관하게 같은 값이 나온다.
 import * as THREE from 'three';
-import { S, srvNow, resCode, resById, bKeyOf, arrive, dataReady, itemColor } from './data.js';
+import { S, srvNow, resCode, bKeyOf, arrive, dataReady, itemColor } from './data.js';
 import { forklift, setForks, pallet, setShutter, worker } from './models.js';
 import { truck, setTrailerColor } from './kenney.js';
 import { binSlots, dockSpots, hideDemo } from './campus.js';
@@ -149,7 +149,8 @@ function shutterOf(k, t) {
 }
 
 // ---- 조립 ----
-export function createHaul(parent, { kenneyReady }) {
+// opsTrucks: ops.trucks 목록을 돌려주는 함수(3D-⑤ ui 가 폴링한다). 트럭 식별은 여기서 no(PO-…/SO-…)를 도크 코드로 맞춰 쓴다.
+export function createHaul(parent, { kenneyReady, opsTrucks = () => [] }) {
   const forks = [], trucks = [], doorV = {};
   let truckOK = false;
   kenneyReady.then(() => { truckOK = true; }, () => {});
@@ -161,7 +162,9 @@ export function createHaul(parent, { kenneyReady }) {
     obj.getObjectByName('load').add(pal);
     obj.visible = false;
     parent.add(obj);
-    forks.push({ i, code: 'F-0' + (i + 1), res: null, obj, pal, tl: null, act: null, pose: null });
+    const f = { i, code: 'F-0' + (i + 1), res: null, obj, pal, tl: null, act: null, pose: null };
+    obj.userData.pick = () => ({ type: 'forklift', code: f.code }); // nav.js 레이캐스트가 읽는다
+    forks.push(f);
   }
   const man = worker();
   man.position.set(WORKER_AT[0], FLOOR_Y, WORKER_AT[1]);
@@ -191,6 +194,17 @@ export function createHaul(parent, { kenneyReady }) {
     forks.forEach((f, i) => { const r = rs[i]; if (r) { f.code = r.code; f.res = r; } });
   }
 
+  // 3D 트럭 ↔ ops.trucks: 먼저 도크 코드가 같은 것, 그다음 같은 방향(입고/출하)의 아직 안 짝지은 현장 트럭 순서대로
+  function assignNos() {
+    const list = opsTrucks().filter(x => x.status !== 'en_route'), used = new Set();
+    trucks.forEach(k => { const x = list.find(y => y.dock === k.dock); k.code = x ? String(x.no) : ''; if (x) used.add(k.code); });
+    trucks.forEach(k => {
+      if (k.code) return;
+      const x = list.find(y => (y.type === 'in') === k.inb && !used.has(String(y.no)));
+      if (x) { k.code = String(x.no); used.add(k.code); }
+    });
+  }
+
   function tickTrucks(t, srv) {
     const want = wantTrucks(srv);
     want.forEach((w, key) => {
@@ -203,7 +217,9 @@ export function createHaul(parent, { kenneyReady }) {
       let obj;
       try { obj = truck(w.inb ? 'truck' : 'delivery', itemColor(w.key)); } catch (e) { truckOK = false; return; } // Kenney 로드 실패(main.js 가 이미 로그를 남긴다)
       parent.add(obj);
-      trucks.push({ key, inb: w.inb, slot, dock, spot, obj, path: truckPath(w.inb, spot), st: 'enter', t0: t, last: t, code: (resById(w.rid) || {}).code || '' });
+      const nk = { key, inb: w.inb, slot, dock, spot, obj, path: truckPath(w.inb, spot), st: 'enter', t0: t, last: t, code: '' }; // code = PO/SO 번호(assignNos)
+      obj.userData.pick = () => nk.code ? { type: 'truck', code: nk.code } : { type: 'site', code: nk.inb ? 'mat' : 'ship' }; // 번호를 아직 모르면 도크가 있는 건물
+      trucks.push(nk);
     });
     for (let i = trucks.length - 1; i >= 0; i--) {
       const k = trucks[i];
@@ -211,6 +227,7 @@ export function createHaul(parent, { kenneyReady }) {
       if (k.st === 'stand' && t - k.last > HOLD_MS) { k.st = 'leave'; k.t0 = k.last + HOLD_MS; }
       if (k.st === 'leave' && t - k.t0 >= LEAVE_MS) { parent.remove(k.obj); k.obj.userData.trailer.material.dispose(); trucks.splice(i, 1); }
     }
+    assignNos();
     const open = {};
     trucks.forEach(k => {
       const { p, h } = truckPose(k, t);
@@ -254,5 +271,5 @@ export function createHaul(parent, { kenneyReady }) {
       carriers: forks.filter(f => f.obj.visible).length + trucks.length + (inspecting ? 1 : 0),
     };
   }
-  return { tick, state };
+  return { tick, state, list: () => ({ forks, trucks }) }; // nav.js 가 개체를 찾는다(살아 있는 배열)
 }
