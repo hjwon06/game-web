@@ -199,6 +199,48 @@ class ShippingTest < ActiveSupport::TestCase
     assert_equal [], Inventory::Reconcile.call
   end
 
+  test "6d: pick 한 양이 주문 잔량보다 많으면 load 는 주문 잔량(14)만 계획한다" do
+    fg_stock(100)
+    line = line_for("SO-T-1", 100)
+    plan
+    tick
+    line.update_columns(ordered_qty: 14) # pick 이 끝난 뒤 주문량이 줄었다
+
+    plan
+
+    assert_equal [14], loads.map { |t| t.qty.to_i }
+    tick
+    assert_equal [0, "done"], [loads.where(status: "cancelled").count, loads.sole.status]
+    assert_equal 14, shipped(line)
+  end
+
+  test "6d: 주문 잔량이 0 이면 load 를 계획하지 않는다" do
+    fg_stock(100)
+    line = line_for("SO-T-1", 100)
+    plan
+    tick
+    line.update_columns(ordered_qty: 0)
+
+    assert_equal 0, plan[:load]
+    assert_equal 0, loads.count
+  end
+
+  test "6d: 상차가 MAX 번 취소된 라인·로트는 더 계획하지 않고 포기 로그는 1줄만 남긴다" do
+    fg_stock(100)
+    line_for("SO-T-1", 100)
+    plan
+    tick
+    Simulation::Shipping.gave_up.clear
+    Simulation::Config::MAX_LOAD_CANCELS.times do
+      plan
+      loads.where(status: "planned").each { |t| t.update!(status: "cancelled", cancel_reason: "test") }
+    end
+
+    3.times { assert_equal 0, plan[:load] }
+    assert_equal Simulation::Config::MAX_LOAD_CANCELS, loads.count
+    assert_equal 1, @log.string.scan("더 계획하지 않음").size
+  end
+
   test "로트가 둘이면 load 도 로트마다 1건이다" do
     a = fg_stock(100, bin: "FG-A-01-01", created_at: M0 - 7200)
     b = fg_stock(100, bin: "FG-A-01-02", created_at: M0 - 3600)

@@ -194,8 +194,8 @@ class InspectionTest < ActiveSupport::TestCase
     assert_equal ["qc_fail", "qc_fail:task:#{task.id}", 10], [task.stock_move.move_type, task.stock_move.idempotency_key, task.stock_move.qty.to_i]
     assert_equal [90, 10], [qty_at("qc"), qty_at("scrap")]
 
-    assert_equal 1, plan[:putaway]
-    put = putaways.sole
+    put = putaways.sole # 검사 완료와 같은 트랜잭션에서 이미 계획됐다
+    assert_equal 0, plan[:putaway], "주기 계획은 같은 적치를 또 만들지 않는다"
     assert_equal ["forklift", "FG-A-01-01", 90, "Task", task.id, task.lot_id],
                  [put.resource.kind, put.to_location.code, put.qty.to_i, put.ref_type, put.ref_id, put.lot_id]
 
@@ -207,6 +207,37 @@ class InspectionTest < ActiveSupport::TestCase
     assert_equal %w[fail pass], Inspection.where(lot_id: task.lot_id).order(:result).pluck(:result)
     assert_equal [10, 0], Inspection.where(lot_id: task.lot_id).order(:result).pluck(:defect_qty).map(&:to_i)
     assert_equal [], Inventory::Reconcile.call
+  end
+
+  test "6d: 생산 N 이면 검사 수량 합은 N 이고 EPOCH 이전 생산은 검사하지 않으며, 검사가 끝난 재고를 다시 검사하지 않는다" do
+    events(100, 0)
+    produce_to_qc(700, EPOCH - 60) # rebase 이전 생산: 소급하지 않는다
+    produce_to_qc(3 * P, M0 - WAIT)
+    plan
+    10.times do
+      tick
+      plan
+    end
+
+    assert_equal 3 * P, inspects.where(status: "done").sum(:qty).to_i, "검사 수량 합 = EPOCH 이후 생산"
+    assert_equal [P, P, P], inspects.map { |t| t.qty.to_i }
+    assert_equal 0, plan[:inspect], "qc 에 EPOCH 이전 700 이 남아 있어도 더 검사하지 않는다"
+  end
+
+  test "6d: 검사 완료 직후 합격분 적치가 같은 틱에 계획되고 가용 부족 로그가 없다" do
+    events(90, 10)
+    produce_to_qc(100, M0 - WAIT)
+    plan
+    produce_to_qc(40, M0 - 10) # 검사 중에 더 쌓인 양: 검사 대기 중인 다음 몫과 겹쳐도 합격분 예약은 성공해야 한다
+
+    tick
+
+    task = inspects.first.reload
+    assert_equal "done", task.status
+    put = putaways.sole
+    assert_equal [90, "planned", task.id], [put.qty.to_i, put.status, put.ref_id]
+    assert_equal "active", put.reservation.status
+    assert_no_match(/가용 부족/, @log.string)
   end
 
   test "불량률 0 이면 qc_fail 없이 검사가 끝나고 전량 적치된다" do

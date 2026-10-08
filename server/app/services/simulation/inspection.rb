@@ -12,6 +12,12 @@ module Simulation
     # 반환: { inspect:, putaway:, waiting: } (이번 호출에서 계획한 검사·적치 수, 칸이 없어 qc 에 남은 합격분 수)
     def self.call(now:, logger: Rails.logger) = new(now: now, logger: logger).call
 
+    # 검사 작업이 done 이 된 같은 트랜잭션에서 Ops::Tick 이 부른다: 합격분 적치를 바로 계획해, 예약이 consumed 로 닫힌 뒤
+    # 다른 작업이 끼어들기 전에 qc 합격분을 새 적치 예약으로 넘긴다. 칸이 없거나 계획이 안 되면 nil (주기 실행 plan_putaways 가 이어서 본다).
+    def self.plan_putaway_for(task, now: Time.current, logger: Rails.logger)
+      new(now: now, logger: logger).plan_putaway(task)
+    end
+
     # 검사에서 나오는 불량 수량: 작업지시의 EPOCH 이후 불량률(defect / (good + defect)) x 검사 수량, 반올림. Ops::Tick 이 완료 때 쓴다.
     def self.fail_qty(order, qty)
       epoch = Config.inventory_epoch&.utc
@@ -96,12 +102,18 @@ module Simulation
       inspecting.merge(leaving) { |_, a, b| a + b }
     end
 
-    # { 작업지시 id => qc 로 들어온 양 - 검사 작업(취소 제외)에 맡긴 양 }
+    # { 작업지시 id => EPOCH 이후 qc 로 들어온 양 - EPOCH 이후 계획된 검사 작업(취소 제외)의 양 }
+    # 원인(코드로 확정): 이전 식은 produce 합에 EPOCH 를 걸지 않았다(⑥c 가 EPOCH 를 도입하면서 이 쿼리만 빠졌다). sim:rebase 뒤에도
+    # rebase 이전에 qc 로 들어온 양 전부가 "미검사"로 남아 새로 검사됐고, ⑥ 의 예약 때문에 그 검사가 qc 재고 전량을 active 예약으로 잡아
+    # 합격분 적치가 "가용 부족"으로 반복 실패했다(그동안 qc 재고가 안 비어 같은 재고가 또 검사 대상이 됨). 두 합 모두 EPOCH 이후로 맞춘다.
     def uninspected_by_order(qc, order_ids)
-      produced = StockMove.where(move_type: "produce", ref_type: "WorkOrder", ref_id: order_ids, to_location_id: qc.id)
-                          .group(:ref_id).sum(:qty)
-      inspected = Task.where(kind: "inspect", ref_type: "WorkOrder", ref_id: order_ids, status: %w[planned started done])
-                      .group(:ref_id).sum(:qty)
+      epoch = Config.inventory_epoch&.utc
+      moves = StockMove.where(move_type: "produce", ref_type: "WorkOrder", ref_id: order_ids, to_location_id: qc.id)
+      moves = moves.where("(#{ARRIVED_AT_SQL}) >= ?", epoch.iso8601) if epoch
+      produced = moves.group(:ref_id).sum(:qty)
+      tasks = Task.where(kind: "inspect", ref_type: "WorkOrder", ref_id: order_ids, status: %w[planned started done])
+      tasks = tasks.where(planned_at: epoch..) if epoch
+      inspected = tasks.group(:ref_id).sum(:qty)
       produced.to_h { |id, qty| [id, qty - inspected.fetch(id, 0)] }
     end
 
@@ -145,23 +157,39 @@ module Simulation
 
       stuck = 0
       waiting.each do |task|
-        pass_qty = task.qty - (task.stock_move&.qty || 0)
-        next unless pass_qty.positive?
+        next unless (task.qty - (task.stock_move&.qty || 0)).positive?
 
-        # 칸은 적치 규칙(Ops::Putaway)이 고른다. 방금 계획한 적치도 DB 에 있어 다음 건의 칸 계산에 들어간다.
-        bin = Ops::Putaway.choose(product: task.product, qty: pass_qty)
-        unless bin
+        if plan_putaway(task)
+          @counts[:putaway] += 1
+        else
           stuck += 1
-          next
         end
-
-        Ops::Plan.call(kind: "putaway", product: task.product, lot: task.lot, qty: pass_qty, from: "qc", to: bin,
-                       ref: task, earliest_at: task.finished_at)
-        @counts[:putaway] += 1
       end
       @counts[:waiting] = stuck
       @logger.warn("sim inspection #{@now.iso8601} 적치할 완제품 칸이 없어 qc 에 #{stuck}건 대기") if stuck.positive?
     end
+
+    public
+
+    # 완료된 검사 task 의 합격분(검사 수량 - 불량 이동) 적치를 계획해 돌려준다. 합격분이 없거나 칸이 없거나 계획이 거부되면 nil.
+    def plan_putaway(task)
+      pass_qty = task.qty - (task.stock_move&.qty || 0)
+      return nil unless pass_qty.positive?
+
+      # 칸은 적치 규칙(Ops::Putaway)이 고른다. 방금 계획한 적치도 DB 에 있어 다음 건의 칸 계산에 들어간다.
+      bin = Ops::Putaway.choose(product: task.product, qty: pass_qty)
+      return nil unless bin
+
+      ApplicationRecord.transaction(requires_new: true) do
+        Ops::Plan.call(kind: "putaway", product: task.product, lot: task.lot, qty: pass_qty, from: "qc", to: bin,
+                       ref: task, earliest_at: task.finished_at || @now)
+      end
+    rescue Inventory::InsufficientStock, Inventory::CapacityExceeded, Ops::Plan::NoResource => e
+      @logger.warn("sim inspection putaway 계획 보류 task=#{task.id}: #{e.class.name.demodulize} #{e.message}")
+      nil
+    end
+
+    private
 
     def waiting_inspections
       cutoff = @now - Config::INSPECT_LOOKBACK_SECONDS

@@ -48,6 +48,7 @@ module Simulation
     PALLETS_PER_TRUCK = (4..12).freeze       # 적재량 하한·상한(팔레트). 칸이 모자라면 하한 아래로도 줄인다
     PUTAWAY_LOOKBACK_SECONDS = 21_600        # 하차가 끝난 뒤 이만큼까지만 적치 대기분을 다시 찾는다(tasks 스캔 상한)
     MAX_PUTAWAY_CANCELS = 3                  # 한 팔레트의 적치가 이만큼 취소되면 더 계획하지 않는다
+    MAX_LOAD_CANCELS = 3                     # 한 수주 라인·로트의 상차(load)가 이만큼 취소되면 더 계획하지 않는다
 
     # 라인 공급(feed): line_side 자재 재고가 이만큼의 예상 소비량에 못 미치면 팔레트 1개(PALLET_QTY)를 공급한다.
     LINE_FEED_FORECAST_SECONDS = 600

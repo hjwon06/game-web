@@ -6,7 +6,8 @@ module Ops
   # 작업 종류 → 완료 순간의 이동:
   #   unload → receive, putaway → putaway (qc 에서 나가는 적치는 qc_pass), feed → feed, pick → pick,
   #   load → ship (Inventory::Ship: 수주 라인 출하량·수주 상태도 같이 갱신)
-  #   inspect → 불량분 qc_fail(qc → scrap) 1건. 불량이 0이면 이동 없이 done. 합격분은 Simulation::Inspection 이 적치(qc_pass)로 계획한다.
+  #   inspect → 불량분 qc_fail(qc → scrap) 1건. 불량이 0이면 이동 없이 done. 합격분 적치(qc_pass)는 같은 트랜잭션에서 바로 계획한다
+  #             (칸이 없으면 Simulation::Inspection 이 다음 호출에 이어서 계획한다).
   #   count → 이동 없이 done. cycle_counts 행을 남기고, 센 수량이 시스템 수량과 다르면 adjust 이동(Ops::CycleCount)으로 맞춘다.
   # 하차(unload)의 ref 가 발주 라인(PurchaseOrderLine)이면 같은 트랜잭션에서 그 라인 qty_received 를 올리고, 전 라인을 받았으면 발주를 done 으로 닫는다.
   class Tick
@@ -79,6 +80,8 @@ module Ops
           task.update!(status: "done", finished_at: finished_at, stock_move: move)
           # 발주 하차라면 라인 입고량도 같은 트랜잭션에서 올린다. 이동이 되돌아가면 입고량도 오르지 않는다.
           receive_order_line(task)
+          # 검사 완료: 합격분은 같은 트랜잭션에서 적치 예약으로 넘긴다. 검사 예약이 consumed 로 닫힌 뒤 다른 작업이 qc 재고를 가져가기 전이다.
+          Simulation::Inspection.plan_putaway_for(task, now: @now) if task.kind == "inspect"
         end
         @result.done << task.id
       rescue *TASK_FAILURES => e

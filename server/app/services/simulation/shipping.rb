@@ -14,6 +14,9 @@ module Simulation
     LIVE = (OPEN + %w[done]).freeze
     RETENTION_WINDOW = Task::RETENTION # 이보다 오래된 done 작업은 Task.prune! 이 지운다
 
+    # 상차 취소가 MAX 에 닿아 포기 로그를 이미 남긴 [라인 id, 로트 id]. 프로세스 메모리(재시작하면 1줄 더 남는다).
+    def self.gave_up = (@gave_up ||= Set.new)
+
     def initialize(now:, logger:)
       @now = now.utc
       @logger = logger
@@ -61,14 +64,32 @@ module Simulation
       picking = line_tasks("pick", line_ids, OPEN).distinct.pluck(:ref_id).to_set
       lines = SalesOrderLine.where(id: picked.keys.map(&:first)).includes(:product).index_by(&:id)
       lots = Lot.where(id: picked.keys.map(&:last).compact).index_by(&:id)
+      cancels = line_tasks("load", line_ids, "cancelled").group(:ref_id, :lot_id).count
+      # 라인의 주문 잔량 = 주문량 - (출하한 양 + 이미 계획된 load 합). 같은 라인의 앞 로트가 방금 계획한 양도 뺀다(아래에서 차감).
+      shipped = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id).sum(:qty)
+      open_loads = line_tasks("load", line_ids, OPEN).group(:ref_id).sum(:qty)
 
       picked.sort_by { |(line_id, lot_id), _| [line_id, lot_id || 0] }.each do |(line_id, lot_id), qty|
         waiting = qty - loaded.fetch([line_id, lot_id], 0)
         next if picking.include?(line_id) || lot_id.nil? || !waiting.positive?
 
         line = lines.fetch(line_id)
-        Ops::Plan.call(kind: "load", product: line.product, lot: lots.fetch(lot_id), qty: waiting, from: "shipping", to: "customer",
+        # load 수량 = min(남은 pick 분, 주문 잔량). 잔량이 0 이면 계획하지 않는다(Inventory::Ship 이 OverShipment 로 취소하던 경우).
+        remaining = line.ordered_qty - shipped.fetch(line_id, 0) - open_loads.fetch(line_id, 0)
+        qty_to_load = [waiting, remaining].min
+        next unless qty_to_load.positive?
+
+        if cancels.fetch([line_id, lot_id], 0) >= Config::MAX_LOAD_CANCELS
+          # 취소가 계속되는 라인·로트는 더 계획하지 않는다. 10초마다 같은 로그가 반복되지 않도록 (라인, 로트)당 프로세스에서 1줄만 남긴다.
+          if self.class.gave_up.add?([line_id, lot_id])
+            @logger.warn("sim shipping #{@now.iso8601} 수주 라인 #{line_id} 로트 #{lot_id} 상차가 #{Config::MAX_LOAD_CANCELS}회 취소돼 더 계획하지 않음")
+          end
+          next
+        end
+
+        Ops::Plan.call(kind: "load", product: line.product, lot: lots.fetch(lot_id), qty: qty_to_load, from: "shipping", to: "customer",
                        ref: line, earliest_at: @now)
+        open_loads[line_id] = open_loads.fetch(line_id, 0) + qty_to_load
         @counts[:load] += 1
       end
     end
