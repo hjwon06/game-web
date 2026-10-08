@@ -73,14 +73,21 @@ module Simulation
       shipped = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id).sum(:qty)
       open_loads = line_tasks("load", line_ids, OPEN).group(:ref_id).sum(:qty)
       lots = Lot.where(id: free.keys.map(&:last)).index_by(&:id)
+      # 라인·로트별 상차 가능량의 원장 쪽 재료. 출하대 재고는 수주 구분이 없어서(다른 수주가 피킹한 것도 섞여 있다) 이 라인이 피킹한 만큼만 싣는다.
+      # 주의: ref 가 SalesOrderLine 이 아닌 옛 pick 이동(ref = Task)은 어느 수주 몫인지 알 수 없어 여기서 세지 않는다 — 소급하지 않는 의도된 제외다.
+      picked_by_lot = StockMove.where(move_type: "pick", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id, :lot_id).sum(:qty)
+      shipped_by_lot = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id, :lot_id).sum(:qty)
+      open_by_line_lot = line_tasks("load", line_ids, OPEN).group(:ref_id, :lot_id).sum(:qty)
 
       lines.each do |line|
         next if picking.include?(line.id)
 
         free.select { |(product_id, _), _| product_id == line.product_id }.sort_by { |(_, lot_id), _| lot_id }.each do |(_, lot_id), available|
-          # load 수량 = min(출하대에 남은 로트 재고, 주문 잔량). 잔량이 0 이면 계획하지 않는다(Inventory::Ship 이 OverShipment 로 취소하던 경우).
+          # load 수량 = min(출하대에 남은 로트 재고, 이 라인의 상차 가능량, 주문 잔량). 0 이하면 계획하지 않는다(Inventory::Ship 이 OverShipment 로 취소하던 경우).
           remaining = line.ordered_qty - shipped.fetch(line.id, 0) - open_loads.fetch(line.id, 0)
-          qty_to_load = [available, remaining].min
+          key = [line.id, lot_id]
+          loadable = picked_by_lot.fetch(key, 0) - shipped_by_lot.fetch(key, 0) - open_by_line_lot.fetch(key, 0)
+          qty_to_load = [available, loadable, remaining].min
           next unless qty_to_load.positive?
 
           if cancels.fetch([line.id, lot_id], 0) >= Config::MAX_LOAD_CANCELS
@@ -95,6 +102,7 @@ module Simulation
                          ref: line, earliest_at: @now, now: @now)
           free[[line.product_id, lot_id]] = available - qty_to_load
           open_loads[line.id] = open_loads.fetch(line.id, 0) + qty_to_load
+          open_by_line_lot[key] = open_by_line_lot.fetch(key, 0) + qty_to_load
           @counts[:load] += 1
         end
       end

@@ -185,23 +185,24 @@ module Campus
 
     # --- O5 shipment ----------------------------------------------------------------------------
 
-    # 쿼리 4: 대상 수주, 끝난 pick·load 작업, 주문량 합, 출하 이동. 수주를 못 찾으면 쿼리 1개만 쓰고 nil.
+    # 쿼리 4: 대상 수주, 그 수주 라인(id·주문량), pick·ship 이동(원장), 시작한 load 작업. 수주를 못 찾으면 쿼리 1개만 쓰고 nil.
     # 단계는 회차가 아니라 주문 수량 누적으로 정의한다(피킹분은 출하대에 쌓였다가 다른 회차에 실리므로 회차로 자르면 단계가 비는 응답이 나온다).
-    # picked = 첫 완료 pick / staged = 완료 pick 누적 >= 주문량 / loaded = 완료 load 누적 >= 주문량 / shipped = ship 이동 누적 >= 주문량.
-    # 도달 전이면 at=nil 이다. progress{done,total} 은 단계별 누적 수량 / 주문량이다. 주문량이 0 이하면 누적 단계는 도달할 수 없다.
+    # picked = 첫 pick 이동 / staged = pick 이동 누적 >= 주문량 / loaded = 시작한 load 작업(started·done)의 시작 수량 누적 >= 주문량 /
+    # shipped = ship 이동 누적 >= 주문량. 도달 전이면 at=nil 이다. progress{done,total} 은 단계별 누적 수량 / 주문량이다. 주문량이 0 이하면 누적 단계는 도달할 수 없다.
+    # pick·ship 은 원장(stock_moves)에서 센다. ref 가 수주 라인이 아닌 옛 pick 이동(ref = Task)은 수주를 알 수 없어 센 적 없다 — 소급하지 않는다.
+    # 상차는 라인별 피킹분 안에서만 계획되므로(Simulation::Shipping#plan_loads) shipped <= loaded <= staged 누적 <= 주문량이 유지된다.
     def shipment
       id, so_no, customer, created_at, _status = target_order
       return nil unless id
 
-      done = Task.where(kind: %w[pick load], status: "done").where.not(finished_at: nil)
-                 .joins("JOIN sales_order_lines sol ON tasks.ref_type = 'SalesOrderLine' AND sol.id = tasks.ref_id")
-                 .where("sol.sales_order_id = ?", id)
-                 .pluck("tasks.kind", "tasks.finished_at", "tasks.qty")
-      lines = SalesOrderLine.where(sales_order_id: id)
-      ordered = lines.sum(:ordered_qty)
-      ships = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: lines.select(:id)).pluck(:occurred_at, :qty)
-      picks = done.filter_map { |kind, at, qty| [at, qty] if kind == "pick" }
-      loads = done.filter_map { |kind, at, qty| [at, qty] if kind == "load" }
+      lines = SalesOrderLine.where(sales_order_id: id).pluck(:id, :ordered_qty)
+      line_ids = lines.map(&:first)
+      ordered = lines.sum { |_, qty| qty }
+      moves = StockMove.where(move_type: %w[pick ship], ref_type: "SalesOrderLine", ref_id: line_ids).pluck(:move_type, :occurred_at, :qty)
+      picks = moves.filter_map { |type, at, qty| [at, qty] if type == "pick" }
+      ships = moves.filter_map { |type, at, qty| [at, qty] if type == "ship" }
+      loads = Task.where(kind: "load", status: %w[started done], ref_type: "SalesOrderLine", ref_id: line_ids)
+                  .where.not(started_at: nil).pluck(:started_at, :qty)
 
       stages = [{ key: "received", at: iso(created_at) }]
       floor = created_at

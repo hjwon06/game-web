@@ -120,8 +120,16 @@ module Ops
     def move(task, move_type)
       Inventory::Move.call(
         product: task.product, lot: task.lot, from: task.from_location, to: task.to_location, qty: task.qty,
-        move_type: move_type, ref: task, idempotency_key: "task:#{task.id}", reserved_by_task_id: task.id
+        move_type: move_type, ref: move_ref(task), idempotency_key: "task:#{task.id}", reserved_by_task_id: task.id
       )
+    end
+
+    # 이동의 ref. pick 은 수주 라인(SalesOrderLine)을 가리켜야 원장에서 수주별 피킹량을 센다(상차 계획·출하 추적이 이 값을 쓴다).
+    # 라인이 없으면(지워졌거나 ref 가 다른 종류) 이전처럼 작업을 가리킨다. 멱등 키는 그대로 "task:<id>" 다.
+    def move_ref(task)
+      return task unless task.kind == "pick" && task.ref_type == "SalesOrderLine"
+
+      SalesOrderLine.find_by(id: task.ref_id) || task
     end
 
     # 출하: 수주 라인(ref)이 있으면 Inventory::Ship 으로 출하량·수주 상태까지 갱신한다. 라인이 없으면 nil(일반 이동으로 대체).

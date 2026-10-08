@@ -231,6 +231,76 @@ class ShippingTest < ActiveSupport::TestCase
     assert_equal 0, loads.where(status: "cancelled").count
   end
 
+  test "6c: pick 이동의 ref 는 수주 라인이고 멱등 키는 task:<id> 그대로다" do
+    fg_stock(U)
+    line = line_for("SO-T-1", U)
+    plan
+    tick
+
+    move = StockMove.where(move_type: "pick").sole
+    assert_equal ["SalesOrderLine", line.id, "task:#{picks.sole.id}"], [move.ref_type, move.ref_id, move.idempotency_key]
+  end
+
+  test "6c: 수주 A 가 피킹한 재고가 출하대에 있어도 수주 B 의 load 는 만들어지지 않는다" do
+    fg_stock(U)
+    a = line_for("SO-T-A", U, due: Date.new(2026, 10, 9))
+    plan
+    tick
+    b = line_for("SO-T-B", U, due: Date.new(2026, 10, 8)) # 납기가 더 빨라도 B 는 피킹한 적이 없다
+    assert_equal U, qty_at("shipping")
+
+    result = plan
+
+    assert_equal 1, result[:load]
+    assert_equal [a.id], loads.map(&:ref_id), "출하대 재고는 A 의 피킹분이라 A 만 싣는다"
+    tick
+    assert_equal [U, 0], [shipped(a), shipped(b)]
+  end
+
+  test "6c: 라인별 상차 가능량 = 그 라인 pick 합 - ship 합 - 열린 load 합. 다른 라인 몫은 넘보지 않는다" do
+    fg_stock(300)
+    a = line_for("SO-T-A", 200, due: Date.new(2026, 10, 9))
+    b = line_for("SO-T-B", 100, due: Date.new(2026, 10, 10))
+    plan
+    tick
+    assert_equal [200, 100], picks.group(:ref_id).order(:ref_id).sum(:qty).values.map(&:to_i)
+
+    plan
+    assert_equal({ a.id => 200, b.id => 100 }, loads.group(:ref_id).sum(:qty).transform_values(&:to_i), "각자 피킹한 만큼만")
+    assert_equal 0, plan[:load], "열린 load 분은 가능량에서 빠진다"
+
+    tick
+    assert_equal [200, 100], [shipped(a), shipped(b)]
+    assert_equal 0, plan[:load]
+  end
+
+  test "6c: 옛 pick 이동(ref 가 수주 라인이 아님)은 수주를 몰라 상차 대상에서 뺀다" do
+    lot = fg_stock(U)
+    line = line_for("SO-T-1", U)
+    Inventory::Move.call(product: @fg, lot: lot, from: "FG-A-01-01", to: "shipping", qty: U, move_type: "pick", ref: nil, idempotency_key: "old-pick")
+
+    assert_equal 0, plan[:load], "출하대에 재고가 있어도 이 수주가 피킹했다는 원장 근거가 없다"
+    assert_equal 0, loads.count
+    assert_equal 0, shipped(line)
+  end
+
+  test "6c: 단계 누적 불변식 shipped <= loaded <= staged <= 주문량 — 여러 수주가 재고를 나눠 써도 유지된다" do
+    fg_stock(3 * U)
+    lines = [line_for("SO-T-A", U, due: Date.new(2026, 10, 9)), line_for("SO-T-B", 2 * U, due: Date.new(2026, 10, 10))]
+    10.times do
+      plan
+      tick
+      lines.each do |line|
+        ledger = ->(type) { StockMove.where(move_type: type, ref_type: "SalesOrderLine", ref_id: line.id).sum(:qty) }
+        started = Task.where(kind: "load", status: %w[started done], ref_type: "SalesOrderLine", ref_id: line.id).sum(:qty)
+        assert_operator ledger.("ship"), :<=, started
+        assert_operator started, :<=, ledger.("pick")
+        assert_operator ledger.("pick"), :<=, line.ordered_qty
+      end
+    end
+    assert_equal [U, 2 * U], lines.map { |l| shipped(l) }
+  end
+
   test "6d: 상차가 MAX 번 취소된 라인·로트는 더 계획하지 않고 포기 로그는 1줄만 남긴다" do
     fg_stock(100)
     line_for("SO-T-1", 100)

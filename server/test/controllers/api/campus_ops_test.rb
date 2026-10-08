@@ -42,6 +42,14 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
     Task.create!(**attrs)
   end
 
+  # 완료한 pick 의 원장 기록: fg 칸에 재고를 채우고 칸 → 출하대 pick 이동(ref = 수주 라인)을 만든다. 단계 누적은 이 이동에서 센다.
+  def pick!(line, qty, at, bin: "FG-A-01-01")
+    quant = Quant.find_or_initialize_by(product: @fg, lot: @lot, location: loc(bin))
+    quant.qty = (quant.qty || 0) + qty
+    quant.save!
+    mv("pick", bin, "shipping", qty, at, product: @fg, lot: @lot, ref: line)
+  end
+
   def po!(no, status, pallets, expected: @t + 3.minutes)
     po = PurchaseOrder.create!(po_no: no, supplier: @supplier, status: status, ordered_at: @t - 1.minute, expected_at: expected,
                                arrived_at: (@t - 30.seconds if status == "arrived"))
@@ -206,14 +214,15 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
     task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-01", to: "shipping", product: @fg, lot: @lot, ref: line, started: t0 + 30.seconds, finished: t0 + 1.minute, updated_at: @t - 4.hours)
     task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-02", to: "shipping", product: @fg, lot: @lot, ref: line, started: t0 + 90.seconds, finished: t0 + 2.minutes, updated_at: @t - 4.hours)
     task!(kind: "load", status: "done", resource: "DOCK-OUT-01", from: "shipping", to: "customer", product: @fg, lot: @lot, ref: line, qty: 2 * P, started: t0 + 3.minutes, finished: t0 + 3.minutes + 30.seconds, updated_at: @t - 4.hours)
-    Quant.create!(product: @fg, lot: @lot, location: loc("shipping"), qty: 2 * P)
+    pick!(line, P, t0 + 1.minute, bin: "FG-A-01-01")
+    pick!(line, P, t0 + 2.minutes, bin: "FG-A-01-02")
     mv("ship", "shipping", "customer", P, t0 + 4.minutes, product: @fg, lot: @lot, ref: line)
     order.update!(status: "partial")
 
     stages = ops["shipment"]
     assert_equal %w[SO-OPS-A 한빛정공], stages.values_at("so_no", "customer")
     assert_equal %w[received picked staged loaded shipped], stages["stages"].map { |s| s["key"] }
-    assert_equal [iso(@t - 5.hours), iso(t0 + 1.minute), iso(t0 + 2.minutes), iso(t0 + 3.minutes + 30.seconds), nil], stages["stages"].map { |s| s["at"] }
+    assert_equal [iso(@t - 5.hours), iso(t0 + 1.minute), iso(t0 + 2.minutes), iso(t0 + 3.minutes), nil], stages["stages"].map { |s| s["at"] }
     assert_equal({ "done" => P, "total" => 2 * P }, stages["stages"].last["progress"], "출하는 누적 P / 주문 2P 라 아직 도달 전이다")
 
     mv("ship", "shipping", "customer", P, t0 + 6.minutes, product: @fg, lot: @lot, ref: line)
@@ -223,6 +232,7 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
     # 열린 수주 중 가장 최근에 움직인 것이 기본 대상이고, pick 이 모자란 수주는 staged 가 비어 있다
     _b, line_b = so!("SO-OPS-B", customer: "서진산업")
     task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-03", to: "shipping", product: @fg, lot: @lot, ref: line_b, qty: P, finished: @t - 1.minute, updated_at: @t - 1.minute)
+    pick!(line_b, P, @t - 1.minute, bin: "FG-A-01-03")
     _c, line_c = so!("SO-OPS-C")
     task!(kind: "pick", status: "planned", resource: "FORK-01", from: "FG-A-01-04", to: "shipping", product: @fg, lot: @lot, ref: line_c, qty: P, updated_at: @t - 3.hours)
 
@@ -236,40 +246,41 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
   test "분할 피킹·분할 출하 수주: 단계는 주문 수량 누적이 닿은 시각이고 시각은 단조 증가한다" do
     order, line = so!("SO-OPS-SPLIT", qty: 4 * P)
     t0 = @t - 5.hours
-    Quant.create!(product: @fg, lot: @lot, location: loc("shipping"), qty: 4 * P)
     # 1회차: pick 2(P 씩) → 상차 2P → 출하 2P(t0+4m)
-    2.times { |i| task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-01", to: "shipping", product: @fg, lot: @lot, ref: line, started: t0 + (10 + i).seconds, finished: t0 + (30 + i * 30).seconds) }
+    2.times { |i| task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-01", to: "shipping", product: @fg, lot: @lot, ref: line, started: t0 + (10 + i).seconds, finished: t0 + (30 + i * 30).seconds); pick!(line, P, t0 + (30 + i * 30).seconds) }
     task!(kind: "load", status: "done", resource: "DOCK-OUT-01", from: "shipping", to: "customer", product: @fg, lot: @lot, ref: line, qty: 2 * P, started: t0 + 3.minutes, finished: t0 + 3.minutes + 30.seconds)
     mv("ship", "shipping", "customer", 2 * P, t0 + 4.minutes, product: @fg, lot: @lot, ref: line)
     order.update!(status: "partial")
     # 2회차: 한참 뒤 pick 1건 완료, 1건 남음, 상차 진행 중
     task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-02", to: "shipping", product: @fg, lot: @lot, ref: line, started: @t - 2.minutes, finished: @t - 90.seconds)
+    pick!(line, P, @t - 90.seconds, bin: "FG-A-01-02")
     planned = task!(kind: "pick", status: "planned", resource: "FORK-01", from: "FG-A-01-03", to: "shipping", product: @fg, lot: @lot, ref: line)
-    load2 = task!(kind: "load", status: "started", resource: "DOCK-OUT-01", from: "shipping", to: "customer", product: @fg, lot: @lot, ref: line, qty: 2 * P, started: @t - 60.seconds)
+    load2 = task!(kind: "load", status: "started", resource: "DOCK-OUT-01", from: "shipping", to: "customer", product: @fg, lot: @lot, ref: line, qty: P, started: @t - 60.seconds)
 
     stages = shipment_stages("SO-OPS-SPLIT")
     assert_equal iso(t0 + 30.seconds), stages["picked"]["at"], "첫 완료 pick 시각(회차와 무관)"
     assert_nil stages["staged"]["at"], "완료 pick 누적 3P < 4P"
     assert_equal({ "done" => 3 * P, "total" => 4 * P }, stages["staged"]["progress"])
-    assert_nil stages["loaded"]["at"], "완료 load 누적 2P < 4P (진행 중 load 는 세지 않는다)"
-    assert_equal({ "done" => 2 * P, "total" => 4 * P }, stages["loaded"]["progress"])
+    assert_nil stages["loaded"]["at"], "시작한 load 누적 3P < 4P (진행 중 load 도 시작 수량으로 센다)"
+    assert_equal({ "done" => 3 * P, "total" => 4 * P }, stages["loaded"]["progress"])
     assert_nil stages["shipped"]["at"], "출하 누적 2P < 4P: 1회차 출하 시각을 붙이지 않는다"
     assert_equal({ "done" => 2 * P, "total" => 4 * P }, stages["shipped"]["progress"])
     assert_monotonic stages
 
     # 마지막 pick 이 끝나는 순간 staged 가 그 시각이다
     planned.update_columns(status: "done", started_at: @t - 80.seconds, finished_at: @t - 70.seconds)
+    pick!(line, P, @t - 70.seconds, bin: "FG-A-01-03")
     stages = shipment_stages("SO-OPS-SPLIT")
     assert_equal iso(@t - 70.seconds), stages["staged"]["at"]
     assert_equal iso(t0 + 30.seconds), stages["picked"]["at"]
     assert_monotonic stages
 
-    # 2회차 상차가 끝나면 loaded, 2회차 출하가 누적을 채우면 shipped
-    load2.update_columns(status: "done", finished_at: @t - 45.seconds)
+    # 2회차 상차가 남은 2P 를 싣기 시작한 시각이 loaded, 2회차 출하가 누적을 채우면 shipped
+    load2.update_columns(status: "done", qty: 2 * P, finished_at: @t - 45.seconds)
     mv("ship", "shipping", "customer", 2 * P, @t - 30.seconds, product: @fg, lot: @lot, ref: line)
     order.update!(status: "done")
     stages = shipment_stages("SO-OPS-SPLIT")
-    assert_equal [iso(t0 + 30.seconds), iso(@t - 70.seconds), iso(@t - 45.seconds), iso(@t - 30.seconds)],
+    assert_equal [iso(t0 + 30.seconds), iso(@t - 70.seconds), iso(@t - 60.seconds), iso(@t - 30.seconds)],
                  %w[picked staged loaded shipped].map { |k| stages[k]["at"] }
     assert_equal({ "done" => 4 * P, "total" => 4 * P }, stages["shipped"]["progress"])
     assert_monotonic stages
@@ -280,11 +291,13 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
     t0 = @t - 5.hours
     task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-01", to: "shipping", product: @fg, lot: @lot, ref: line, started: t0 + 10.seconds, finished: t0 + 1.minute)
     task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-02", to: "shipping", product: @fg, lot: @lot, ref: line, started: t0 + 2.minutes, finished: t0 + 5.minutes)
+    pick!(line, P, t0 + 1.minute, bin: "FG-A-01-01")
+    pick!(line, P, t0 + 5.minutes, bin: "FG-A-01-02")
     task!(kind: "load", status: "done", resource: "DOCK-OUT-01", from: "shipping", to: "customer", product: @fg, lot: @lot, ref: line, qty: 2 * P, started: t0 + 2.minutes, finished: t0 + 3.minutes)
 
     stages = shipment_stages("SO-OPS-CLAMP")
     assert_equal iso(t0 + 5.minutes), stages["staged"]["at"]
-    assert_equal iso(t0 + 5.minutes), stages["loaded"]["at"], "상차 완료(t0+3m)가 staged(t0+5m)보다 이르면 staged 시각으로 올린다"
+    assert_equal iso(t0 + 5.minutes), stages["loaded"]["at"], "상차 시작(t0+2m)이 staged(t0+5m)보다 이르면 staged 시각으로 올린다"
     assert_monotonic stages
   end
 
