@@ -89,6 +89,65 @@ class InspectionTest < ActiveSupport::TestCase
     assert_equal [100, 20], inspects.map { |t| t.qty.to_i }
   end
 
+  # 작업지시 하나에 로트가 여럿인 모양. lot_no 는 유일(인덱스 + 검증)해서 실제로는 한 로트뿐이지만, 계획 코드는 로트별로 도니
+  # 이 테스트 트랜잭션 안에서만 유일 인덱스를 빼고(롤백된다) 같은 lot_no 의 로트를 여러 개 만든다.
+  def multi_lots(count)
+    Lot.connection.remove_index :lots, name: "index_lots_on_lot_no"
+    Array.new(count) { Lot.new(product: @fg, lot_no: @order.code).tap { |lot| lot.save!(validate: false) } }
+  end
+
+  def produce(lot, qty, at, ref: @order)
+    Inventory::Move.call(product: @fg, lot: lot, from: "production", to: "qc", qty: qty, move_type: "produce", ref: ref,
+                         idempotency_key: "produce:#{@order.id}:#{lot.id}:#{at.utc.iso8601}")
+  end
+
+  test "D1: 로트가 3개인 작업지시는 로트마다 같은 미검사 수량으로 중복 계획하지 않는다 — 계획 수량 합 = 미검사 수량" do
+    a, b, c = multi_lots(3)
+    produce(a, 300, M0)                 # 원장상 이 작업지시의 qc 입고는 300
+    produce(b, 200, M0, ref: nil)       # 로트 재고는 각각 300 / 200 / 200 이지만
+    produce(c, 200, M0, ref: nil)       # 작업지시 미검사 수량은 300 뿐이다
+
+    result = plan
+
+    assert_equal 300, inspects.sum(:qty).to_i, "로트마다 min(300, 재고)로 잡으면 700 이 된다"
+    assert_equal [a.id], inspects.map(&:lot_id), "앞 로트가 미검사를 다 가져가 나머지 로트는 계획하지 않는다"
+    assert_equal 1, result[:inspect]
+    assert_equal 0, plan[:inspect], "다시 불러도 늘지 않는다"
+  end
+
+  test "D1: 미검사 수량이 로트에 나뉘어 있으면 로트 몫만큼씩 계획하고 합은 미검사 수량이다" do
+    a, b, c = multi_lots(3)
+    [a, b, c].each_with_index { |lot, i| produce(lot, 40, M0 + (i * 60)) }
+
+    plan(M0 + 600)
+
+    assert_equal [40, 40, 40], inspects.map { |t| t.qty.to_i }
+    assert_equal [a.id, b.id, c.id], inspects.map(&:lot_id)
+    assert_equal 120, inspects.sum(:qty).to_i
+  end
+
+  test "D3: 로트가 여럿이어도 도착 시각 조회는 쿼리 1회다(로트마다 조회하지 않는다)" do
+    a, b, c = multi_lots(3)
+    [a, b, c].each_with_index { |lot, i| produce(lot, 40, M0 + (i * 60)) }
+    arrival_queries = []
+    counter = ->(*, payload) { arrival_queries << payload[:sql] if payload[:sql].include?("substring(idempotency_key from") }
+
+    ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { plan(M0 + 600) }
+
+    assert_equal 3, inspects.count, "세 로트 모두 3분을 넘겨 검사가 계획됐다"
+    assert_equal 1, arrival_queries.size
+  end
+
+  test "D3: 로트별 도착 시각이 따로 계산된다 — 3분 안 된 로트는 건너뛰고 지난 로트만 검사한다" do
+    a, b = multi_lots(2)
+    produce(a, 30, M0)
+    produce(b, 30, M0 + 150)
+
+    plan(M0 + 200)
+
+    assert_equal [a.id], inspects.map(&:lot_id), "b 는 50초밖에 안 됐다"
+  end
+
   test "같은 시각에 다시 불러도 작업·이동이 늘지 않는다" do
     produce_to_qc(100, M0)
     plan

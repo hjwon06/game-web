@@ -1682,6 +1682,7 @@ ALTER TABLE ONLY public.tasks
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20261009000002'),
 ('20261009000001'),
 ('20261008130004'),
 ('20261008130003'),

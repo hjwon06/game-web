@@ -64,6 +64,14 @@ module Simulation
       isolated("inspection", boundary) { @inspection.call(now: boundary, logger: @logger) }
       isolated("shipping", boundary) { @shipping.call(now: boundary, logger: @logger) }
       logistics(boundary) if (boundary.to_i % Config::LOGISTICS_SECONDS).zero?
+      isolated("balance log", boundary) { log_balance(boundary) } if (boundary.to_i % Config::BALANCE_LOG_SECONDS).zero?
+    end
+
+    # 자재 수요(분당 필요한 feed 횟수)와 지게차 처리량(분당 작업 수)을 한 줄로 남긴다. 수요가 처리량의 절반을 넘으면 생산이 굶는다.
+    def log_balance(boundary)
+      balance = LineFeed.new(now: boundary, logger: @logger).balance
+      @logger.info("sim balance #{boundary.utc.iso8601} est_feed_per_min=#{balance[:est_feed_per_min]} " \
+                   "forklift_capacity_per_min=#{balance[:forklift_capacity_per_min]}")
     end
 
     # Flusher·Logistics 와 별개로 돈다. 하나가 예외를 던져도 나머지와 다음 경계는 계속된다.

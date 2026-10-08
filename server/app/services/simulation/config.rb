@@ -20,6 +20,16 @@ module Simulation
       "M7" => 0.02, "M8" => 0.03, "M9" => 0.04, "M10" => 0.01, "M11" => 0.03, "M12" => 0.05
     }.freeze
 
+    # 물량 단위. 자재 소비가 분당 500~700개라 팔레트 100개로는 feed 가 지게차 처리량을 넘는다 — 팔레트 500개 기준으로 맞춘다.
+    PALLET_QTY = 500                         # 팔레트 1개 = 500 ea. 원자재 하차·적치·라인 공급(feed)의 단위
+    BIN_CAPACITY = PALLET_QTY * 4            # raw·fg 칸 1개 = 팔레트 4개
+    LINE_SIDE_CAPACITY = PALLET_QTY * 8      # 라인 공급대 하나(품목 무관 합) = 팔레트 8개. 800 이면 팔레트 1개 feed 뒤 여유가 없다
+    PICK_QTY = PALLET_QTY                    # 완제품 피킹 단위
+    FORKLIFT_TASK_SECONDS = 40               # 지게차 작업(putaway 45·pick 40·feed 35) 평균 소요. 처리량 추정용
+
+    # 수요/공급 로그: Runner 가 이 간격마다 est_feed_per_min 과 forklift_capacity_per_min 을 한 줄로 남긴다.
+    BALANCE_LOG_SECONDS = 600
+
     # 물류(자재 소비) 숫자.
     LOGISTICS_SECONDS = 60
 
@@ -27,7 +37,6 @@ module Simulation
     FORECAST_SECONDS = 1800                  # 이만큼의 예상 소비량 대비 (칸 재고 + 들어오는 중) 이 가장 모자란 자재를 싣는다
     TRUCK_INTERVAL_SECONDS = (240..480).freeze # 트럭 도착 간격(초) 균등난수
     PALLETS_PER_TRUCK = (4..8).freeze
-    PALLET_QTY = 100                         # 팔레트 1개 = 100 ea
     PUTAWAY_LOOKBACK_SECONDS = 21_600        # 하차가 끝난 뒤 이만큼까지만 적치 대기분을 다시 찾는다(tasks 스캔 상한)
     MAX_PUTAWAY_CANCELS = 3                  # 한 팔레트의 적치가 이만큼 취소되면 더 계획하지 않는다
 
@@ -39,8 +48,7 @@ module Simulation
     INSPECT_WAIT_SECONDS = 180
     INSPECT_LOOKBACK_SECONDS = 21_600 # 검사 끝난 뒤 이만큼까지만 합격분 적치 대기를 다시 찾는다(tasks 스캔 상한)
 
-    # 출하: pick 은 100개 단위, 한 번에 라인당 최대 PICKS_PER_LINE 건. 한 번 훑는 수주 라인 수 상한은 SHIP_LINES_LIMIT.
-    PICK_QTY = 100
+    # 출하: pick 은 PICK_QTY 단위, 한 번에 라인당 최대 PICKS_PER_LINE 건. 한 번 훑는 수주 라인 수 상한은 SHIP_LINES_LIMIT.
     PICKS_PER_LINE = 5
     SHIP_LINES_LIMIT = 50
 

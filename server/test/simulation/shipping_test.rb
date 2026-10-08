@@ -16,7 +16,15 @@ class ShippingTest < ActiveSupport::TestCase
 
   def plan(now = M0) = Simulation::Shipping.call(now: now, logger: Logger.new(@log))
 
-  def tick = Ops::Tick.call(now: Time.current + 1.day)
+  U = Simulation::Config::PICK_QTY # pick 1건의 단위
+
+  # Tick 1회는 자원당 1건만 끝내므로(D2) 밀린 작업이 없어질 때까지 반복한다.
+  def tick
+    10.times do
+      result = Ops::Tick.call(now: Time.current + 1.day)
+      break if result.done.empty? && result.cancelled.empty?
+    end
+  end
 
   # fg 칸에 재고를 만든다(생산 → 검사대 → 합격 적치 완료 상태).
   def fg_stock(qty, bin: "FG-A-01-01", lot: nil, created_at: nil)
@@ -43,15 +51,15 @@ class ShippingTest < ActiveSupport::TestCase
 
   def shipped(line) = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line.id).sum(:qty).to_i
 
-  test "열린 수주 라인에 fg 칸 재고가 있으면 100개 단위 pick 이 지게차에 계획된다. 재고는 아직 안 움직인다" do
-    lot = fg_stock(300)
-    line = line_for("SO-T-1", 250)
+  test "열린 수주 라인에 fg 칸 재고가 있으면 PICK_QTY 단위 pick 이 지게차에 계획된다. 재고는 아직 안 움직인다" do
+    lot = fg_stock(3 * U)
+    line = line_for("SO-T-1", (5 * U) / 2)
     base = StockMove.count
 
     result = plan
 
     assert_equal [3, 0], [result[:pick], result[:load]]
-    assert_equal [100, 100, 50], picks.map { |t| t.qty.to_i }
+    assert_equal [U, U, U / 2], picks.map { |t| t.qty.to_i }
     picks.each do |t|
       assert_equal ["forklift", "FG-A-01-01", "shipping", lot.id, "SalesOrderLine", line.id, "planned"],
                    [t.resource.kind, t.from_location.code, t.to_location.code, t.lot_id, t.ref_type, t.ref_id, t.status]
@@ -82,12 +90,28 @@ class ShippingTest < ActiveSupport::TestCase
   end
 
   test "재고가 모자라면 있는 만큼만 pick 한다(부분 출하)" do
-    fg_stock(120)
-    line_for("SO-T-1", 300)
+    fg_stock(U + 20)
+    line_for("SO-T-1", 3 * U)
 
     plan
 
-    assert_equal [100, 20], picks.map { |t| t.qty.to_i }
+    assert_equal [U, 20], picks.map { |t| t.qty.to_i }
+  end
+
+  test "D5: 같은 칸에서 가져가려는 다른 미완료 작업(pick 이 아니어도)이 잡은 수량은 빼고 pick 한다" do
+    lot = fg_stock(U)
+    line = line_for("SO-T-1", U)
+    # 같은 칸·품목·로트에서 400 을 이미 잡은 작업(합격 적치처럼 pick 이 아닌 종류)
+    Ops::Plan.call(kind: "putaway", product: @fg, lot: lot, qty: 400, from: "FG-A-01-01", to: "FG-A-01-02", ref: nil, earliest_at: M0)
+
+    plan
+
+    assert_equal [U - 400], picks.map { |t| t.qty.to_i }, "재고 #{U} 중 400 은 이미 잡혀 있다"
+    assert_equal [line.id], picks.map(&:ref_id)
+    held = Ops::Plan.reserved.fetch([Location.find_by!(code: "FG-A-01-01").id, @fg.id, lot.id])
+    assert_equal U, held, "잡힌 합계가 재고를 넘지 않는다"
+
+    assert_equal 0, plan[:pick], "다시 불러도 같은 재고를 또 잡지 않는다"
   end
 
   test "같은 품목 재고를 두 라인이 나눠 쓸 때 이미 계획된 pick 분은 다시 계획하지 않는다" do
@@ -122,8 +146,8 @@ class ShippingTest < ActiveSupport::TestCase
   end
 
   test "같은 시각에 다시 불러도 작업·이동이 늘지 않는다" do
-    fg_stock(300)
-    line_for("SO-T-1", 250)
+    fg_stock(3 * U)
+    line_for("SO-T-1", (5 * U) / 2)
     plan
     tasks = Task.count
     moves = StockMove.count
@@ -136,8 +160,8 @@ class ShippingTest < ActiveSupport::TestCase
   end
 
   test "pick 이 진행 중인 라인은 load 하지 않고, 모두 끝나 shipping 에 모이면 load 1건을 계획한다" do
-    lot = fg_stock(300)
-    line = line_for("SO-T-1", 300)
+    lot = fg_stock(3 * U)
+    line = line_for("SO-T-1", 3 * U)
     plan
 
     assert_equal 0, plan[:load], "pick 이 아직 planned"
@@ -145,21 +169,21 @@ class ShippingTest < ActiveSupport::TestCase
 
     tick
     assert_equal %w[done done done], picks.map(&:status)
-    assert_equal [0, 300], [qty_at("FG-A-01-01"), qty_at("shipping")]
+    assert_equal [0, 3 * U], [qty_at("FG-A-01-01"), qty_at("shipping")]
     assert_equal 3, StockMove.where(move_type: "pick").count
 
     result = plan
     assert_equal [1, 0], result.values_at(:load, :pick)
     load_task = loads.sole
-    assert_equal ["dock_out", "shipping", "customer", 300, lot.id, "SalesOrderLine", line.id],
+    assert_equal ["dock_out", "shipping", "customer", 3 * U, lot.id, "SalesOrderLine", line.id],
                  [load_task.resource.kind, load_task.from_location.code, load_task.to_location.code, load_task.qty.to_i,
                   load_task.lot_id, load_task.ref_type, load_task.ref_id]
     assert_equal 0, plan[:load], "같은 시각 재실행은 load 를 또 만들지 않는다"
   end
 
   test "pick 여러 건 → load 1건 → ship 1건이고 수주가 done 이 된다" do
-    fg_stock(300)
-    line = line_for("SO-T-1", 300)
+    fg_stock(3 * U)
+    line = line_for("SO-T-1", 3 * U)
     plan
     tick
     plan
@@ -168,10 +192,10 @@ class ShippingTest < ActiveSupport::TestCase
 
     assert_equal "done", loads.sole.status
     ship = StockMove.where(move_type: "ship").sole
-    assert_equal ["shipping", "customer", 300, "SalesOrderLine", line.id, "task:#{loads.sole.id}"],
+    assert_equal ["shipping", "customer", 3 * U, "SalesOrderLine", line.id, "task:#{loads.sole.id}"],
                  [ship.from_location.code, ship.to_location.code, ship.qty.to_i, ship.ref_type, ship.ref_id, ship.idempotency_key]
     assert_equal "done", line.sales_order.reload.status
-    assert_equal [0, 0, 300], [qty_at("FG-A-01-01"), qty_at("shipping"), qty_at("customer")]
+    assert_equal [0, 0, 3 * U], [qty_at("FG-A-01-01"), qty_at("shipping"), qty_at("customer")]
     assert_equal [], Inventory::Reconcile.call
   end
 
@@ -188,23 +212,25 @@ class ShippingTest < ActiveSupport::TestCase
   end
 
   test "부분 출하: 재고만큼만 pick·load 해 partial 이 되고, 재고가 들어오면 이어서 done 이 된다" do
-    fg_stock(120)
-    line = line_for("SO-T-1", 300)
+    first = U + 20
+    rest = (3 * U) - first
+    fg_stock(first)
+    line = line_for("SO-T-1", 3 * U)
     plan
     tick
     plan
     tick
-    assert_equal [120, "partial"], [shipped(line), line.sales_order.reload.status]
+    assert_equal [first, "partial"], [shipped(line), line.sales_order.reload.status]
     assert_equal 0, plan[:pick], "재고가 없으면 새 pick 이 없다"
 
-    fg_stock(180)
-    assert_equal 2, plan[:pick], "남은 180 = 100 + 80"
-    assert_equal [100, 20, 100, 80], picks.map { |t| t.qty.to_i }
+    fg_stock(rest)
+    assert_equal 2, plan[:pick], "남은 #{rest} = #{U} + #{rest - U}"
+    assert_equal [U, 20, U, rest - U], picks.map { |t| t.qty.to_i }
     tick
     plan
     tick
 
-    assert_equal [300, "done"], [shipped(line), line.sales_order.reload.status]
+    assert_equal [3 * U, "done"], [shipped(line), line.sales_order.reload.status]
     assert_equal [], Inventory::Reconcile.call
     assert_equal 0, plan.values_at(:pick, :load).sum, "다 끝난 라인은 더 계획하지 않는다"
   end

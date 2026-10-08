@@ -6,7 +6,7 @@ class Location < ApplicationRecord
   # 이동 경로를 가르는 물리 구역 5개. 칸·랙·구역은 조상 중 이 코드를 가진 위치의 구역으로 본다.
   ZONE_ROOTS = %w[receiving raw_store line_side qc fg_store shipping].freeze
   MAX_DEPTH = 8 # 순환 데이터가 들어와도 재귀 조회가 멈추게 하는 상한
-  LINE_SIDE_CAPACITY = 800 # 라인 공급대 하나의 용량(품목 무관 qty 합). 칸(BIN_CAPACITY)이 아니라 루트에 직접 걸린다
+  LINE_SIDE_CAPACITY = Simulation::Config::LINE_SIDE_CAPACITY # 라인 공급대 하나의 용량(품목 무관 qty 합). 칸(BIN_CAPACITY)이 아니라 루트에 직접 걸린다
 
   # 위치 10개는 스키마가 아니라 데이터다. line_side 는 ③b 에서 늘었다(마이그레이션 20261008050000 도 같은 값을 넣는다).
   # [code, name, kind, role]
@@ -23,7 +23,7 @@ class Location < ApplicationRecord
     ["shipping",   "출하대",     "physical", "shipping"]
   ].freeze
 
-  BIN_CAPACITY = 400 # 팔레트 4개 x 100
+  BIN_CAPACITY = Simulation::Config::BIN_CAPACITY # 팔레트 4개
   RACKS_PER_ZONE = 4
   BINS_PER_RACK = 6
   # [창고 code, 구역 code, 이름 접두]. 구역 1개 -> 랙 4개 -> 칸 6개 = 창고당 24칸.

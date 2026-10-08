@@ -1,5 +1,6 @@
 module Ops
   # 시계를 now 로 옮긴다: 시작 시각이 된 planned 는 started, 예상 완료가 지난 started 는 done(재고 이동 1건).
+  # 자원 하나가 Tick 1회에 끝내는 작업은 MAX_FINISH_PER_RESOURCE(1)건이다. 오래 멈췄다 재개돼도 밀린 작업은 다음 Tick 들이 하나씩 이어서 끝낸다.
   # 재실행해도 안전하다 — 이동의 멱등키가 "task:<id>" 이고, 이미 done 인 작업은 다시 건드리지 않는다.
   #
   # 작업 종류 → 완료 순간의 이동:
@@ -14,6 +15,8 @@ module Ops
       Inventory::InsufficientStock, Inventory::CapacityExceeded, Inventory::Move::InvalidPath,
       Inventory::IdempotencyConflict, Inventory::Ship::OverShipment
     ].freeze
+
+    MAX_FINISH_PER_RESOURCE = 1 # Tick 1회에 자원 하나가 끝내는 작업 수 상한
 
     Result = Struct.new(:started, :done, :cancelled, keyword_init: true)
 
@@ -39,12 +42,16 @@ module Ops
     def process_resource(id)
       Task.transaction do
         Resource.lock.find(id) # 같은 자원을 만지는 Plan·Tick 을 직렬화한다
+        finished = 0
         loop do
           running = Task.where(resource_id: id, status: "started").order(:id).first
           if running
             break unless running.expected_finish_at && running.expected_finish_at <= @now
+            # 오래 멈췄다 돌아와도 한 번에 한 건만 끝낸다. 나머지는 다음 Tick 이 이어서 한다(이동이 한 순간에 몰리지 않게).
+            break if finished >= MAX_FINISH_PER_RESOURCE
 
             finish(running)
+            finished += 1
           else
             nxt = Task.where(resource_id: id, status: "planned").where("planned_at <= ?", @now).order(:planned_at, :id).first
             break unless nxt

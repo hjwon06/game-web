@@ -32,6 +32,19 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
 
   def task_moves = StockMove.where("idempotency_key LIKE 'task:%'")
 
+  # Tick 1회는 자원당 1건만 끝내므로(D2) 밀린 작업이 없어질 때까지 같은 시각으로 반복하고 결과를 합친다.
+  def drain(now)
+    total = Ops::Tick::Result.new(started: [], done: [], cancelled: [])
+    10.times do
+      r = Ops::Tick.call(now: now)
+      total.started.concat(r.started)
+      total.done.concat(r.done)
+      total.cancelled.concat(r.cancelled)
+      break if r.done.empty? && r.cancelled.empty?
+    end
+    total
+  end
+
   test "지게차 2대에 putaway 5건: 시작 시각이 겹치지 않고 두 줄로 이어진다" do
     tasks = Array.new(5) { plan_putaway }
 
@@ -112,15 +125,26 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
     assert_equal [], Inventory::Reconcile.call
   end
 
-  test "한 번의 Tick 이 여러 건을 이어서 처리한다 (시작 → 완료 → 다음 시작 → 완료)" do
+  test "D2: 오래 멈췄다 재개돼도 Tick 1회에 자원당 1건만 끝내고 나머지는 다음 Tick 이 이어서 한다" do
     stock_receiving(100)
-    a, b = queue_on(@fork1, [10, 20])
+    a, b, c = queue_on(@fork1, [10, 20, 30])
+    d = queue_on(@fork2, [5]).first
+    base = StockMove.count
 
-    r = Ops::Tick.call(now: @t0 + 1.hour)
-    assert_equal [a.id, b.id], r.done
-    assert_equal %w[done done], [a, b].map { |t| t.reload.status }
-    assert_equal @t0, a.started_at
-    assert_equal a.expected_finish_at, b.reload.started_at
+    r = Ops::Tick.call(now: @t0 + 30.minutes) # 30분 멈췄다 재개: 밀린 작업이 4건
+    assert_equal [a.id, d.id].sort, r.done.sort, "자원 2대 = 완료 2건 이하"
+    assert_operator r.done.size, :<=, Resource.where(kind: "forklift").count
+    assert_equal base + 2, StockMove.count
+    assert_equal "started", b.reload.status, "다음 작업은 시작만 했다"
+    assert_equal "planned", c.reload.status
+    assert_equal @t0, a.reload.started_at
+    assert_equal a.expected_finish_at, b.started_at
+
+    r2 = Ops::Tick.call(now: @t0 + 30.minutes)
+    assert_equal [b.id], r2.done
+    assert_equal [c.id], Ops::Tick.call(now: @t0 + 30.minutes).done
+    assert_equal %w[done done done], [a, b, c].map { |t| t.reload.status }
+    assert_equal base + 4, StockMove.count
   end
 
   test "한 자원은 started 가 동시에 하나뿐이다: 시작 시각이 겹치게 만든 두 건 중 하나만 시작한다" do
@@ -152,7 +176,7 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
     ok1, short, ok2 = queue_on(@fork1, [100, 100, 40])
     base = StockMove.count
 
-    r = Ops::Tick.call(now: @t0 + 1.hour)
+    r = drain(@t0 + 1.hour)
 
     assert_equal [ok1.id, ok2.id], r.done
     assert_equal [short.id], r.cancelled
@@ -165,23 +189,24 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
   end
 
   test "칸 용량을 넘겨서 완료가 실패해도 그 작업만 cancelled 이다" do
-    stock_receiving(1000)
-    ok1, over, ok2 = queue_on(@fork1, [300, 300, 50]) # 칸 용량 400
+    cap = Location::BIN_CAPACITY
+    stock_receiving(2 * cap)
+    ok1, over, ok2 = queue_on(@fork1, [cap - 100, cap - 100, 50])
 
-    r = Ops::Tick.call(now: @t0 + 1.hour)
+    r = drain(@t0 + 1.hour)
 
     assert_equal [over.id], r.cancelled
     assert_equal %w[done cancelled done], [ok1, over, ok2].map { |t| t.reload.status }
     assert_match(/CapacityExceeded/, over.cancel_reason)
-    assert_equal 350, Quant.where(location_id: @bin.id).sum(:qty)
+    assert_equal cap - 50, Quant.where(location_id: @bin.id).sum(:qty)
   end
 
   test "취소된 작업은 Tick 을 다시 불러도 되살아나지 않고 이동도 안 생긴다" do
     stock_receiving(10)
     _ok, short = queue_on(@fork1, [10, 10])
-    Ops::Tick.call(now: @t0 + 1.hour)
+    drain(@t0 + 1.hour)
     count = StockMove.count
-    Ops::Tick.call(now: @t0 + 2.hours)
+    drain(@t0 + 2.hours)
     assert_equal "cancelled", short.reload.status
     assert_equal count, StockMove.count
   end

@@ -4,6 +4,7 @@ require "stringio"
 # 입고: 트럭 도착 → 팔레트별 하차(unload) → 칸 적치(putaway). 시계는 테스트가 10초씩 직접 흘린다.
 class InboundTest < ActiveSupport::TestCase
   NOW = Time.utc(2026, 10, 8, 12, 7, 30)
+  P = Simulation::Config::PALLET_QTY # 팔레트 1개
 
   setup do
     Resource.ensure_defaults!
@@ -46,7 +47,7 @@ class InboundTest < ActiveSupport::TestCase
   def done_unload(product, finished_at)
     lot = Lot.find_or_create_by!(product: product, lot_no: "R-T-#{product.sku}")
     Task.create!(kind: "unload", status: "done", resource: Resource.find_by!(code: "DOCK-IN-01"), product: product, lot: lot,
-                 qty: 100, from_location: Location.find_by!(code: "supplier"), to_location: Location.find_by!(code: "receiving"),
+                 qty: P, from_location: Location.find_by!(code: "supplier"), to_location: Location.find_by!(code: "receiving"),
                  planned_at: finished_at - 100, started_at: finished_at - 100, expected_finish_at: finished_at, finished_at: finished_at)
   end
 
@@ -77,7 +78,8 @@ class InboundTest < ActiveSupport::TestCase
       assert_operator called - prev, :>=, 0
       assert_operator called - prev, :<, 10, "예정 #{prev} 인데 #{called} 에 도착"
     end
-    assert_operator truck_lots.count, :>=, 3
+    # 팔레트가 500개라 트럭 한 대가 30분 소비량(강판 2822·볼트 1411)을 거의 채운다. 소비가 없는 이 테스트에서는 자재마다 한두 대면 끝난다.
+    assert_operator truck_lots.count, :>=, 2
   end
 
   test "팔레트마다 unload 1건·putaway 1건이고, 이동 시각이 서로 달라 같은 초에 2건 이하다" do
@@ -86,14 +88,14 @@ class InboundTest < ActiveSupport::TestCase
     drive(t, 1200) # 남은 하차·적치가 끝날 때까지
 
     unloads = Task.where(kind: "unload").order(:id).to_a
-    assert_operator unloads.size, :>=, 12
+    assert_operator unloads.size, :>=, 8
     assert unloads.all? { |u| u.status == "done" }, "하차가 전부 끝났다"
     unloads.group_by(&:lot_id).each_value { |list| assert_includes 4..8, list.size, "트럭당 팔레트 4~8개" }
     assert_equal unloads.map(&:lot_id).uniq.size, truck_lots.count, "트럭 1대 = 로트 1개"
-    assert unloads.all? { |u| u.qty == 100 && u.from_location.code == "supplier" && u.to_location.code == "receiving" }
+    assert unloads.all? { |u| u.qty == P && u.from_location.code == "supplier" && u.to_location.code == "receiving" }
 
     assert_equal unloads.map(&:id).sort, putaways.map(&:ref_id).sort, "팔레트마다 putaway 정확히 1건"
-    assert putaways.all? { |p| p.status == "done" && p.ref_type == "Task" && p.qty == 100 && p.from_location.code == "receiving" }
+    assert putaways.all? { |p| p.status == "done" && p.ref_type == "Task" && p.qty == P && p.from_location.code == "receiving" }
     done_at = unloads.to_h { |u| [u.id, u.finished_at] }
     assert putaways.all? { |p| p.planned_at >= done_at.fetch(p.ref_id) }, "putaway 는 그 팔레트 하차가 끝난 뒤에 시작한다"
 
@@ -107,7 +109,7 @@ class InboundTest < ActiveSupport::TestCase
     assert_equal unloads.size, StockMove.where(move_type: "putaway").count
     assert_equal 0, Quant.joins(:location).where(locations: { code: "receiving" }).sum(:qty), "입고대는 비었다"
     bins = Simulation::Inbound.bins_under("raw_store").pluck(:id)
-    assert_equal unloads.size * 100, Quant.where(location_id: bins).sum(:qty)
+    assert_equal unloads.size * P, Quant.where(location_id: bins).sum(:qty)
     assert_equal [], Inventory::Reconcile.call
     assert_equal 0, @log.string.lines.grep(/ERROR/).size
   end
@@ -123,19 +125,19 @@ class InboundTest < ActiveSupport::TestCase
     tasks = Task.where(kind: "unload")
     assert_equal result[:unload], tasks.count
     assert_equal [truck_lots.first.id], tasks.pluck(:lot_id).uniq
-    assert tasks.all? { |t| t.status == "planned" && t.qty == 100 }
+    assert tasks.all? { |t| t.status == "planned" && t.qty == P }
   end
 
-  test "칸 고르기 ①: 같은 품목이고 남은 용량 100 이상인 칸 중 코드 순 첫 칸, ②: 없으면 빈 칸 중 코드 순 첫 칸" do
-    seed_bin(@steel, "RAW-A-01-01", 350) # 같은 품목이지만 남은 용량 50
-    seed_bin(@bolt, "RAW-A-01-02", 100)  # 다른 품목
-    seed_bin(@steel, "RAW-A-01-03", 200) # 같은 품목, 남은 200
+  test "칸 고르기 ①: 같은 품목이고 남은 용량이 팔레트 이상인 칸 중 코드 순 첫 칸, ②: 없으면 빈 칸 중 코드 순 첫 칸" do
+    seed_bin(@steel, "RAW-A-01-01", Location::BIN_CAPACITY - (P / 2)) # 같은 품목이지만 남은 용량이 팔레트의 절반
+    seed_bin(@bolt, "RAW-A-01-02", P)  # 다른 품목
+    seed_bin(@steel, "RAW-A-01-03", Location::BIN_CAPACITY - (2 * P)) # 같은 품목, 남은 용량 팔레트 2개
     4.times { |i| done_unload(@steel, NOW - 50 + (i * 10)) }
 
     result = inbound(NOW)
 
     assert_equal 4, result[:putaway]
-    # 03: 200→300 (남은 100 이라 한 번 더) → 가득 → 빈 칸 04 → 04 에 강판이 생겼으니 ① 로 04
+    # 03: 팔레트 2개가 들어가 가득 → 빈 칸 04 → 04 에 강판이 생겼으니 ① 로 04
     assert_equal %w[RAW-A-01-03 RAW-A-01-03 RAW-A-01-04 RAW-A-01-04], putaways.map { |p| p.to_location.code }
   end
 
@@ -150,7 +152,7 @@ class InboundTest < ActiveSupport::TestCase
   end
 
   test "칸 고르기 ③: 칸이 없으면 계획하지 않고 로그를 남기며, 칸이 비면 다음 호출에 적치한다" do
-    Simulation::Inbound.bins_under("raw_store").pluck(:code).each { |code| seed_bin(@bolt, code, 100) } # 전부 다른 품목이 점유
+    Simulation::Inbound.bins_under("raw_store").pluck(:code).each { |code| seed_bin(@bolt, code, P) } # 전부 다른 품목이 점유
     done_unload(@steel, NOW - 10)
 
     result = inbound(NOW)
@@ -160,7 +162,7 @@ class InboundTest < ActiveSupport::TestCase
     assert_match(/적치할 칸이 없어 receiving 에 1팔레트 대기/, @log.string)
 
     # 칸을 비우는 길은 feed(raw 칸 → line_side)다. line_side 는 칸 고르기 대상이 아니라 비어 있어도 고르지 않는다.
-    Inventory::Move.call(product: @bolt, lot: nil, from: "RAW-A-01-05", to: "line_side", qty: 100, move_type: "feed",
+    Inventory::Move.call(product: @bolt, lot: nil, from: "RAW-A-01-05", to: "line_side", qty: P, move_type: "feed",
                          ref: nil, idempotency_key: next_key)
     again = inbound(NOW + 10)
 

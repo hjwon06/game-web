@@ -260,6 +260,20 @@ class RunnerTest < ActiveSupport::TestCase
     assert_equal 2, @log.string.scan(/sim shipping failed .*RuntimeError ship boom/).size
   end
 
+  test "D4: 수요/공급 비(est_feed_per_min, forklift_capacity_per_min)를 600초 경계마다 한 줄 남긴다" do
+    Resource.ensure_defaults!
+    runner = build_full_runner([])
+
+    59.times { |window| run_window(runner, window) }
+    assert_equal 0, @log.string.scan("sim balance").size, "590초 경계까지는 남기지 않는다"
+
+    run_window(runner, 59)
+    assert_equal 1, @log.string.scan(/sim balance 2026-10-06T12:10:00Z est_feed_per_min=\S+ forklift_capacity_per_min=3\.0/).size
+
+    run_window(runner, 60)
+    assert_equal 1, @log.string.scan("sim balance").size, "다음 600초 경계 전에는 또 남기지 않는다"
+  end
+
   test "Tick 과 Inbound 가 예외를 던져도 서로와 Logistics 와 Flusher 는 계속된다" do
     order = []
     logistics = RecordingLogistics.new

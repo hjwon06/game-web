@@ -15,7 +15,7 @@ class LocationHierarchyTest < ActiveSupport::TestCase
       capacity = code == "line_side" ? Location::LINE_SIDE_CAPACITY : nil
       assert_equal [kind, role, nil, capacity], [loc.kind, loc.role, loc.parent_id, loc.capacity_units], code
     end
-    assert_equal 800, Location.find_by!(code: "line_side").capacity_units
+    assert_equal 4000, Location.find_by!(code: "line_side").capacity_units # 팔레트(500) 8개
   end
 
   test "재실행해도 중복이 생기지 않는다" do
@@ -24,15 +24,15 @@ class LocationHierarchyTest < ActiveSupport::TestCase
     assert_equal before, Location.order(:code).pluck(:id, :code)
   end
 
-  test "칸 코드는 RAW-A-01-03 꼴이고 부모 사슬은 칸 > 랙 > 구역 > 창고, 용량은 400이다" do
+  test "칸 코드는 RAW-A-01-03 꼴이고 부모 사슬은 칸 > 랙 > 구역 > 창고, 용량은 2000이다(팔레트 500 x 4)" do
     bin = Location.find_by!(code: "RAW-A-01-03")
-    assert_equal ["bin", "physical", 400], [bin.level, bin.kind, bin.capacity_units]
+    assert_equal ["bin", "physical", 2000], [bin.level, bin.kind, bin.capacity_units]
     assert_equal "RAW-A-01", bin.parent.code
     assert_equal "rack", bin.parent.level
     assert_equal "RAW-A", bin.parent.parent.code
     assert_equal "raw_store", bin.parent.parent.parent.code
     assert_equal "fg_store", Location.find_by!(code: "FG-A-04-06").parent.parent.parent.code
-    assert_equal 400, Location.where(level: "bin").distinct.pluck(:capacity_units).sole
+    assert_equal 2000, Location.where(level: "bin").distinct.pluck(:capacity_units).sole
   end
 
   test "zone_code 는 칸이든 창고든 소속 구역 code 를 돌려주고 가상 위치는 자기 code 다" do

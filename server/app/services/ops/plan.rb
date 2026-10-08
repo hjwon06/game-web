@@ -18,6 +18,15 @@ module Ops
       def reseed!(seed = DEFAULT_SEED) = (@rng = Random.new(seed))
 
       def call(**args) = new(**args).call
+
+      # { [위치 id, 품목 id, 로트 id] => 미완료(planned/started) 작업이 그 위치에서 가져가기로 한 수량 }.
+      # 계획하는 쪽이 가용 재고 = 현재고 - 이 값 으로 보면, 같은 재고를 두 작업이 잡아 완료 때 부족으로 취소되는 일이 없다.
+      # 종류를 가리지 않는다(feed·pick·putaway·inspect 모두 from 위치의 재고를 쓴다). 예약 테이블 없이 tasks 에서 바로 합한다.
+      def reserved(location_ids = nil)
+        scope = Task.where(status: %w[planned started]).where.not(from_location_id: nil)
+        scope = scope.where(from_location_id: location_ids) if location_ids
+        scope.group(:from_location_id, :product_id, :lot_id).sum(:qty)
+      end
     end
 
     def initialize(kind:, product:, lot:, qty:, from:, to:, ref:, earliest_at:)

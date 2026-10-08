@@ -69,13 +69,22 @@ module Simulation
 
       claimed = claimed_by_lot(qc, stock.map(&:lot_id))
       uninspected = uninspected_by_order(qc, orders.values.map(&:id))
-      stock.each do |quant|
+      # 로트마다 (이 작업지시의 미검사 수량, 로트 몫) 의 작은 쪽. 계획한 만큼은 작업지시의 미검사에서 바로 빼서 다음 로트가 같은 수량을 또 잡지 않게 한다.
+      candidates = stock.filter_map do |quant|
         order = orders.fetch(quant.lot.lot_no)
         pending = [uninspected.fetch(order.id, 0), quant.qty - claimed.fetch(quant.lot_id, 0)].min
-        next unless pending.positive? && due?(qc, quant.lot, pending)
+        [quant, order, pending] if pending.positive?
+      end
+      arrivals = arrivals_by_lot(qc, candidates.select { |_, _, pending| pending < Config::INSPECT_BATCH_QTY }.map { |q, _, _| q.lot_id })
+      candidates.each do |quant, order, _|
+        # 앞 로트가 방금 차감했으므로 pending 을 다시 계산한다.
+        pending = [uninspected.fetch(order.id, 0), quant.qty - claimed.fetch(quant.lot_id, 0)].min
+        next unless pending.positive? && due?(arrivals[quant.lot_id], pending)
 
-        Ops::Plan.call(kind: "inspect", product: order.item, lot: quant.lot, qty: [pending, Location::BIN_CAPACITY].min,
+        qty = [pending, Location::BIN_CAPACITY].min
+        Ops::Plan.call(kind: "inspect", product: order.item, lot: quant.lot, qty: qty,
                        from: qc, to: "fg_store", ref: order, earliest_at: @now)
+        uninspected[order.id] -= qty
         @counts[:inspect] += 1
       end
     end
@@ -97,14 +106,27 @@ module Simulation
       produced.to_h { |id, qty| [id, qty - inspected.fetch(id, 0)] }
     end
 
-    def due?(qc, lot, pending)
-      pending >= Config::INSPECT_BATCH_QTY || oldest_arrival(qc, lot, pending) <= @now - Config::INSPECT_WAIT_SECONDS
+    # arrivals: arrivals_by_lot 의 이 로트 몫(최근 도착 순 [수량, 도착 ISO]). 배치 수량 이상이면 도착 시각을 보지 않는다.
+    def due?(arrivals, pending)
+      pending >= Config::INSPECT_BATCH_QTY || oldest_arrival(arrivals, pending) <= @now - Config::INSPECT_WAIT_SECONDS
+    end
+
+    ARRIVALS_PER_LOT = 200
+
+    # { lot_id => [[qty, 도착 ISO], ...] } 최근 도착 순, 로트마다 ARRIVALS_PER_LOT 건까지. 로트 수와 상관없이 쿼리 1회.
+    def arrivals_by_lot(qc, lot_ids)
+      return {} if lot_ids.empty?
+
+      ranked = StockMove.where(move_type: "produce", to_location_id: qc.id, lot_id: lot_ids)
+                        .select("stock_moves.id, stock_moves.lot_id, stock_moves.qty, (#{ARRIVED_AT_SQL}) AS arrived_at, " \
+                                "ROW_NUMBER() OVER (PARTITION BY stock_moves.lot_id ORDER BY stock_moves.id DESC) AS rn")
+      StockMove.from(ranked, :stock_moves).where("rn <= ?", ARRIVALS_PER_LOT).order(:lot_id, id: :desc)
+               .pluck(:lot_id, :qty, Arel.sql("arrived_at")).group_by(&:first).transform_values { |rows| rows.map { |_, qty, at| [qty, at] } }
     end
 
     # 미검사 수량(= 가장 최근에 도착한 pending 만큼)에서 가장 오래된 도착분의 시각. 먼저 도착한 것부터 검사됐다고 본다.
-    def oldest_arrival(qc, lot, pending)
-      rows = StockMove.where(move_type: "produce", to_location_id: qc.id, lot_id: lot.id)
-                      .order(id: :desc).limit(200).pluck(:qty, Arel.sql(ARRIVED_AT_SQL))
+    def oldest_arrival(rows, pending)
+      rows ||= []
       covered = 0
       oldest = rows.last&.last
       rows.each do |qty, arrived|

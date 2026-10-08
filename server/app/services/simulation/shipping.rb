@@ -87,7 +87,8 @@ module Simulation
       picking = line_tasks("pick", line_ids, OPEN).distinct.pluck(:ref_id).to_set
       picked = line_tasks("pick", line_ids, LIVE).group(:ref_id).sum(:qty)
       shipped = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id).sum(:qty)
-      reserved = Task.where(kind: "pick", status: OPEN).group(:from_location_id, :lot_id).sum(:qty)
+      # pick 만이 아니라 같은 칸에서 가져가려는 모든 미완료 작업(합격 적치 등)이 잡은 수량을 뺀다.
+      reserved = Ops::Plan.reserved(stock.map(&:location_id).uniq)
 
       lines.each do |line|
         next if picking.include?(line.id)
@@ -96,13 +97,14 @@ module Simulation
         Config::PICKS_PER_LINE.times do
           break unless remaining.positive?
 
-          quant = stock.find { |q| q.product_id == line.product_id && q.qty - reserved.fetch([q.location_id, q.lot_id], 0) > 0 }
+          quant = stock.find { |q| q.product_id == line.product_id && q.qty - reserved.fetch([q.location_id, q.product_id, q.lot_id], 0) > 0 }
           break unless quant
 
-          qty = [Config::PICK_QTY, remaining, quant.qty - reserved.fetch([quant.location_id, quant.lot_id], 0)].min
+          key = [quant.location_id, quant.product_id, quant.lot_id]
+          qty = [Config::PICK_QTY, remaining, quant.qty - reserved.fetch(key, 0)].min
           Ops::Plan.call(kind: "pick", product: line.product, lot: quant.lot, qty: qty, from: quant.location, to: "shipping",
                          ref: line, earliest_at: @now)
-          reserved[[quant.location_id, quant.lot_id]] = reserved.fetch([quant.location_id, quant.lot_id], 0) + qty
+          reserved[key] = reserved.fetch(key, 0) + qty
           remaining -= qty
           @counts[:pick] += 1
         end

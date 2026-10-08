@@ -4,6 +4,8 @@ class Inventory::MoveCapacityTest < ActiveSupport::TestCase
   setup do
     @product = Product.create!(sku: "RAW-CAP", name: "용량 강판", uom: "ea", kind: "raw")
     @other = Product.create!(sku: "RAW-CAP2", name: "용량 볼트", uom: "ea", kind: "raw")
+    # 아래 테스트는 용량 400 칸을 가정한다(수량이 그에 맞춰져 있다). 시드 용량(팔레트 4개 = 2000)과 별개로 이 테스트 안에서만 400 으로 둔다.
+    Location.where(code: %w[RAW-A-01-01 RAW-A-01-02]).update_all(capacity_units: 400)
     @bin = Location.find_by!(code: "RAW-A-01-01")
     @bin2 = Location.find_by!(code: "RAW-A-01-02")
     mv("supplier", "receiving", 1000, "receive", "cap-recv")
@@ -115,12 +117,13 @@ class Inventory::MoveCapacityConcurrencyTest < ActiveSupport::TestCase
     Inventory::Move.call(product: product, lot: nil, from: from, to: to, qty: qty, move_type: type, ref: nil, idempotency_key: key)
   end
 
-  test "서로 다른 품목 300 + 300 이 용량 400 칸으로 동시에 오면 정확히 하나만 성공한다" do
+  test "서로 다른 품목 칸 용량의 3/4 + 3/4 가 칸으로 동시에 오면 정확히 하나만 성공한다" do
     rounds = Location::BINS_PER_RACK # 라운드마다 비어 있는 새 칸을 쓴다(랙 02 의 6칸)
+    qty = Location::BIN_CAPACITY * 3 / 4 # 용량 2000 이면 1500 + 1500 = 3000 이 용량을 넘는다
     rounds.times do |i|
       bin = Location.find_by!(code: format("RAW-A-02-%02d", i + 1))
-      mv(@a, "receiving", 300, "receive", "cc-recv-a-#{i}", from: "supplier")
-      mv(@b, "receiving", 300, "receive", "cc-recv-b-#{i}", from: "supplier")
+      mv(@a, "receiving", qty, "receive", "cc-recv-a-#{i}", from: "supplier")
+      mv(@b, "receiving", qty, "receive", "cc-recv-b-#{i}", from: "supplier")
 
       go = Queue.new
       results = Queue.new
@@ -130,7 +133,7 @@ class Inventory::MoveCapacityConcurrencyTest < ActiveSupport::TestCase
           ActiveRecord::Base.connection_pool.with_connection do
             go.pop
             results << begin
-              mv(product, bin, 300, "putaway", "cc-put-#{tag}-#{i}")
+              mv(product, bin, qty, "putaway", "cc-put-#{tag}-#{i}")
             rescue StandardError => e
               e
             end
@@ -143,7 +146,7 @@ class Inventory::MoveCapacityConcurrencyTest < ActiveSupport::TestCase
 
       assert_equal 1, outcomes.grep(StockMove).size, "라운드 #{i}: #{outcomes.inspect}"
       assert_equal 1, outcomes.grep(Inventory::CapacityExceeded).size, "라운드 #{i}: #{outcomes.inspect}"
-      assert_equal 300, Quant.where(location_id: bin.id).sum(:qty)
+      assert_equal qty, Quant.where(location_id: bin.id).sum(:qty)
     end
     assert_equal [], Inventory::Reconcile.call
   end

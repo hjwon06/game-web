@@ -82,18 +82,18 @@ class Inventory::MoveBinPathsTest < ActiveSupport::TestCase
     assert_equal %w[feed pick], StockMove::MOVE_TYPES.sort - %w[issue produce putaway qc_fail qc_pass receive ship]
   end
 
-  test "line_side 는 용량 800 의 물리 위치이고 구역 루트다" do
+  test "line_side 는 용량 4000(팔레트 8개)의 물리 위치이고 구역 루트다" do
     line_side = Location.find_by!(code: "line_side")
 
-    assert_equal ["physical", 800, "line_side"], [line_side.kind, line_side.capacity_units, line_side.zone_code]
+    assert_equal ["physical", 4000, "line_side"], [line_side.kind, line_side.capacity_units, line_side.zone_code]
     assert_includes Location.ensure_defaults!.map(&:code), "line_side"
   end
 
-  test "line_side 용량(800)을 넘기는 feed 는 CapacityExceeded 다" do
-    mv("supplier", "receiving", 900, "receive", "bin-cap-recv")
-    Location.where(id: @raw_bin.id).update_all(capacity_units: 1_000)
-    mv("receiving", @raw_bin, 900, "putaway", "bin-cap-put")
-    mv(@raw_bin, "line_side", 800, "feed", "bin-cap-ok")
+  test "line_side 용량(4000)을 넘기는 feed 는 CapacityExceeded 다" do
+    mv("supplier", "receiving", 4100, "receive", "bin-cap-recv")
+    Location.where(id: @raw_bin.id).update_all(capacity_units: 5_000)
+    mv("receiving", @raw_bin, 4100, "putaway", "bin-cap-put")
+    mv(@raw_bin, "line_side", 4000, "feed", "bin-cap-ok")
 
     assert_raises(Inventory::CapacityExceeded) { mv(@raw_bin, "line_side", 1, "feed", "bin-cap-over") }
   end
