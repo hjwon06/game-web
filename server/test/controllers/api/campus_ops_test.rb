@@ -54,7 +54,10 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
     [order, SalesOrderLine.create!(sales_order: order, product: @fg, ordered_qty: qty)]
   end
 
+  # 통합 테스트는 요청 사이에 같은 DB 연결을 써서 AR 쿼리 캐시가 남는다. 같은 SQL 이 cached 로 와서 0으로 세지지 않게 먼저 비운다
+  # (루미 실측: 두 번째 search 요청도 SQL 7개를 실행했는데 전부 cached 로 표시돼 0으로 집계됐다).
   def count_queries
+    ActiveRecord::Base.connection.clear_query_cache
     count = 0
     counter = lambda do |*, payload|
       next if payload[:name] == "SCHEMA" || payload[:cached]
@@ -299,6 +302,64 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
 
     assert_operator small - plain, :<=, OPS_MAX_QUERIES, "ops 가 더한 쿼리 #{small - plain}개"
     assert_equal small - plain, large - plain, "건수가 늘어도 ops 쿼리 수는 그대로"
+  end
+
+  # --- 1초 공유 캐시 ------------------------------------------------------------------------
+  # test 환경 캐시는 null_store 라 기존 테스트는 매번 계산한다. 캐시 동작은 이 테스트들 안에서만 memory_store 로 바꿔 본다.
+
+  def with_memory_cache
+    original = Rails.cache
+    Rails.cache = ActiveSupport::Cache::MemoryStore.new
+    yield
+  ensure
+    Rails.cache = original
+  end
+
+  test "ops 캐시: 같은 초 안의 두 요청은 ops 쿼리를 한 번만 실행하고 다음 초에는 다시 계산한다" do
+    truck_scenario
+    with_memory_cache do
+      plain = count_queries { get "/api/campus" }
+      first = count_queries { get "/api/campus", params: { include: "ops" } }
+      body = response.parsed_body["ops"]
+      assert_operator first - plain, :>, 0, "첫 요청은 ops 를 계산한다"
+
+      travel_to @t + 0.5.seconds # 같은 초
+      second = count_queries { get "/api/campus", params: { include: "ops" } }
+      assert_equal plain, second, "같은 초의 두 번째 요청은 ops 쿼리를 더하지 않는다"
+      assert_equal body, response.parsed_body["ops"]
+
+      travel_to @t + 1.second # 다음 초
+      third = count_queries { get "/api/campus", params: { include: "ops" } }
+      assert_equal first, third, "다음 초에는 다시 계산한다"
+    end
+  end
+
+  test "ops 캐시: so 가 다르면 따로 계산하고 같은 so 는 공유한다" do
+    truck_scenario
+    so!("SO-OPS-A")
+    so!("SO-OPS-B")
+    with_memory_cache do
+      plain = count_queries { get "/api/campus" }
+      a = count_queries { get "/api/campus", params: { include: "ops", so: "SO-OPS-A" } }
+      b = count_queries { get "/api/campus", params: { include: "ops", so: "SO-OPS-B" } }
+      a_again = count_queries { get "/api/campus", params: { include: "ops", so: "SO-OPS-A" } }
+
+      assert_operator a - plain, :>, 0
+      assert_operator b - plain, :>, 0, "다른 so 는 같은 초여도 다시 계산한다"
+      assert_equal plain, a_again, "같은 so 는 같은 초에 공유한다"
+    end
+  end
+
+  test "ops 캐시: ops 를 요청하지 않으면 캐시를 건드리지 않고 search 도 캐시하지 않는다" do
+    so!("SO-OPS-A")
+    with_memory_cache do
+      get "/api/campus"
+      assert_not Rails.cache.exist?(["campus_ops", nil, Time.current.to_i])
+      first = count_queries { get "/api/campus/search", params: { q: "SO-OPS" } }
+      second = count_queries { get "/api/campus/search", params: { q: "SO-OPS" } }
+      assert_operator first, :>, 0
+      assert_equal first, second, "search 는 매번 쿼리를 실행한다"
+    end
   end
 
   # --- 검색 ---------------------------------------------------------------------------------

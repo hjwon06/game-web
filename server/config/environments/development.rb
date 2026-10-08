@@ -29,8 +29,8 @@ Rails.application.configure do
     config.action_controller.perform_caching = false
   end
 
-  # Change to :null_store to avoid any caching.
-  config.cache_store = :memory_store
+  # ops 응답 1초 공유 캐시(Api::CampusController)가 쓴다. 테스트만 :null_store.
+  config.cache_store = :memory_store, { size: 32 * 1024 * 1024 } # 32MB (설정 로드 시점엔 Integer#megabytes 가 없다)
 
   # Print deprecation notices to the Rails logger.
   config.active_support.deprecation = :log
