@@ -141,6 +141,39 @@ ALTER SEQUENCE public.commands_id_seq OWNED BY public.commands.id;
 
 
 --
+-- Name: inbound_states; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inbound_states (
+    id bigint NOT NULL,
+    singleton boolean DEFAULT true NOT NULL,
+    next_truck_at timestamp(6) without time zone NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT inbound_states_singleton_check CHECK (singleton)
+);
+
+
+--
+-- Name: inbound_states_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.inbound_states_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: inbound_states_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.inbound_states_id_seq OWNED BY public.inbound_states.id;
+
+
+--
 -- Name: inspections; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -770,6 +803,13 @@ ALTER TABLE ONLY public.commands ALTER COLUMN id SET DEFAULT nextval('public.com
 
 
 --
+-- Name: inbound_states id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inbound_states ALTER COLUMN id SET DEFAULT nextval('public.inbound_states_id_seq'::regclass);
+
+
+--
 -- Name: inspections id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -903,6 +943,14 @@ ALTER TABLE ONLY public.bom_lines
 
 ALTER TABLE ONLY public.commands
     ADD CONSTRAINT commands_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: inbound_states inbound_states_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inbound_states
+    ADD CONSTRAINT inbound_states_pkey PRIMARY KEY (id);
 
 
 --
@@ -1067,6 +1115,13 @@ CREATE UNIQUE INDEX index_commands_on_idempotency_key ON public.commands USING b
 --
 
 CREATE INDEX index_commands_on_machine_id ON public.commands USING btree (machine_id);
+
+
+--
+-- Name: index_inbound_states_on_singleton; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX index_inbound_states_on_singleton ON public.inbound_states USING btree (singleton);
 
 
 --
@@ -1625,6 +1680,7 @@ INSERT INTO "schema_migrations" (version) VALUES
 ('20261008130003'),
 ('20261008130002'),
 ('20261008130001'),
+('20261008044000'),
 ('20261008000010'),
 ('20261008000009'),
 ('20261008000008'),
