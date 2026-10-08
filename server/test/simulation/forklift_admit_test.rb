@@ -28,10 +28,19 @@ class ForkliftAdmitTest < ActiveSupport::TestCase
 
   def logger = Logger.new(@log)
 
+  # 칸 하나는 BIN_CAPACITY 까지만 받으므로 완제품 칸 여러 개에 나눠 넣는다.
   def fg_stock(qty)
     lot = Lot.create!(product: @fg, lot_no: "LOT-AD")
     Inventory::Move.call(product: @fg, lot: lot, from: "production", to: "qc", qty: qty, move_type: "produce", ref: nil, idempotency_key: "ad-prod")
-    Inventory::Move.call(product: @fg, lot: lot, from: "qc", to: "FG-A-01-01", qty: qty, move_type: "qc_pass", ref: nil, idempotency_key: "ad-pass")
+    bins = Location.where(level: "bin").where("code LIKE 'FG-%'").order(:code).pluck(:code)
+    remaining = qty
+    bins.each_with_index do |bin, index|
+      break if remaining <= 0
+      chunk = [remaining, Config::BIN_CAPACITY].min
+      Inventory::Move.call(product: @fg, lot: lot, from: "qc", to: bin, qty: chunk, move_type: "qc_pass", ref: nil, idempotency_key: "ad-pass-#{index}")
+      remaining -= chunk
+    end
+    assert_equal 0, remaining, "완제품 칸이 부족하다"
   end
 
   def open_order(qty)
@@ -45,7 +54,7 @@ class ForkliftAdmitTest < ActiveSupport::TestCase
                          ref: nil, idempotency_key: "ad-recv")
     Task.create!(kind: "unload", status: "done", resource: Resource.where(kind: "dock_in").first, product: @steel, lot: lot,
                  qty: Config::PALLET_QTY, from_location: Location.find_by!(code: "supplier"), to_location: Location.find_by!(code: "receiving"),
-                 planned_at: Time.current - 60, expected_finish_at: Time.current - 30, finished_at: Time.current - 30)
+                 planned_at: Time.current - 60, started_at: Time.current - 60, expected_finish_at: Time.current - 30, finished_at: Time.current - 30)
   end
 
   test "queue_seconds: 일이 없으면 0, 모든 지게차에 일이 걸려 있으면 가장 빨리 비는 쪽까지의 초" do

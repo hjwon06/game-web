@@ -4,6 +4,7 @@ require "stringio"
 # 출하: 열린 수주 라인마다 fg 칸 재고가 있으면 pick(지게차, 100개 단위, FIFO 칸 → shipping),
 # 라인의 pick 이 끝나 shipping 에 모이면 load(출하 도크, shipping → customer). 부분 출하 허용.
 class ShippingTest < ActiveSupport::TestCase
+  include UnlimitedForkliftQueueHelper
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
 
   setup do

@@ -4,6 +4,7 @@ require "stringio"
 # 입고: 발주(PO) → 리드타임 뒤 트럭 도착 → 팔레트별 하차(unload) → 칸 적치(putaway) → 발주 입고 완료. 시계는 테스트가 10초씩 직접 흘린다.
 class InboundTest < ActiveSupport::TestCase
   include UnscaledRatesHelper
+  include UnlimitedForkliftQueueHelper
   NOW = Time.utc(2026, 10, 8, 12, 7, 30)
   P = Simulation::Config::PALLET_QTY # 팔레트 1개
 

@@ -4,6 +4,7 @@ require "stringio"
 # 검사: qc 에 쌓인 완제품을 로트별로 묶어 팔레트(500개) 이상이거나 5분이 지나면 inspect 작업(작업자) 1건. 1건은 팔레트 1개를 넘지 않는다.
 # 완료하면 불량분은 qc_fail(qc → scrap), 합격분은 지게차 적치(qc → fg 칸, 이동 유형 qc_pass).
 class InspectionTest < ActiveSupport::TestCase
+  include UnlimitedForkliftQueueHelper
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
   EPOCH = M0 - 3600
 

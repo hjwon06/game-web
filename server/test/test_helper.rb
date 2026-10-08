@@ -33,6 +33,22 @@ module UnscaledRatesHelper
   end
 end
 
+# 지게차 진입 제한(FORKLIFT_ADMIT_SECONDS)이 목적이 아닌 테스트용. 한 번에 여러 건을 계획하는 것을 전제하므로 상한을 사실상 없앴다가 끝나면 되돌린다.
+# 진입 제한 자체는 simulation/forklift_admit_test.rb 가 기본값으로 검사한다.
+module UnlimitedForkliftQueueHelper
+  ORIGINAL = Simulation::Config::FORKLIFT_ADMIT_SECONDS
+
+  def self.included(base)
+    base.setup { UnlimitedForkliftQueueHelper.set(1_000_000) }
+    base.teardown { UnlimitedForkliftQueueHelper.set(UnlimitedForkliftQueueHelper::ORIGINAL) }
+  end
+
+  def self.set(value)
+    Simulation::Config.send(:remove_const, :FORKLIFT_ADMIT_SECONDS)
+    Simulation::Config.const_set(:FORKLIFT_ADMIT_SECONDS, value)
+  end
+end
+
 module AuthHelper
   TEST_PASSWORD = "factory-pass-1".freeze
 

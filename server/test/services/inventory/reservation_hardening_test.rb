@@ -4,6 +4,7 @@ require "stringio"
 # 8b 하드닝: 판단의 근거는 지워지지 않는 원장(stock_moves, inspections)이다. tasks 는 Task.prune! 으로 지워지고,
 # 예약(reservations)은 작업이 지워질 때 함께 지워진다. 여기서는 그 위에서 K1(예약 존중)·K2(미검사량)·K3(상차 대상)·K4(실사 후보)를 확인한다.
 class Inventory::ReservationHardeningTest < ActiveSupport::TestCase
+  include UnlimitedForkliftQueueHelper
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
   EPOCH = M0 - 3600
   WAIT = Simulation::Config::INSPECT_MAX_WAIT_SECONDS
