@@ -75,6 +75,7 @@ module Ops
 
         verify!
 
+        resources = pin_to_open_dock(resources)
         now = @now
         duration = duration_seconds
         priority = default_priority
@@ -94,6 +95,19 @@ module Ops
     end
 
     private
+
+    # 트럭 1대 = 도크 1곳. 하차(unload)·상차(load)는 같은 발주·수주의 다른 라인에 이미 열린(planned·started) 같은 종류 작업이 있으면 그 도크만 쓴다.
+    DOCK_PARENT = { "PurchaseOrderLine" => :purchase_order_id, "SalesOrderLine" => :sales_order_id }.freeze
+
+    def pin_to_open_dock(resources)
+      parent = DOCK_PARENT[@ref&.class&.name]
+      return resources unless %w[unload load].include?(@kind) && parent
+
+      sibling_lines = @ref.class.where(parent => @ref.public_send(parent)).select(:id)
+      dock_id = Task.where(kind: @kind, status: OPEN, ref_type: @ref.class.name, ref_id: sibling_lines).order(:id).pick(:resource_id)
+      pinned = resources.select { |r| r.id == dock_id }
+      pinned.empty? ? resources : pinned
+    end
 
     # 계획하는 순간 한 번 더 확인한다. 호출자가 고른 뒤 다른 planner 가 같은 재고·같은 칸 자리를 가져갔을 수 있다.
     # 잠금 순서는 Inventory::Move 와 같다(도착 칸 위치 행 -> 재고 행). 반대로 잡으면 같은 칸을 두고 Tick 의 이동과 교착한다.

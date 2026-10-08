@@ -232,6 +232,54 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
     assert_equal "SO-OPS-C", ops(so: "SO-OPS-C")["shipment"]["so_no"]
   end
 
+  test "분할 출하 수주: 단계는 현재 회차 이벤트만 쓰고 시각은 단조 증가한다" do
+    order, line = so!("SO-OPS-SPLIT", qty: 4 * P)
+    t0 = @t - 5.hours
+    Quant.create!(product: @fg, lot: @lot, location: loc("shipping"), qty: 4 * P)
+    # 1회차: pick 2 → 상차 → 출하(t0+4m)
+    2.times { |i| task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-01", to: "shipping", product: @fg, lot: @lot, ref: line, started: t0 + (10 + i).seconds, finished: t0 + (30 + i * 30).seconds) }
+    task!(kind: "load", status: "done", resource: "DOCK-OUT-01", from: "shipping", to: "customer", product: @fg, lot: @lot, ref: line, qty: 2 * P, started: t0 + 3.minutes)
+    mv("ship", "shipping", "customer", 2 * P, t0 + 4.minutes, product: @fg, lot: @lot, ref: line)
+    order.update!(status: "partial")
+    # 2회차(현재): 오래 뒤 pick 1건 완료 + 상차 시작, 아직 pick 이 남아 staged 는 비어 있다
+    task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-02", to: "shipping", product: @fg, lot: @lot, ref: line, started: @t - 2.minutes, finished: @t - 90.seconds)
+    task!(kind: "pick", status: "planned", resource: "FORK-01", from: "FG-A-01-03", to: "shipping", product: @fg, lot: @lot, ref: line)
+    task!(kind: "load", status: "started", resource: "DOCK-OUT-01", from: "shipping", to: "customer", product: @fg, lot: @lot, ref: line, qty: 2 * P, started: @t - 60.seconds)
+
+    stages = ops(so: "SO-OPS-SPLIT")["shipment"]["stages"].to_h { |s| [s["key"], s["at"]] }
+    assert_equal iso(@t - 90.seconds), stages["picked"], "1회차 pick(t0+30s) 이 아니라 현재 회차 첫 pick"
+    assert_nil stages["staged"], "현재 회차 pick 이 아직 열려 있다"
+    assert_equal iso(@t - 60.seconds), stages["loaded"]
+    assert_nil stages["shipped"], "첫 회차 출하 시각을 현재 회차에 붙이지 않는다"
+    assert_monotonic stages
+
+    # 현재 회차 pick·상차를 마치면 staged 가 현재 회차의 마지막 pick 완료 시각이다
+    Task.where(kind: "pick", status: "planned").update_all(status: "done", started_at: @t - 80.seconds, finished_at: @t - 70.seconds)
+    stages = ops(so: "SO-OPS-SPLIT")["shipment"]["stages"].to_h { |s| [s["key"], s["at"]] }
+    assert_equal iso(@t - 70.seconds), stages["staged"]
+    assert_monotonic stages
+
+    # 현재 회차가 나가면 shipped 는 그 회차의 출하다
+    mv("ship", "shipping", "customer", 2 * P, @t - 30.seconds, product: @fg, lot: @lot, ref: line)
+    order.update!(status: "done")
+    stages = ops(so: "SO-OPS-SPLIT")["shipment"]["stages"].to_h { |s| [s["key"], s["at"]] }
+    assert_equal iso(@t - 30.seconds), stages["shipped"]
+    assert_equal iso(@t - 90.seconds), stages["picked"]
+    assert_monotonic stages
+  end
+
+  def assert_monotonic(stages)
+    times = %w[received picked staged loaded shipped].filter_map { |k| stages[k] && Time.iso8601(stages[k]) }
+    assert_equal times.sort, times, "단계 시각이 순서대로 증가하지 않는다: #{stages}"
+  end
+
+  test "kpi.trucks_on_site 는 트럭 목록 중 en_route 가 아닌 수다" do
+    truck_scenario
+    body = ops
+    assert_equal body["trucks"].count { |t| t["status"] != "en_route" }, body["kpi"]["trucks_on_site"]
+    assert_equal body["kpi"]["trucks_in"] + body["kpi"]["trucks_out"], body["kpi"]["trucks_on_site"]
+  end
+
   test "on_time_rate: 최근 7일 done 수주 중 납기일(당일 포함) 안에 마지막 출하가 끝난 비율, 소수 1자리" do
     Quant.create!(product: @fg, lot: @lot, location: loc("shipping"), qty: 1000)
     {

@@ -15,7 +15,7 @@ canvas#c3d:active{cursor:grabbing}
 #ui.hidden{display:none}
 
 /* 관제 UI: 라이트 고정, 카드는 #FFF 단색 + 1px 테두리(그림자·글래스·그라데이션 없음). 액센트 #2563EB 는 강조에만. */
-:root{--ink:#1A1A2E;--sub:#6B7280;--line:#E5E7EB;--acc:#2563EB;--ok:#15803D;--warn:#B45309;--bad:#B91C1C}
+:root{--ink:#1A1A2E;--sub:#6B7280;--line:#E5E7EB;--acc:#2563EB;--ok:#15803D;--warn:#C0392B;--bad:#B91C1C}
 .num{font-family:Outfit,Pretendard,sans-serif;font-variant-numeric:tabular-nums}
 .card{background:#FFF;border:1px solid var(--line);border-radius:8px;font-size:13px;line-height:1.4}
 .card button{font:inherit;color:inherit}
@@ -59,7 +59,7 @@ canvas#c3d:active{cursor:grabbing}
 .row .k{color:var(--sub)}
 .pill{display:inline-block;padding:2px 8px;border-radius:14px;font-size:12px;font-weight:600;white-space:nowrap;background:#F3F4F6;color:#374151}
 .pill.ok{background:#F0FDF4;color:var(--ok)}
-.pill.warn{background:#FFFBEB;color:var(--warn)}
+.pill.warn{background:#FBEAEA;color:#C0392B}
 .pill.bad{background:#FEF2F2;color:var(--bad)}
 .pill.act{background:#EFF6FF;color:var(--acc)}
 .bar{height:6px;border-radius:4px;background:#F3F4F6;overflow:hidden;min-width:60px}
@@ -92,6 +92,12 @@ canvas#c3d:active{cursor:grabbing}
 #zoom button+button{border-top:1px solid var(--line)}
 #zoom button:hover{background:#F3F4F6}
 #zoom button.t{font-size:12px}
+
+/* 1100px 미만: 출하 추적(왼쪽 600px)과 탭(오른쪽 440px)이 겹친다. 탭을 아래, 출하 추적을 그 위로 쌓고 폭을 줄인다. */
+@media (max-width:1100px){
+  #g-tabs{left:16px;right:68px;width:auto}
+  #g-ship{left:16px;right:68px;bottom:292px;width:auto}
+}
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&display=swap">

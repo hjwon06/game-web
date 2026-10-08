@@ -154,7 +154,7 @@ export function createUi({ zoomIn, zoomOut, home }) {
 
   function renderTabs() {
     const docks = ops.docks || [], forks = ops.forklifts || [], trucks = ops.trucks || [];
-    const counts = { dock: `${docks.filter(d => d.occupied).length}/${docks.length || 4}`, fork: forks.length, truck: trucks.length };
+    const counts = { dock: `${docks.filter(d => d.occupied).length}/${docks.length || 4}`, fork: forks.length, truck: `${trucks.filter(t => t.status !== 'en_route').length} · 도착 예정 ${trucks.filter(t => t.status === 'en_route').length}` };
     const bar = $('tabs');
     if (!bar.firstChild) {
       TABS.forEach(([k]) => { const b = el('button'); b.setAttribute('role', 'tab'); b.dataset.k = k; b.addEventListener('click', () => { tab = k; renderTabs(); }); bar.append(b); });
@@ -170,7 +170,7 @@ export function createUi({ zoomIn, zoomOut, home }) {
       return li;
     };
     let rows;
-    if (tab === 'dock') rows = docks.map(d => { const tr = d.truck && (d.truck.no || d.truck), t = trucks.find(x => String(x.no) === String(tr)); return row(d.code, d.occupied ? `트럭 ${tr || ''}` : (d.kind === 'out' ? '출하 도크' : '입고 도크'), d.occupied ? statusKo(t ? t.status : d.kind === 'out' ? 'loading' : 'unloading') : ['비어 있음', ''], t && t.total ? t.done / t.total : 0, tr ? 'truck' : 'site', tr ? String(tr) : (d.kind === 'out' ? 'ship' : 'mat')); });
+    if (tab === 'dock') rows = docks.map(d => { const out = d.kind === 'dock_out' || d.kind === 'out', tr = d.truck && (d.truck.no || d.truck), t = trucks.find(x => String(x.no) === String(tr)); return row(d.code, d.occupied ? `트럭 ${tr || ''}` : (out ? '출하 도크' : '입고 도크'), d.occupied ? statusKo(t ? t.status : out ? 'loading' : 'unloading') : ['비어 있음', ''], t && t.total ? t.done / t.total : 0, tr ? 'truck' : 'site', tr ? String(tr) : (out ? 'ship' : 'mat')); });
     else if (tab === 'fork') rows = forks.map(f => row(f.code, f.task ? `${f.task.from_code || '-'} → ${f.task.to_code || '-'}` : '대기 위치', f.task ? ['이동 중', 'act'] : ['대기', ''], f.progress <= 1 ? f.progress : f.progress / 100, 'forklift', f.code));
     else rows = trucks.map(t => row(t.no, `${t.type === 'in' ? '입고' : '출하'} · ${t.dock || '도크 대기'}`, statusKo(t.status), t.total ? t.done / t.total : 0, 'truck', String(t.no)));
     const list = $('tab-list'), top = list.scrollTop;

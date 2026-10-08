@@ -190,24 +190,45 @@ module Campus
       id, so_no, customer, created_at, status = target_order
       return nil unless id
 
-      picked_first, picked_last, picks_open, picked_qty, load_started = Task.where(kind: %w[pick load])
-        .joins("JOIN sales_order_lines sol ON tasks.ref_type = 'SalesOrderLine' AND sol.id = tasks.ref_id")
-        .where("sol.sales_order_id = ?", id)
-        .pick(Arel.sql("MIN(tasks.finished_at) FILTER (WHERE tasks.kind = 'pick' AND tasks.status = 'done')"),
-              Arel.sql("MAX(tasks.finished_at) FILTER (WHERE tasks.kind = 'pick' AND tasks.status = 'done')"),
-              Arel.sql("COUNT(*) FILTER (WHERE tasks.kind = 'pick' AND tasks.status IN ('planned','started'))"),
-              Arel.sql("COALESCE(SUM(tasks.qty) FILTER (WHERE tasks.kind = 'pick' AND tasks.status = 'done'), 0)"),
-              Arel.sql("MIN(tasks.started_at) FILTER (WHERE tasks.kind = 'load' AND tasks.status <> 'cancelled')"))
+      tasks = Task.where(kind: %w[pick load]).where.not(status: "cancelled")
+                  .joins("JOIN sales_order_lines sol ON tasks.ref_type = 'SalesOrderLine' AND sol.id = tasks.ref_id")
+                  .where("sol.sales_order_id = ?", id)
+                  .pluck("tasks.kind", "tasks.status", "tasks.qty", "tasks.planned_at", "tasks.started_at", "tasks.finished_at")
       lines = SalesOrderLine.where(sales_order_id: id)
       ordered = lines.sum(:ordered_qty)
-      first_ship, last_ship = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: lines.select(:id))
-                                       .pick(Arel.sql("MIN(occurred_at)"), Arel.sql("MAX(occurred_at)"))
-      # 모든 pick 완료 = 열린 pick 이 없고 끝난 pick 수량이 주문량 이상이다. 재고가 모자라 일부만 pick 한 수주는 staged 가 비어 있다.
-      staged = picks_open.to_i.zero? && picked_last && picked_qty >= ordered ? picked_last : nil
-      shipped = status == "done" ? last_ship : first_ship
+      ships = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: lines.select(:id)).order(:occurred_at).pluck(:occurred_at, :qty)
+      stages = round_stages(tasks, ships, ordered)
+      at = [created_at, *stages.values_at(:picked, :staged, :loaded, :shipped)]
+      # 단계 시각은 단조 증가해야 한다. 앞 단계보다 이른 시각은 다른 회차의 흔적이니 비운다.
+      floor = created_at
+      %i[picked staged loaded shipped].each_with_index do |key, i|
+        if at[i + 1] && at[i + 1] < floor then at[i + 1] = nil
+        elsif at[i + 1] then floor = at[i + 1]
+        end
+      end
       { so_no: so_no, customer: customer,
-        stages: [{ key: "received", at: iso(created_at) }, { key: "picked", at: iso(picked_first) }, { key: "staged", at: iso(staged) },
-                 { key: "loaded", at: iso(load_started) }, { key: "shipped", at: iso(shipped) }] }
+        stages: [{ key: "received", at: iso(at[0]) }, { key: "picked", at: iso(at[1]) }, { key: "staged", at: iso(at[2]) },
+                 { key: "loaded", at: iso(at[3]) }, { key: "shipped", at: iso(at[4]) }] }
+    end
+
+    # 분할 출하 수주는 출하가 여러 번이다. 현재 회차 = 마지막 ship 이동 이후의 활동, 그 뒤 활동이 없으면 마지막 회차 전체(직전 ship 이후 ~ 마지막 ship).
+    # picked·staged·loaded·shipped 는 같은 회차 이벤트만 쓴다. 현재 회차가 아직 안 나갔으면 shipped 는 비어 있다.
+    # staged = 그 회차 pick 이 모두 끝난 시각: 열린 pick 이 없고 끝난 pick 수량이 (주문량 - 이전 회차 출하량) 이상. 재고가 모자라 일부만 pick 했으면 비어 있다.
+    def round_stages(tasks, ships, ordered)
+      active_at = ->(t) { t[5] || t[4] || t[3] }
+      last_ship = ships.last&.first
+      later = last_ship && tasks.any? { |t| active_at.(t) > last_ship }
+      if ships.empty? || later
+        from, upto, shipped, before = last_ship, nil, nil, ships
+      else
+        from, upto, shipped, before = ships[-2]&.first, last_ship, last_ship, ships[0...-1]
+      end
+      round = tasks.select { |t| (from.nil? || active_at.(t) > from) && (upto.nil? || active_at.(t) <= upto) }
+      picks = round.select { |t| t[0] == "pick" }
+      done = picks.select { |t| t[1] == "done" && t[5] }
+      remaining = ordered - before.sum { |_, qty| qty }
+      staged = done.any? && done.size == picks.size && done.sum { |t| t[2] } >= remaining ? done.map { |t| t[5] }.max : nil
+      { picked: done.map { |t| t[5] }.min, staged: staged, loaded: round.select { |t| t[0] == "load" }.filter_map { |t| t[4] }.min, shipped: shipped }
     end
 
     # ?so= 가 있으면 그 수주(상태 무관). 없으면 열린(open·partial) 수주 중 pick·load 작업이 가장 최근에 바뀐 것, 작업이 없으면 가장 새 수주.
