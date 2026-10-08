@@ -151,46 +151,102 @@ module Simulation
 
     # --- 합격분 적치 계획 ------------------------------------------------------------------------
 
+    SETTLED_REASON = "settled: qc 가용 재고 없음".freeze
+
     # 검사가 끝났는데 (취소되지 않은) 적치가 없는 작업마다 합격분(검사 수량 - 불량 이동)의 적치를 계획한다. 칸이 없으면 qc 에 두고 다음 호출에 다시 본다.
+    # 적치 대상의 진실은 qc 실재고 - active 예약이다(로트별). 검사 기록 합이 그보다 크면 기록이 틀린 것이라, 오래된 검사부터
+    # min(합격분 - 이미 계획된 적치, 남은 가용) 만 계획한다. 가용이 0 이면 Ops::Plan 을 부르지 않고 그 검사를 종결로 표시한다
+    # (취소된 적치 1건에 SETTLED_REASON 을 달아 covered 로 본다 — 다음 호출부터 다시 보지 않는다). 경고 로그는 호출당 1줄.
     def plan_putaways
       waiting = waiting_inspections
       return if waiting.empty?
 
+      @batch = true
+      load_available(waiting)
       stuck = 0
+      settled = 0
       waiting.each do |task|
         next unless (task.qty - (task.stock_move&.qty || 0)).positive?
 
-        if plan_putaway(task)
-          @counts[:putaway] += 1
-        else
-          stuck += 1
+        case (result = try_putaway(task, planned: 0))
+        when :no_stock
+          settle!(task)
+          settled += 1
+        when :stuck then stuck += 1
+        else @counts[:putaway] += 1 if result
         end
       end
       @counts[:waiting] = stuck
-      @logger.warn("sim inspection #{@now.iso8601} 적치할 완제품 칸이 없어 qc 에 #{stuck}건 대기") if stuck.positive?
+      return unless stuck.positive? || settled.positive?
+
+      @logger.warn("sim inspection #{@now.iso8601} 적치 보류: 칸 없음·계획 거부로 qc 에 #{stuck}건 대기, qc 가용 재고 없어 종결 #{settled}건")
     end
 
     public
 
-    # 완료된 검사 task 의 합격분(검사 수량 - 불량 이동) 적치를 계획해 돌려준다. 합격분이 없거나 칸이 없거나 계획이 거부되면 nil.
+    # 완료된 검사 task 의 합격분(검사 수량 - 불량 이동) 적치를 계획해 돌려준다. 합격분이 없거나 qc 가용이 없거나 칸이 없거나 계획이 거부되면 nil.
+    # 적치량은 min(합격분 - 이미 계획된 적치, qc 가용(그 로트 현재고 - active 예약)).
     def plan_putaway(task)
-      pass_qty = task.qty - (task.stock_move&.qty || 0)
-      return nil unless pass_qty.positive?
-
-      # 칸은 적치 규칙(Ops::Putaway)이 고른다. 방금 계획한 적치도 DB 에 있어 다음 건의 칸 계산에 들어간다.
-      bin = Ops::Putaway.choose(product: task.product, qty: pass_qty)
-      return nil unless bin
-
-      ApplicationRecord.transaction(requires_new: true) do
-        Ops::Plan.call(kind: "putaway", product: task.product, lot: task.lot, qty: pass_qty, from: "qc", to: bin,
-                       ref: task, earliest_at: task.finished_at || @now)
-      end
-    rescue Inventory::InsufficientStock, Inventory::CapacityExceeded, Ops::Plan::NoResource => e
-      @logger.warn("sim inspection putaway 계획 보류 task=#{task.id}: #{e.class.name.demodulize} #{e.message}")
-      nil
+      result = try_putaway(task)
+      result.is_a?(Task) ? result : nil
     end
 
     private
+
+    # Task(계획됨) | :no_stock(qc 가용 0 — Plan 을 부르지 않았다) | :stuck(칸 없음·계획 거부) | nil(적치할 합격분 없음)
+    def try_putaway(task, planned: nil)
+      pass_qty = task.qty - (task.stock_move&.qty || 0)
+      return nil unless pass_qty.positive?
+
+      planned ||= Task.where(kind: "putaway", ref_type: "Task", ref_id: task.id, status: %w[planned started done]).sum(:qty)
+      need = pass_qty - planned
+      return nil unless need.positive?
+
+      key = [task.product_id, task.lot_id]
+      load_available([task]) unless @avail&.key?(key)
+      qty = [need, @avail.fetch(key)].min
+      return :no_stock unless qty.positive?
+
+      # 칸은 적치 규칙(Ops::Putaway)이 고른다. 방금 계획한 적치도 DB 에 있어 다음 건의 칸 계산에 들어간다.
+      bin = Ops::Putaway.choose(product: task.product, qty: qty)
+      return warn_once(task, "적치할 칸 없음") unless bin
+
+      planned_task = ApplicationRecord.transaction(requires_new: true) do
+        Ops::Plan.call(kind: "putaway", product: task.product, lot: task.lot, qty: qty, from: "qc", to: bin,
+                       ref: task, earliest_at: task.finished_at || @now)
+      end
+      @avail[key] -= qty
+      planned_task
+    rescue Inventory::InsufficientStock, Inventory::CapacityExceeded, Ops::Plan::NoResource => e
+      warn_once(task, "#{e.class.name.demodulize} #{e.message}")
+    end
+
+    # 배치(plan_putaways)는 끝에서 건수 합계 1줄을 남기므로 건별 로그를 내지 않는다. 단건 경로(Tick)는 호출당 1건이라 바로 남긴다.
+    def warn_once(task, reason)
+      @logger.warn("sim inspection putaway 계획 보류 task=#{task.id}: #{reason}") unless @batch
+      :stuck
+    end
+
+    # { [품목 id, 로트 id] => qc 현재고 - active 예약 } 를 @avail 에 채운다. 쿼리 2회(재고, 예약) — 검사 건수와 무관하다.
+    def load_available(tasks)
+      @avail ||= {}
+      @qc ||= Location.find_by!(code: "qc")
+      pairs = tasks.map { |t| [t.product_id, t.lot_id] }.uniq - @avail.keys
+      return if pairs.empty?
+
+      product_ids = pairs.map(&:first).uniq
+      lot_ids = pairs.map(&:last).uniq
+      on_hand = Quant.where(location_id: @qc.id, product_id: product_ids, lot_id: lot_ids).group(:product_id, :lot_id).sum(:qty)
+      held = Reservation.active.where(location_id: @qc.id, product_id: product_ids, lot_id: lot_ids).group(:product_id, :lot_id).sum(:qty)
+      pairs.each { |key| @avail[key] = [on_hand.fetch(key, 0) - held.fetch(key, 0), 0].max }
+    end
+
+    # 종결 표시: 취소된 적치 1건(ref = 검사 task). waiting_inspections 가 covered 로 본다. 재고는 움직이지 않고 예약도 없다.
+    def settle!(task)
+      Task.create!(kind: "putaway", status: "cancelled", product: task.product, lot: task.lot,
+                   qty: task.qty - (task.stock_move&.qty || 0), from_location: @qc, to_location: Location.find_by!(code: "fg_store"),
+                   planned_at: @now, finished_at: @now, cancel_reason: SETTLED_REASON, ref_type: "Task", ref_id: task.id)
+    end
 
     def waiting_inspections
       cutoff = @now - Config::INSPECT_LOOKBACK_SECONDS
@@ -199,12 +255,12 @@ module Simulation
                  .where("finished_at > ?", cutoff).includes(:product, :lot, :stock_move).order(:finished_at, :id).to_a
       return [] if done.empty?
 
-      children = Task.where(kind: "putaway", ref_type: "Task", ref_id: done.map(&:id)).pluck(:ref_id, :status)
-      cancelled, live = children.partition { |_, status| status == "cancelled" }
-      covered = live.map(&:first).to_set
+      children = Task.where(kind: "putaway", ref_type: "Task", ref_id: done.map(&:id)).pluck(:ref_id, :status, :cancel_reason)
+      cancelled, live = children.partition { |_, status, _| status == "cancelled" }
+      settled, cancelled = cancelled.partition { |_, _, reason| reason == SETTLED_REASON }
+      covered = (live + settled).map(&:first).to_set
       cancels = cancelled.map(&:first).tally
       done.reject { |t| covered.include?(t.id) || cancels.fetch(t.id, 0) >= Config::MAX_PUTAWAY_CANCELS }
     end
-
   end
 end

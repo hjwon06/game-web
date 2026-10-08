@@ -327,6 +327,99 @@ class InspectionTest < ActiveSupport::TestCase
     assert_equal 100, qty_at("qc")
   end
 
+  # 6e: 반복 검사 버그 시절에 남은 모양 — 끝난 검사(합격분 전량)의 수량 합이 qc 실재고보다 크다. qc 재고는 EPOCH 이전 도착이라 새로 검사하지 않는다.
+  def stale_inspect(qty, finished_at, lot)
+    Task.create!(kind: "inspect", status: "done", resource: Resource.find_by!(kind: "worker"), product: @fg, lot: lot, qty: qty,
+                 from_location: Location.find_by!(code: "qc"), to_location: Location.find_by!(code: "fg_store"),
+                 planned_at: finished_at - 60, started_at: finished_at - 60, finished_at: finished_at,
+                 ref_type: "WorkOrder", ref_id: @order.id)
+  end
+
+  def live_putaway_qtys = putaways.where.not(status: "cancelled").map { |t| t.qty.to_i }
+
+  def plan_without_plan_calls
+    Ops::Plan.stub(:call, ->(**) { flunk "Ops::Plan 을 부르면 안 된다" }) { plan }
+  end
+
+  test "6e: 검사 기록 합 > qc 실재고면 오래된 검사부터 실재고만큼만 적치하고, 나머지는 Plan 호출·예외 없이 종결해 다시 보지 않는다" do
+    lot = produce_to_qc(100, EPOCH - 60)
+    [M0 - 300, M0 - 200, M0 - 100].each { |at| stale_inspect(60, at, lot) } # 합 180 > 실재고 100
+
+    result = plan
+
+    assert_equal 2, result[:putaway]
+    assert_equal [60, 40], live_putaway_qtys, "오래된 검사부터 min(합격분, 남은 가용)"
+    assert_equal 100, live_putaway_qtys.sum
+    assert_equal 1, putaways.where(status: "cancelled", cancel_reason: Simulation::Inspection::SETTLED_REASON).count
+    assert_no_match(/InsufficientStock/, @log.string)
+
+    tasks = Task.count
+    again = plan_without_plan_calls
+    assert_equal [0, 0], [again[:putaway], again[:waiting]], "다음 호출에 재시도하지 않는다"
+    assert_equal tasks, Task.count
+  end
+
+  test "6e: qc 가용이 이미 0 이면 모든 대기 검사를 Plan 호출 없이 종결하고 다음 호출에 다시 보지 않는다" do
+    lot = Lot.find_or_create_by!(product: @fg, lot_no: @order.code)
+    3.times { |i| stale_inspect(50, M0 - 300 + i, lot) }
+
+    plan_without_plan_calls
+    assert_equal 3, putaways.where(cancel_reason: Simulation::Inspection::SETTLED_REASON).count
+    assert_equal [], live_putaway_qtys
+
+    tasks = Task.count
+    plan_without_plan_calls
+    assert_equal tasks, Task.count
+  end
+
+  test "6e: 가용은 active 예약을 뺀 값이다 — 다른 작업이 잡은 qc 재고는 적치하지 않는다" do
+    lot = produce_to_qc(100, EPOCH - 60)
+    stale_inspect(100, M0 - 100, lot)
+    Ops::Plan.call(kind: "inspect", product: @fg, lot: lot, qty: 70, from: "qc", to: "fg_store", ref: @order, earliest_at: M0)
+
+    plan
+
+    assert_equal [30], live_putaway_qtys, "실재고 100 - 예약 70"
+  end
+
+  test "6e: 기록 = 실재고인 정상 경우는 합격분 전량을 적치하고 종결 표시를 만들지 않는다" do
+    lot = produce_to_qc(100, EPOCH - 60)
+    stale_inspect(60, M0 - 200, lot)
+    stale_inspect(40, M0 - 100, lot)
+
+    assert_equal 2, plan[:putaway]
+
+    assert_equal [60, 40], live_putaway_qtys
+    assert_equal 0, putaways.where(status: "cancelled").count
+    assert_equal 0, plan[:putaway]
+  end
+
+  test "6e: 경고 로그는 호출당 1줄이다(건수 합계)" do
+    PutawayRule.delete_all
+    lot = produce_to_qc(100, EPOCH - 60)
+    5.times { |i| stale_inspect(10, M0 - 300 + i, lot) }
+
+    plan
+
+    assert_equal 1, @log.string.lines.grep(/WARN/).size
+    assert_match(/5건/, @log.string)
+
+    @log.truncate(0)
+    @log.rewind
+    plan
+    assert_equal 1, @log.string.lines.grep(/WARN/).size, "칸이 없어 대기 중이면 매 호출 1줄"
+  end
+
+  test "6e: 즉시 적치(plan_putaway_for)도 같은 가용 상한을 쓴다" do
+    lot = produce_to_qc(30, EPOCH - 60)
+    task = stale_inspect(100, M0 - 100, lot)
+
+    put = Simulation::Inspection.plan_putaway_for(task, now: M0, logger: Logger.new(@log))
+
+    assert_equal 30, put.qty.to_i
+    assert_nil Simulation::Inspection.plan_putaway_for(task, now: M0, logger: Logger.new(@log)), "가용 0 이면 Plan 을 부르지 않고 nil"
+  end
+
   test "작업지시 코드와 맞지 않는 로트나 다른 위치의 재고는 검사하지 않는다" do
     lot = Lot.create!(product: @fg, lot_no: "LOT-SEED-1")
     Inventory::Move.call(product: @fg, lot: lot, from: "production", to: "qc", qty: 500, move_type: "produce", ref: nil,
