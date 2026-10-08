@@ -25,7 +25,7 @@ class Ops::CycleCountTest < ActiveSupport::TestCase
     CycleCount.create!(location: Location.find_by!(code: code), product: @steel, system_qty: 1, counted_qty: 1, counted_at: at)
   end
 
-  def run(now) = Ops::CycleCount.call(now: now, logger: Logger.new(StringIO.new))
+  def run_count(now) = Ops::CycleCount.call(now: now, logger: Logger.new(StringIO.new))
 
   def counts = Task.where(kind: "count").order(:id)
 
@@ -36,7 +36,7 @@ class Ops::CycleCountTest < ActiveSupport::TestCase
   # 한 칸에 120 을 쌓고 실사 작업을 계획해 돌려준다.
   def planned_count
     stock("RAW-A-01-01", 120)
-    assert_equal 1, run(@now)
+    assert_equal 1, run_count(@now)
     counts.sole
   end
 
@@ -46,22 +46,22 @@ class Ops::CycleCountTest < ActiveSupport::TestCase
     counted!("RAW-A-01-01", @now - 3600)
     counted!("RAW-A-01-02", @now - 7200)
 
-    assert_equal 1, run(@now)
+    assert_equal 1, run_count(@now)
     first = counts.last
     assert_equal ["RAW-A-01-03", "inventory_loss", 100, "worker", "planned"],
                  [first.from_location.code, first.to_location.code, first.qty.to_i, first.resource.kind, first.status],
                  "안 센 칸 중 코드 순 첫 칸"
 
-    assert_equal 0, run(@now + INTERVAL - 1), "마지막 계획이 10분 안이면 아직이다"
+    assert_equal 0, run_count(@now + INTERVAL - 1), "마지막 계획이 10분 안이면 아직이다"
     assert_equal 1, counts.count
 
-    assert_equal 1, run(@now + STEP)
+    assert_equal 1, run_count(@now + STEP)
     assert_equal "RAW-A-01-04", counts.last.from_location.code, "03 은 실사가 열려 있어 뺀다. 남은 안 센 칸은 04"
 
-    assert_equal 1, run(@now + (2 * STEP))
+    assert_equal 1, run_count(@now + (2 * STEP))
     assert_equal "RAW-A-01-02", counts.last.from_location.code, "안 센 칸이 없으면 마지막 실사가 가장 오래된 02(2시간 전)"
 
-    assert_equal 1, run(@now + (3 * STEP))
+    assert_equal 1, run_count(@now + (3 * STEP))
     assert_equal "RAW-A-01-01", counts.last.from_location.code
     assert_equal 0, counts.where(from_location_id: Location.find_by!(code: "RAW-A-01-05").id).count
     assert_equal 0, adjusts.count, "계획만으로는 재고가 움직이지 않는다"

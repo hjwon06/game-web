@@ -25,7 +25,7 @@ module Ops
         quants = stock.fetch(product_id, [])
         system_qty = quants.sum(BigDecimal("0"), &:qty)
         counted_qty = BigDecimal(counted.fetch(product_id, system_qty).to_s)
-        CycleCount.find_or_create_by!(task_id: task.id, product_id: product_id) do |row|
+        ::CycleCount.find_or_create_by!(task_id: task.id, product_id: product_id) do |row|
           row.assign_attributes(location: bin, system_qty: system_qty, counted_qty: counted_qty, counted_at: at)
         end
         adjust(task, bin, Product.find(product_id), quants, counted_qty - system_qty)
@@ -95,7 +95,7 @@ module Ops
       candidates = bins.select { |id, _| stocked.include?(id) && !busy.include?(id) }
       return nil if candidates.empty?
 
-      last = CycleCount.where(location_id: candidates.map(&:first)).group(:location_id).maximum(:counted_at)
+      last = ::CycleCount.where(location_id: candidates.map(&:first)).group(:location_id).maximum(:counted_at)
       id, = candidates.min_by { |bin_id, code| [last[bin_id] ? 1 : 0, last[bin_id]&.to_f || 0.0, code] }
       Location.find(id)
     end
