@@ -1,5 +1,6 @@
 module Api
   # 단지 화면용 한 방 응답. 3초 폴링 대상이라 쿼리 수가 고정이어야 한다(인증 제외 기본 13개, bins 포함 16개).
+  # include=ops 는 관제 카드용 ops 키를 더한다(Campus::OpsCards, 쿼리 최대 18개 추가). 없으면 응답은 예전과 같다.
   # 작업(tasks)은 서버가 확정한 시작·예상 완료 시각을 내려주고 화면이 server_time 기준으로 보간한다.
   # production_events 는 건드리지 않는다. 집계는 quants.location_id / stock_moves.from_location_id 인덱스를 탄다.
   class CampusController < BaseController
@@ -24,7 +25,7 @@ module Api
       return render(json: { error: "invalid_after_seq" }, status: :bad_request) if after_seq == :invalid
 
       now = Time.current
-      body = payload(now, after_id, after_seq, params[:include].to_s.split(",").include?("bins"))
+      body = payload(now, after_id, after_seq, params[:include].to_s.split(","))
       return unless stale?(etag: Digest::SHA1.hexdigest(body.to_json), template: false)
 
       render json: body.merge(server_time: now.utc.iso8601(3))
@@ -40,7 +41,7 @@ module Api
       raw.to_i
     end
 
-    def payload(now, after_id, after_seq, with_bins)
+    def payload(now, after_id, after_seq, includes)
       rows = Location.pluck(:id, :code, :parent_id) # 쿼리 1: 위치 전부
       loc = rows.to_h { |id, code, _| [code, id] }
       code_of = loc.invert
@@ -59,7 +60,8 @@ module Api
                last_seq: tasks.last&.fetch(:seq) || after_seq || 0,
                resources: resources_payload(building_of),
                sim_note: SIM_NOTE }
-      body[:bins] = bins_payload(rows) if with_bins
+      body[:bins] = bins_payload(rows) if includes.include?("bins")
+      body[:ops] = ::Campus::OpsCards.call(now: now, rows: rows, so_no: params[:so]) if includes.include?("ops")
       body
     end
 

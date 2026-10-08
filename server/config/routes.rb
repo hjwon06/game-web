@@ -13,6 +13,7 @@ Rails.application.routes.draw do
     get "state", to: "state#show"
     get "hud", to: "hud#show"
     get "campus", to: "campus#show"
+    get "campus/search", to: "campus_search#show"
     post "commands", to: "commands#create"
     get "me", to: "me#show"
   end

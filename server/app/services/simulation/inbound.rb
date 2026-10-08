@@ -174,8 +174,10 @@ module Simulation
     # 칸이 생기기 전 재고가 창고 자체에 있을 수 있어 raw_store 도 함께 센다.
     def store_location_ids = Location.where(code: "raw_store").pluck(:id) + self.class.bins_under("raw_store").pluck(:id)
 
-    # 자재별 분당 예상 소비량(running 기계의 active 작업지시 양품 × BOM).
-    def demand_per_minute
+    def demand_per_minute = self.class.demand_per_minute
+
+    # 자재별 분당 예상 소비량(running 기계의 active 작업지시 양품 × BOM). 화면(Campus::OpsCards)도 같은 값으로 재주문점 미만을 가른다.
+    def self.demand_per_minute
       bom = BomLine.all.group_by(&:product_id)
       per_second = Hash.new(0.0)
       WorkOrder.where(status: "active").joins(:machine).where(machines: { state: "running" })
