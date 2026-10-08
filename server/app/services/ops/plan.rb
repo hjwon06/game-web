@@ -22,6 +22,30 @@ module Ops
       def reseed!(seed = DEFAULT_SEED) = (@rng = Random.new(seed))
 
       def call(**args) = new(**args).call
+
+      # 그 종류 자원 중 가장 빨리 비는 자원까지 남은 초(= next_free - now, 최소 0). kind 는 자원 종류("forklift") 또는 작업 종류("pick")다.
+      # 읽기만 한다: 작업 스트림(planned_at·expected_finish_at)은 그대로이고, 진입 제한은 부르는 쪽이 이 값으로 건다.
+      def queue_seconds(kind)
+        resource_kind = RESOURCE_KIND.fetch(kind.to_s, kind.to_s)
+        ids = Resource.where(kind: resource_kind).pluck(:id)
+        return 0 if ids.empty?
+
+        now = Time.current
+        free = new_free_map(ids, now)
+        [free.values.min - now, 0].max.to_f
+      end
+
+      # 지게차 대기열이 FORKLIFT_ADMIT_SECONDS 이하일 때만 true. pick·putaway 계획이 새 작업을 만들기 전에 묻는다(feed 는 묻지 않는다).
+      def forklift_admit?
+        queue_seconds("forklift") <= Simulation::Config::FORKLIFT_ADMIT_SECONDS
+      end
+
+      private
+
+      def new_free_map(ids, now)
+        last = Task.where(resource_id: ids, status: OPEN).group(:resource_id).maximum(:expected_finish_at)
+        ids.to_h { |id| [id, last[id] || now] }
+      end
     end
 
     def initialize(kind:, product:, lot:, qty:, from:, to:, ref:, earliest_at:)

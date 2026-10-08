@@ -31,6 +31,7 @@ module Simulation
     FORKLIFT_COUNT = 2                       # Resource::DEFAULTS 의 지게차 수. 화면 원칙(운반 주체 ≤5)상 늘리지 않는다
     MATERIAL_PER_FG = 1.7                    # 완제품 1개당 원자재 소비(ea). dev 실측: 원자재 750 ea/분 ÷ 완제품 450 ea/분
     FORKLIFT_TASK_SECONDS = 40              # 지게차 작업(putaway 45·pick 40·feed 35) 평균 소요. 처리량 추정용
+    FORKLIFT_ADMIT_SECONDS = 60              # 지게차 대기열(가장 빨리 비는 지게차까지 남은 초)이 이보다 길면 pick·putaway 를 새로 계획하지 않는다. feed 는 제한 없음
 
     # 수요/공급 로그: Runner 가 이 간격마다 est_feed_per_min 과 forklift_capacity_per_min 을 한 줄로 남긴다.
     BALANCE_LOG_SECONDS = 600
@@ -62,7 +63,10 @@ module Simulation
     PICKS_PER_LINE = 5
     SHIP_LINES_LIMIT = 50
 
+    # 수주 한 줄의 수량 = 최근 NEW_ORDER_LOOKBACK_SECONDS 의 완제품 양품 생산량 x (NEW_ORDER_INTERVAL_SECONDS / 룩백) x NEW_ORDER_RATIO 를 PICK_QTY 단위로 내림.
     NEW_ORDER_INTERVAL_SECONDS = 600
+    NEW_ORDER_LOOKBACK_SECONDS = 1800
+    NEW_ORDER_RATIO = 0.9                    # 출하 수요를 생산의 90% 로 맞춰 완제품이 서서히 쌓이게 한다
     CUSTOMERS = %w[한빛정공 대성기계 서진산업 미래오토].freeze # 시드 수주의 고객명. 순환해서 쓴다
 
     # 이 시각 이전 생산은 재고로 소급하지 않는다. ENV > 최신 sim_epochs(rake sim:rebase) > locations 첫 생성 시각. 모두 없으면 nil.
@@ -85,6 +89,8 @@ module Simulation
     #   가동률       = 건수/분 x FORKLIFT_TASK_SECONDS / (FORKLIFT_COUNT x 60)
     # 기본값: 양품 ≈ 149 ea/분, 원자재 ≈ 253 ea/분 → 0.51 + 0.51 + 0.30 + 0.30 = 1.62 건/분 → 1.62 x 40 / 120 ≈ 0.54.
     # 팔레트를 못 채우고 대기 시간 때문에 나가는 부분 팔레트가 있어 실제는 조금 높다 — 테스트는 0.70 을 넘지 않게 지킨다.
+    # 진입 제한: 지게차 대기열이 FORKLIFT_ADMIT_SECONDS 를 넘으면 pick·putaway 계획을 미루고 feed 만 계획한다.
+    # 그래서 실제 가동률은 이 추정값을 넘어 계속 오르지 않고 대기열 상한에서 눌리며, 라인 공급(feed)이 항상 먼저 지게차를 받는다. 수식은 진입 제한과 무관하다.
     def self.forklift_load
       good_per_minute = RATES.keys.sum { |code| rate(code) * (1 - defect_rate(code)) } * 60
       material_per_minute = good_per_minute * MATERIAL_PER_FG

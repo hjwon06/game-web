@@ -222,23 +222,27 @@ module Simulation
       window = @minute - Config::NEW_ORDER_INTERVAL_SECONDS
       return if SalesOrder.where("created_at > ? AND created_at <= ?", window, @minute).exists?
 
-      active = WorkOrder.where(status: "active").includes(:machine).to_a
-      return if active.empty?
+      quantities = order_quantities
+      return if quantities.empty?
 
       rng = Random.new(Config::SEED + (@minute.to_i / 60))
-      hourly = active.group_by(&:product_id).transform_values do |list|
-        list.sum { |wo| Config.rate(wo.machine.code) * (1 - Config.defect_rate(wo.machine.code)) * 3600 }
-      end
-      product_ids = hourly.keys.sort.sample(rng.rand(1..2), random: rng)
+      product_ids = quantities.keys.sort.sample(rng.rand(1..2), random: rng)
 
       SalesOrder.transaction do
         order = SalesOrder.create!(so_no: next_so_no, customer: Config::CUSTOMERS[SalesOrder.count % Config::CUSTOMERS.size],
                                    due_date: (@minute + rng.rand(1..3).days).to_date, status: "open", created_at: @minute)
-        product_ids.each do |product_id|
-          order.lines.create!(product_id: product_id, ordered_qty: [(hourly[product_id] * rng.rand(0.5..2.0)).round, 1].max)
-        end
+        product_ids.each { |product_id| order.lines.create!(product_id: product_id, ordered_qty: quantities.fetch(product_id)) }
       end
       @counts[:order] += 1
+    end
+
+    # 품목별 수주 수량 = 최근 NEW_ORDER_LOOKBACK_SECONDS 의 양품 생산량 x (수주 간격 / 룩백) x NEW_ORDER_RATIO 를 PICK_QTY 단위로 내림.
+    # 단위에 못 미치면(0) 그 품목은 수주하지 않는다. 생산이 없으면 빈 해시.
+    def order_quantities
+      good = ProductionEvent.joins(:work_order).where(bucket_start: (@minute - Config::NEW_ORDER_LOOKBACK_SECONDS)...@minute)
+                            .group("work_orders.product_id").sum(:good_qty)
+      scale = Config::NEW_ORDER_INTERVAL_SECONDS.to_f / Config::NEW_ORDER_LOOKBACK_SECONDS * Config::NEW_ORDER_RATIO
+      good.to_h { |product_id, qty| [product_id, (qty * scale / Config::PICK_QTY).floor * Config::PICK_QTY] }.select { |_, qty| qty.positive? }
     end
 
     # 같은 연월 접두사(SO-YYMM-)의 마지막 번호 + 1. 잠금이 없다: Logistics 는 bin/sim 단일 프로세스에서만 돈다는 전제.

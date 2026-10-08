@@ -115,12 +115,29 @@ module Simulation
       picked = line_tasks("pick", line_ids, LIVE).group(:ref_id).sum(:qty)
       shipped = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line_ids).group(:ref_id).sum(:qty)
 
+      # 진입 제한: 지게차 대기열이 길면 새 pick 을 만들지 않는다. 라인 공급(feed)이 먼저 지게차를 받게 하려는 것이다.
+      # 대기열은 pick 을 계획할 때만 늘어나므로 한 번 막히면 이번 호출은 끝까지 막힌 것으로 본다. 미뤄진 라인 수는 호출당 1줄로 남긴다.
+      full = false
+      deferred = 0
       lines.each do |line|
         next if picking.include?(line.id)
 
         remaining = line.ordered_qty - [picked.fetch(line.id, 0), shipped.fetch(line.id, 0)].max
+        next unless remaining.positive?
+
+        if full
+          deferred += 1
+          next
+        end
+
         Config::PICKS_PER_LINE.times do
           break unless remaining.positive?
+
+          unless Ops::Plan.forklift_admit?
+            full = true
+            deferred += 1
+            break
+          end
 
           # 꺼낼 칸은 Ops::Removal 이 고른다: FIFO 이면서 가용(현재고 - 다른 작업의 active 예약)이 있는 (칸, 로트).
           # 합격 적치처럼 같은 칸에서 가져가려는 다른 작업이 잡은 수량도 예약에 들어 있다.
@@ -135,6 +152,9 @@ module Simulation
           @counts[:pick] += 1
         end
       end
+      return unless deferred.positive?
+
+      @logger.info("sim shipping #{@now.iso8601} 지게차 대기 #{Ops::Plan.queue_seconds('forklift').round}초 > #{Config::FORKLIFT_ADMIT_SECONDS}초라 pick #{deferred}라인 보류")
     end
 
     # fg 칸(+ 칸이 생기기 전 재고가 있을 수 있는 fg_store 자체)에 로트 있는 재고가 있는 품목 id.

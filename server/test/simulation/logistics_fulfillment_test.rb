@@ -21,6 +21,15 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
     @old_epoch.nil? ? ENV.delete("INVENTORY_EPOCH") : ENV["INVENTORY_EPOCH"] = @old_epoch
   end
 
+  # M0 - 10분부터 10분 간격 5개 구간에 구간당 good 개 생산한 기록. 어느 분에 돌려도 룩백(30분) 안에 1개 이상 들어간다.
+  def produce_history(good)
+    5.times do |k|
+      start = M0 + ((k - 1) * 600)
+      ProductionEvent.create!(machine: @machine, work_order: @order, bucket_start: start, bucket_end: start + 10,
+                              good_qty: good, defect_qty: 0, machine_version: 0)
+    end
+  end
+
   def run_minute(n)
     Simulation::Logistics.call(now: M0 + (n * 60), logger: Logger.new(@log))
   end
@@ -39,6 +48,7 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
   end
 
   test "신규 수주는 10분에 1건이고 같은 분 재실행으로 늘지 않는다" do
+    produce_history(9000)
     run = (0..9).map { |n| run_minute(n)[:order] }
 
     assert_equal [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], run
@@ -51,6 +61,7 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
   end
 
   test "신규 수주 모양: 연번 so_no, 고객 순환, 라인 1~2, 납기 1~3일" do
+    produce_history(9000)
     4.times { |i| run_minute(i * 10) }
 
     orders = SalesOrder.order(:id).to_a
@@ -63,13 +74,32 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
     end
   end
 
-  test "신규 수주 수량은 시간당 양품 생산량의 0.5~2배다" do
+  test "신규 수주 수량 = 최근 30분 양품 생산량 x 10/30 x 0.9 를 PICK_QTY 단위로 내림" do
+    produce_history(9000) # 분 0 의 룩백(M0-30분..M0)에는 M0-10분 구간 하나만 들어간다
     run_minute(0)
 
-    hourly = 0.8 * (1 - 0.02) * 3600
-    qty = SalesOrderLine.first.ordered_qty
-    assert_operator qty, :>=, (hourly * 0.5).floor
-    assert_operator qty, :<=, (hourly * 2).ceil
+    assert_equal [2500], SalesOrderLine.pluck(:ordered_qty) # 9000 x 0.3 = 2700 → 2500
+  end
+
+  test "신규 수주 수량은 생산량에 비례한다" do
+    produce_history(18_000)
+    run_minute(0)
+
+    assert_equal [5000], SalesOrderLine.pluck(:ordered_qty) # 18000 x 0.3 = 5400 → 5000
+  end
+
+  test "생산이 PICK_QTY 단위에 못 미치면 수주 0 이고 룩백 밖 생산은 세지 않는다" do
+    produce_history(1000) # 1000 x 0.3 = 300 < 500
+    ProductionEvent.create!(machine: @machine, work_order: @order, bucket_start: M0 - 7200, bucket_end: M0 - 7190,
+                            good_qty: 90_000, defect_qty: 0, machine_version: 0)
+
+    assert_equal 0, run_minute(0)[:order]
+    assert_equal 0, SalesOrder.count
+  end
+
+  test "생산이 0 이면 수주도 0 이다" do
+    assert_equal 0, run_minute(0)[:order]
+    assert_equal 0, SalesOrder.count
   end
 
   test "진행 중 작업지시가 없으면 신규 수주도 없다" do
@@ -78,6 +108,7 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
   end
 
   test "catch_up 이 터져도 신규 수주는 실행되고 실패는 로그 1줄이다" do
+    produce_history(9000)
     original = Simulation::Logistics.instance_method(:catch_up)
     Simulation::Logistics.send(:define_method, :catch_up) { |*| raise "catch_up 실패" }
     begin
@@ -91,6 +122,7 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
   end
 
   test "한 단계의 PG 오류는 그 단계만 되돌리고 다음 단계는 정상이다" do
+    produce_history(9000)
     original = Simulation::Logistics.instance_method(:catch_up)
     Simulation::Logistics.send(:define_method, :catch_up) do |*|
       Quant.insert_all([{ product_id: -1, location_id: -1, qty: 1 }]) # 없는 FK → PG 오류, 트랜잭션 aborted

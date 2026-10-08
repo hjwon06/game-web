@@ -187,8 +187,15 @@ module Simulation
       load_available(waiting)
       stuck = 0
       settled = 0
+      deferred = 0
       waiting.each do |task|
         next unless (task.qty - (task.stock_move&.qty || 0)).positive?
+
+        # 진입 제한: 지게차 대기열이 길면 새 적치를 만들지 않고 qc 에 둔 채 다음 호출로 미룬다(feed 가 먼저 지게차를 받게 한다).
+        unless Ops::Plan.forklift_admit?
+          deferred += 1
+          next
+        end
 
         case (result = try_putaway(task, planned: 0))
         when :no_stock
@@ -199,6 +206,9 @@ module Simulation
         end
       end
       @counts[:waiting] = stuck
+      if deferred.positive?
+        @logger.info("sim inspection #{@now.iso8601} 지게차 대기 #{Ops::Plan.queue_seconds('forklift').round}초 > #{Config::FORKLIFT_ADMIT_SECONDS}초라 적치 #{deferred}건 보류")
+      end
       return unless stuck.positive? || settled.positive?
 
       @logger.warn("sim inspection #{@now.iso8601} 적치 보류: 칸 없음·계획 거부로 qc 에 #{stuck}건 대기, qc 가용 재고 없어 종결 #{settled}건")
