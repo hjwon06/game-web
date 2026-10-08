@@ -111,7 +111,7 @@ function hall(group) {
   fk.position.set(x + 6.5, .06, y + 6.1);
   fk.rotation.y = Math.PI / 2;
   group.add(fk);
-  group.add(Object.assign(barrier(1.8), { position: new THREE.Vector3(x + 8.2, 0, y + .5) }));
+  { const b = barrier(1.8); b.position.set(x + 8.2, 0, y + .5); group.add(b); } // position 은 읽기 전용이라 set 으로
 }
 
 function matYard(group) {
