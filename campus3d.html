@@ -12,14 +12,111 @@ canvas#c3d{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:gr
 canvas#c3d:active{cursor:grabbing}
 #ui{position:fixed;inset:0;pointer-events:none}
 #ui>*{pointer-events:auto}
+#ui.hidden{display:none}
+
+/* 관제 UI: 라이트 고정, 카드는 #FFF 단색 + 1px 테두리(그림자·글래스·그라데이션 없음). 액센트 #2563EB 는 강조에만. */
+:root{--ink:#1A1A2E;--sub:#6B7280;--line:#E5E7EB;--acc:#2563EB;--ok:#15803D;--warn:#B45309;--bad:#B91C1C}
+.num{font-family:Outfit,Pretendard,sans-serif;font-variant-numeric:tabular-nums}
+.card{background:#FFF;border:1px solid var(--line);border-radius:8px;font-size:13px;line-height:1.4}
+.card button{font:inherit;color:inherit}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;padding:0 8px 0 14px;border-bottom:1px solid var(--line)}
+.hd b{font-size:13px;font-weight:700}
+.fold{width:44px;height:44px;border:0;background:none;color:var(--sub);cursor:pointer;font-size:12px;border-radius:4px}
+.fold:hover{color:var(--ink);background:#F3F4F6}
+.grp.collapsed .bd{display:none}
+.grp.collapsed .hd{border-bottom:0}
+.grp.collapsed #tab-list{display:none}
+.tabs .fold{flex:none}
+.bd{padding:12px 14px}
+.sub{color:var(--sub);font-size:12px}
+
+#topbar{position:absolute;left:0;right:0;top:0;height:56px;display:flex;align-items:center;gap:16px;padding:0 16px;background:#FFF;border-bottom:1px solid var(--line);font-size:13px}
+#topbar .logo{font-weight:800;font-size:16px;white-space:nowrap}
+#search{position:relative;width:280px;flex:none}
+#search input{width:100%;height:36px;padding:0 12px;border:1px solid var(--line);border-radius:8px;font:inherit;color:var(--ink);background:#F9FAFB;outline:none}
+#search input:focus{border-color:var(--acc);background:#FFF}
+#search-res{position:absolute;left:0;right:0;top:40px;max-height:260px;overflow:auto;background:#FFF;border:1px solid var(--line);border-radius:8px;list-style:none}
+#search-res li{display:flex;justify-content:space-between;gap:8px;padding:10px 12px;min-height:44px;align-items:center}
+#search-res li+li{border-top:1px solid var(--line)}
+#search-res:empty{display:none}
+.site-chip{padding:6px 12px;border:1px solid var(--line);border-radius:14px;white-space:nowrap}
+.chip-lost{padding:6px 12px;border-radius:14px;background:#FEF2F2;color:var(--bad);font-weight:700;white-space:nowrap}
+.chip-lost[hidden]{display:none}
+#topbar .sp{flex:1}
+#clock{font-size:15px;font-weight:600}
+
+#g-kpi{position:absolute;left:16px;top:72px;width:224px}
+.kpi{padding:10px 14px}
+.kpi+.kpi{border-top:1px solid var(--line)}
+.kpi .v{font-size:28px;font-weight:700;line-height:1.1}
+.kpi .v small{font-size:13px;font-weight:500;color:var(--sub);margin-left:4px;font-family:Pretendard,sans-serif}
+.kpi .l{color:var(--sub);font-size:12px;margin-top:2px}
+
+#g-detail{position:absolute;right:68px;top:72px;width:340px;max-height:330px;display:flex;flex-direction:column}
+#g-detail .bd{overflow:auto}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0}
+.row+.row{border-top:1px solid #F3F4F6}
+.row .k{color:var(--sub)}
+.pill{display:inline-block;padding:2px 8px;border-radius:14px;font-size:12px;font-weight:600;white-space:nowrap;background:#F3F4F6;color:#374151}
+.pill.ok{background:#F0FDF4;color:var(--ok)}
+.pill.warn{background:#FFFBEB;color:var(--warn)}
+.pill.bad{background:#FEF2F2;color:var(--bad)}
+.pill.act{background:#EFF6FF;color:var(--acc)}
+.bar{height:6px;border-radius:4px;background:#F3F4F6;overflow:hidden;min-width:60px}
+.bar i{display:block;height:100%;background:var(--acc);border-radius:4px}
+.h5{font-size:12px;font-weight:700;margin:10px 0 2px;color:var(--sub)}
+.link{border:0;background:none;color:var(--acc);cursor:pointer;min-height:44px;padding:0 4px;font-size:12px}
+
+#g-ship{position:absolute;left:16px;bottom:16px;width:600px}
+.stages{display:flex;gap:0;list-style:none}
+.stages li{flex:1;padding-top:12px;border-top:3px solid var(--line);color:var(--sub);font-size:12px}
+.stages li+li{margin-left:4px}
+.stages li.done{border-top-color:var(--ink);color:var(--ink)}
+.stages li.cur{border-top-color:var(--acc);color:var(--acc);font-weight:700}
+.stages .t{display:block;font-size:13px;margin-top:2px}
+
+#g-tabs{position:absolute;right:68px;bottom:16px;width:440px;max-height:270px;display:flex;flex-direction:column}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;min-height:44px;border:0;background:none;cursor:pointer;color:var(--sub);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button[aria-selected=true]{color:var(--ink);font-weight:700;border-bottom-color:var(--acc)}
+#tab-list{overflow:auto;list-style:none}
+#tab-list li{display:grid;grid-template-columns:64px 1fr auto 72px;align-items:center;gap:8px;min-height:44px;padding:0 14px;cursor:pointer;border-top:1px solid #F3F4F6}
+#tab-list li:first-child{border-top:0}
+#tab-list li:hover{background:#F9FAFB}
+#tab-list .c{font-weight:700}
+#tab-list .p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--sub)}
+.empty{padding:16px 14px;color:var(--sub)}
+
+#zoom{position:absolute;right:16px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;overflow:hidden}
+#zoom button{width:44px;height:44px;border:0;background:#FFF;cursor:pointer;font-size:18px;color:var(--ink)}
+#zoom button+button{border-top:1px solid var(--line)}
+#zoom button:hover{background:#F3F4F6}
+#zoom button.t{font-size:12px}
 </style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&display=swap">
 <script type="importmap">
 {"imports":{"three":"/vendor/three-0.170.0/three.module.min.js","three/addons/":"/vendor/three-0.170.0/addons/"}}
 </script>
 </head>
 <body>
 <canvas id="c3d"></canvas>
-<div id="ui"></div>
+<div id="ui">
+  <header id="topbar">
+    <span class="logo">공장 단지</span>
+    <div id="search"><input id="search-in" type="search" placeholder="품목·칸·기계·트럭 검색" autocomplete="off" aria-label="검색"><ul id="search-res"></ul></div>
+    <span class="site-chip" id="site-chip">자재창고 -/24칸 · 도크 -/4</span>
+    <span class="chip-lost" id="lost" hidden>연결 끊김</span>
+    <span class="sp"></span>
+    <span class="num" id="clock">--:--:--</span>
+    <span id="me" class="sub"></span>
+  </header>
+  <section class="card grp" id="g-kpi"><div class="hd"><b>현황</b><button class="fold" data-fold aria-label="접기">접기</button></div><div class="bd" id="kpi" style="padding:0"></div></section>
+  <section class="card grp" id="g-detail"><div class="hd"><b id="d-title">자재창고</b><span id="d-pill"></span><button class="fold" data-fold aria-label="접기">접기</button></div><div class="bd" id="d-body"></div></section>
+  <section class="card grp" id="g-ship"><div class="hd"><b>출하 추적</b><span class="sub" id="ship-who"></span><button class="fold" data-fold aria-label="접기">접기</button></div><div class="bd"><ol class="stages" id="stages"></ol></div></section>
+  <section class="card grp" id="g-tabs"><div class="tabs" role="tablist" id="tabs"></div><ul id="tab-list"></ul></section>
+  <nav class="card" id="zoom" aria-label="카메라"><button id="z-in" aria-label="확대">+</button><button id="z-out" aria-label="축소">&minus;</button><button id="z-home" class="t" aria-label="처음 위치">처음</button></nav>
+</div>
 <script type="module" src="src/c3d/main.js"></script>
 </body>
 </html>

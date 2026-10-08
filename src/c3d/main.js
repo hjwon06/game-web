@@ -8,6 +8,7 @@ import { CENTER } from './layout.js';
 import { initData, startPolling } from './data.js';
 import { createHaul } from './haul.js';
 import { createStock } from './stock.js';
+import { createUi } from './ui.js';
 
 const capture = new URLSearchParams(location.search).get('capture') === '1';
 const canvas = document.getElementById('c3d');
@@ -30,6 +31,21 @@ controls.addEventListener('start', () => { touched = true; });
 function fit() {
   fitCampus(camera, controls.target);
   controls.update();
+}
+
+// 줌 버튼: 대상(target)을 향한 거리를 비율로 줄이고 늘린다(controls 의 min/maxDistance 로 자른다). 처음 위치는 첫 구도로 되돌리고 자동 맞춤을 다시 켠다.
+export function zoomBy(factor) {
+  const off = camera.position.clone().sub(controls.target);
+  const d = THREE.MathUtils.clamp(off.length() * factor, controls.minDistance, controls.maxDistance);
+  camera.position.copy(controls.target).addScaledVector(off.normalize(), d);
+  controls.update();
+}
+export const zoomIn = () => zoomBy(1 / 1.25);
+export const zoomOut = () => zoomBy(1.25);
+export function resetView() {
+  touched = false;
+  controls.target.set(CENTER.x, 0, CENTER.z);
+  fit();
 }
 
 // 시계 추상화: 기본은 performance.now(), ?capture=1 이면 step(ms) 로만 움직인다
@@ -77,6 +93,7 @@ const haul = createHaul(campus, { kenneyReady: ready });
 const stock = createStock(campus);
 tickers.push(haul.tick, stock.tick);
 startPolling();
+createUi({ zoomIn, zoomOut, home: resetView }); // 3D-⑤ 관제 UI(별도 2초 폴링)
 // 루미 검증용: {forks:[{code,task,pos}], trucks:[{code,state}], carriers:n} (+ 팔레트 수 등 보조 값)
 const state = () => ({ ...haul.state(), stock: stock.state() });
 
