@@ -117,7 +117,7 @@ CREATE TABLE public.commands (
     result_status integer,
     created_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT commands_base_version_check CHECK ((base_version >= 0)),
-    CONSTRAINT commands_kind_check CHECK (((kind)::text = ANY ((ARRAY['start'::character varying, 'stop'::character varying, 'break'::character varying, 'repair'::character varying])::text[])))
+    CONSTRAINT commands_kind_check CHECK (((kind)::text = ANY (ARRAY[('start'::character varying)::text, ('stop'::character varying)::text, ('break'::character varying)::text, ('repair'::character varying)::text])))
 );
 
 
@@ -155,7 +155,7 @@ CREATE TABLE public.inspections (
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT inspections_defect_qty_check CHECK ((defect_qty >= (0)::numeric)),
-    CONSTRAINT inspections_result_check CHECK (((result)::text = ANY ((ARRAY['pass'::character varying, 'fail'::character varying])::text[])))
+    CONSTRAINT inspections_result_check CHECK (((result)::text = ANY (ARRAY[('pass'::character varying)::text, ('fail'::character varying)::text])))
 );
 
 
@@ -194,8 +194,8 @@ CREATE TABLE public.locations (
     level character varying,
     capacity_units integer,
     CONSTRAINT locations_capacity_units_check CHECK (((capacity_units IS NULL) OR (capacity_units > 0))),
-    CONSTRAINT locations_kind_check CHECK (((kind)::text = ANY ((ARRAY['physical'::character varying, 'virtual'::character varying])::text[]))),
-    CONSTRAINT locations_level_check CHECK (((level IS NULL) OR ((level)::text = ANY ((ARRAY['warehouse'::character varying, 'zone'::character varying, 'rack'::character varying, 'bin'::character varying])::text[])))),
+    CONSTRAINT locations_kind_check CHECK (((kind)::text = ANY (ARRAY[('physical'::character varying)::text, ('virtual'::character varying)::text]))),
+    CONSTRAINT locations_level_check CHECK (((level IS NULL) OR ((level)::text = ANY (ARRAY[('warehouse'::character varying)::text, ('zone'::character varying)::text, ('rack'::character varying)::text, ('bin'::character varying)::text])))),
     CONSTRAINT locations_parent_not_self_check CHECK (((parent_id IS NULL) OR (parent_id <> id)))
 );
 
@@ -297,7 +297,7 @@ CREATE TABLE public.machines (
     version integer DEFAULT 0 NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT machines_state_check CHECK (((state)::text = ANY ((ARRAY['running'::character varying, 'stopped'::character varying, 'broken'::character varying])::text[]))),
+    CONSTRAINT machines_state_check CHECK (((state)::text = ANY (ARRAY[('running'::character varying)::text, ('stopped'::character varying)::text, ('broken'::character varying)::text]))),
     CONSTRAINT machines_version_check CHECK ((version >= 0))
 );
 
@@ -370,7 +370,7 @@ CREATE TABLE public.products (
     kind character varying NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT products_kind_check CHECK (((kind)::text = ANY ((ARRAY['raw'::character varying, 'wip'::character varying, 'fg'::character varying])::text[]))),
+    CONSTRAINT products_kind_check CHECK (((kind)::text = ANY (ARRAY[('raw'::character varying)::text, ('wip'::character varying)::text, ('fg'::character varying)::text]))),
     CONSTRAINT products_uom_check CHECK ((btrim((uom)::text) <> ''::text))
 );
 
@@ -439,7 +439,7 @@ CREATE TABLE public.resources (
     home_location_id bigint,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT resources_kind_check CHECK (((kind)::text = ANY ((ARRAY['forklift'::character varying, 'dock_in'::character varying, 'dock_out'::character varying, 'worker'::character varying])::text[])))
+    CONSTRAINT resources_kind_check CHECK (((kind)::text = ANY (ARRAY[('forklift'::character varying)::text, ('dock_in'::character varying)::text, ('dock_out'::character varying)::text, ('worker'::character varying)::text])))
 );
 
 
@@ -507,7 +507,7 @@ CREATE TABLE public.sales_orders (
     due_date date,
     status character varying DEFAULT 'open'::character varying NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT sales_orders_status_check CHECK (((status)::text = ANY ((ARRAY['open'::character varying, 'partial'::character varying, 'done'::character varying])::text[])))
+    CONSTRAINT sales_orders_status_check CHECK (((status)::text = ANY (ARRAY[('open'::character varying)::text, ('partial'::character varying)::text, ('done'::character varying)::text])))
 );
 
 
@@ -590,7 +590,7 @@ CREATE TABLE public.stock_moves (
     occurred_at timestamp with time zone DEFAULT now() NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT stock_moves_locations_differ_check CHECK ((from_location_id <> to_location_id)),
-    CONSTRAINT stock_moves_move_type_check CHECK (((move_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'issue'::character varying, 'produce'::character varying, 'qc_pass'::character varying, 'qc_fail'::character varying, 'ship'::character varying])::text[]))),
+    CONSTRAINT stock_moves_move_type_check CHECK (((move_type)::text = ANY (ARRAY[('receive'::character varying)::text, ('putaway'::character varying)::text, ('issue'::character varying)::text, ('produce'::character varying)::text, ('qc_pass'::character varying)::text, ('qc_fail'::character varying)::text, ('ship'::character varying)::text]))),
     CONSTRAINT stock_moves_qty_check CHECK ((qty > (0)::numeric))
 );
 
@@ -638,11 +638,11 @@ CREATE TABLE public.tasks (
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
     CONSTRAINT tasks_finished_at_check CHECK ((((status)::text <> 'done'::text) OR (finished_at IS NOT NULL))),
-    CONSTRAINT tasks_kind_check CHECK (((kind)::text = ANY ((ARRAY['unload'::character varying, 'putaway'::character varying, 'pick'::character varying, 'feed'::character varying, 'inspect'::character varying, 'load'::character varying])::text[]))),
+    CONSTRAINT tasks_kind_check CHECK (((kind)::text = ANY (ARRAY[('unload'::character varying)::text, ('putaway'::character varying)::text, ('pick'::character varying)::text, ('feed'::character varying)::text, ('inspect'::character varying)::text, ('load'::character varying)::text]))),
     CONSTRAINT tasks_locations_differ_check CHECK ((from_location_id <> to_location_id)),
     CONSTRAINT tasks_qty_check CHECK ((qty > (0)::numeric)),
-    CONSTRAINT tasks_started_at_check CHECK ((((status)::text <> ALL ((ARRAY['started'::character varying, 'done'::character varying])::text[])) OR (started_at IS NOT NULL))),
-    CONSTRAINT tasks_status_check CHECK (((status)::text = ANY ((ARRAY['planned'::character varying, 'started'::character varying, 'done'::character varying, 'cancelled'::character varying])::text[]))),
+    CONSTRAINT tasks_started_at_check CHECK ((((status)::text <> ALL (ARRAY[('started'::character varying)::text, ('done'::character varying)::text])) OR (started_at IS NOT NULL))),
+    CONSTRAINT tasks_status_check CHECK (((status)::text = ANY (ARRAY[('planned'::character varying)::text, ('started'::character varying)::text, ('done'::character varying)::text, ('cancelled'::character varying)::text]))),
     CONSTRAINT tasks_stock_move_done_check CHECK (((stock_move_id IS NULL) OR ((status)::text = 'done'::text)))
 );
 
@@ -729,7 +729,7 @@ CREATE TABLE public.work_orders (
     product_id bigint NOT NULL,
     sales_order_line_id bigint,
     CONSTRAINT work_orders_produced_qty_check CHECK ((produced_qty >= 0)),
-    CONSTRAINT work_orders_status_check CHECK (((status)::text = ANY ((ARRAY['queued'::character varying, 'active'::character varying, 'done'::character varying])::text[]))),
+    CONSTRAINT work_orders_status_check CHECK (((status)::text = ANY (ARRAY[('queued'::character varying)::text, ('active'::character varying)::text, ('done'::character varying)::text]))),
     CONSTRAINT work_orders_target_qty_check CHECK ((target_qty > 0))
 );
 
@@ -1348,6 +1348,14 @@ CREATE TRIGGER tasks_assign_seq BEFORE INSERT OR UPDATE ON public.tasks FOR EACH
 
 
 --
+-- Name: locations fk_locations_parent; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.locations
+    ADD CONSTRAINT fk_locations_parent FOREIGN KEY (parent_id) REFERENCES public.locations(id);
+
+
+--
 -- Name: production_events fk_production_events_work_order_machine; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1548,14 +1556,6 @@ ALTER TABLE ONLY public.sales_order_lines
 
 
 --
--- Name: locations fk_locations_parent; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.locations
-    ADD CONSTRAINT fk_locations_parent FOREIGN KEY (parent_id) REFERENCES public.locations(id);
-
-
---
 -- Name: resources fk_resources_home_location; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1618,10 +1618,10 @@ ALTER TABLE ONLY public.tasks
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20261009000001'),
 ('20261008130003'),
 ('20261008130002'),
 ('20261008130001'),
-('20261009000001'),
 ('20261008000010'),
 ('20261008000009'),
 ('20261008000008'),
