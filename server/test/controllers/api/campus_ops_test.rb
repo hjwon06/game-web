@@ -288,21 +288,14 @@ class CampusOpsTest < ActionDispatch::IntegrationTest
     assert_monotonic stages
   end
 
-  test "수주 추적: 아무것도 안 끝났으면 at 은 nil 이고 progress 는 0 / 주문량이다, 주문량 0 은 도달 불가" do
+  test "수주 추적: 아무것도 안 끝났으면 at 은 nil 이고 progress 는 0 / 주문량이다" do
     order, line = so!("SO-OPS-ZERO", qty: 2 * P)
     task!(kind: "pick", status: "planned", resource: "FORK-01", from: "FG-A-01-01", to: "shipping", product: @fg, lot: @lot, ref: line)
     stages = shipment_stages("SO-OPS-ZERO")
     assert_equal [iso(@t - 5.hours), nil, nil, nil, nil], %w[received picked staged loaded shipped].map { |k| stages[k]["at"] }
     assert_equal [{ "done" => 0, "total" => 2 * P }] * 4, %w[picked staged loaded shipped].map { |k| stages[k]["progress"] }
 
-    line.update_columns(ordered_qty: 0)
-    task!(kind: "pick", status: "done", resource: "FORK-01", from: "FG-A-01-02", to: "shipping", product: @fg, lot: @lot, ref: line, qty: P, started: @t - 20.seconds, finished: @t - 10.seconds)
-    Quant.create!(product: @fg, lot: @lot, location: loc("shipping"), qty: P)
-    mv("ship", "shipping", "customer", P, @t - 5.seconds, product: @fg, lot: @lot, ref: line)
-    stages = shipment_stages("SO-OPS-ZERO")
-    assert_equal iso(@t - 10.seconds), stages["picked"]["at"], "picked 는 주문량과 무관하게 첫 완료 pick"
-    assert_equal [nil, nil, nil], %w[staged loaded shipped].map { |k| stages[k]["at"] }, "주문량 0 이면 누적 단계는 도달하지 않는다(0 으로 나누거나 즉시 도달하지 않는다)"
-    assert_equal({ "done" => P, "total" => 0 }, stages["shipped"]["progress"])
+    # 주문량 0 은 DB 제약(sales_order_lines_ordered_qty_check > 0)이 막아 만들 수 없다 — 코드의 0 방어는 남기고 시나리오는 뺀다
     assert_equal order.so_no, ops(so: "SO-OPS-ZERO")["shipment"]["so_no"]
   end
 
