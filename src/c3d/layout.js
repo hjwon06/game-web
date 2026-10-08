@@ -9,18 +9,28 @@ export const HALL = { x: 5, y: 15, w: 19, d: 12 };
 // real = 실데이터 장소, api = /api/campus buildings 의 키
 export const BUILDINGS = [
   { id: 'office', name: '수주 사무동', x: 5, y: 4, w: 7, d: 6, h: 96, top: '#E9ECF1', real: true, api: 'office' },
-  { id: 'mat', name: '자재창고', x: 15, y: 3, w: 8, d: 7, h: 64, top: '#E4E7EB', real: true, api: 'material' },
+  { id: 'mat', name: '자재창고', x: 15, y: 3, w: 8, d: 7, h: 64, top: '#E4E7EB', real: true, api: 'material', open: true },
   { id: 'maint', name: '정비동', x: 28, y: 3, w: 5, d: 5, h: 48, top: '#E4E7EB', real: false },
   { id: 'util', name: '유틸리티', x: 37, y: 2, w: 5, d: 5, h: 40, top: '#E4E7EB', real: false },
   { id: 'qc', name: '품질검사동', x: 28, y: 23.5, w: 6, d: 6, h: 58, top: '#E6EEEC', real: true, api: 'qc' },
-  { id: 'ship', name: '출하장', x: 35, y: 18.4, w: 8, d: 5.4, h: 46, top: '#EBEDF0', real: true, api: 'shipping' },
+  { id: 'ship', name: '출하장', x: 35, y: 18.4, w: 8, d: 5.4, h: 46, top: '#EBEDF0', real: true, api: 'shipping', open: true },
 ].map(b => ({ ...b, h: b.h * PX }));
 
-// 도크 문 자리(남쪽 면). 문 모델은 3D-②. 2D 도크 칸: 자재창고 x=16.7+i*2.8, 출하장 x=36.2+i*2.4
+// 도크 문(남쪽 면) 2개씩. 2D 도크 칸: 자재창고 x=16.7+i*2.8, 출하장 x=36.2+i*2.4 (3번째 칸은 건물 폭을 벗어나 뺀다)
 export const DOCKS = [
-  { building: 'mat', face: 's', slots: [0, 1, 2].map(i => ({ x: 16.7 + i * 2.8, y: 10.2, w: 1.1, d: 1.9 })) },
-  { building: 'ship', face: 's', slots: [0, 1, 2].map(i => ({ x: 36.2 + i * 2.4, y: 24.3, w: 1.1, d: 1.9 })) },
+  { building: 'mat', face: 's', slots: [0, 1].map(i => ({ code: `DOCK-IN-0${i + 1}`, x: 16.7 + i * 2.8, y: 10.2, w: 1.1, d: 1.9 })) },
+  { building: 'ship', face: 's', slots: [0, 1].map(i => ({ code: `DOCK-OUT-0${i + 1}`, x: 36.2 + i * 2.4, y: 24.3, w: 1.1, d: 1.9 })) },
 ];
+
+// 지붕 없이 벽 높이만 세워 내부가 보이는 건물(wall = 벽 높이)
+export const OPEN_WALL = 2.2;
+
+// 생산동 기계 12대: campus_data.js 의 M 배열(x = 생산동 안 가로 위치, row = 0|1). 세로 위치는 ROWY.
+export const ROWY = [2.6, 8.0];
+export const MACHINES = [
+  ['M1', 'cut', 3, 0], ['M2', 'asm', 5, 0], ['M3', 'chk', 7.4, 0], ['M4', 'mill', 9.4, 0], ['M5', 'cut', 11.4, 0], ['M6', 'mill', 13.4, 0],
+  ['M7', 'asm', 15.4, 0], ['M8', 'chk', 15.4, 1], ['M9', 'paint', 13.2, 1], ['M10', 'paint', 11, 1], ['M11', 'pack', 7.2, 1], ['M12', 'pack', 5, 1],
+].map(([code, kind, x, row]) => ({ code, kind, x, row }));
 
 export const PLAZA = { x: 1, y: 1, w: 42, d: 31 };
 // 도로 사각형 [x, y, w, d]

@@ -96,9 +96,10 @@ function gate(group) {
 
 function trees(group) {
   const n = TREES.length;
-  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(.08, .1, .8, 6), mat(0x8B5E3C), n);
-  const cone = new THREE.InstancedMesh(new THREE.ConeGeometry(.75, 1.5, 8), mat(0x7FA48A), n);
-  const ball = new THREE.InstancedMesh(new THREE.SphereGeometry(.45, 10, 8), mat(0x93B59C), n);
+  // 삼각형 예산(전체 6만 이하) 때문에 나무는 낮은 분할: 줄기 5각, 원뿔 7각, 윗덩이 정이십면체
+  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(.08, .1, .8, 5), mat(0x8B5E3C), n);
+  const cone = new THREE.InstancedMesh(new THREE.ConeGeometry(.75, 1.5, 7), mat(0x7FA48A), n);
+  const ball = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.5, 0), mat(0x93B59C), n);
   const o = new THREE.Object3D();
   TREES.forEach(([x, z], i) => {
     const s = .85 + ((i * 37) % 10) / 33; // 나무마다 크기를 조금 달리한다
@@ -123,7 +124,7 @@ export function createGround() {
   slab(group, PLAZA.x, PLAZA.y, PLAZA.w, PLAZA.d, 0xE9ECEF, .02); // 포장 마당
   ROADS.forEach(([x, z, w, d]) => slab(group, x, z, w, d, 0xCDD2D9, .03));
   ROAD_DASHES.forEach(([a, b]) => dashLine(group, a, b, .05));
-  // 생산동 자리: 바닥 판만(생산동 모델은 이후 단계)
+  // 생산동 바닥 판(벽·기계는 campus.js)
   slab(group, HALL.x, HALL.y, HALL.w, HALL.d, 0xD5DAE1, .06, .03);
   // 도크 칸
   DOCKS.forEach(d => d.slots.forEach(s => slab(group, s.x, s.y, s.w, s.d, 0xC3C9D1, .04)));
