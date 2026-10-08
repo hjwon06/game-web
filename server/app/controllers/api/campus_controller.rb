@@ -32,7 +32,7 @@ module Api
     end
 
     def payload(now, after_id)
-      loc = Location.pluck(:code, :id).to_h # 쿼리 1: 위치 9개
+      loc = Location.pluck(:code, :id).to_h # 쿼리 1: 위치 전부
       code_of = loc.invert
       moves = moves_payload(code_of, after_id)
       statuses = SalesOrder.group(:status).count # 쿼리 2
@@ -91,13 +91,14 @@ module Api
     end
 
     # 쿼리 7: 최근 60분 receive/qc_pass/qc_fail/ship 을 from 위치 인덱스로 한 번에. 트럭 = 최근 10분 receive 건수.
+    # ship 의 출발지는 shipping(출하대)이다. fg_store 는 pick 의 출발지라 거기서는 ship 이 잡히지 않는다.
     def flow_window(loc, now)
       qty = Hash.new(BigDecimal("0"))
       trucks = 0
       trucks_sql = StockMove.sanitize_sql_array(
         ["COUNT(*) FILTER (WHERE move_type = 'receive' AND occurred_at >= ?)", now - RECEIVE_WINDOW]
       )
-      StockMove.where(from_location_id: loc.values_at("supplier", "qc", "fg_store"), occurred_at: (now - FLOW_WINDOW)..)
+      StockMove.where(from_location_id: loc.values_at("supplier", "qc", "shipping"), occurred_at: (now - FLOW_WINDOW)..)
                .group(:move_type).pluck(:move_type, Arel.sql("SUM(qty)"), Arel.sql(trucks_sql))
                .each do |type, sum, recv|
         qty[type] = sum

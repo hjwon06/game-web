@@ -159,12 +159,14 @@ class InboundTest < ActiveSupport::TestCase
     assert_equal 0, putaways.count
     assert_match(/적치할 칸이 없어 receiving 에 1팔레트 대기/, @log.string)
 
-    Inventory::Move.call(product: @bolt, lot: nil, from: "RAW-A-01-05", to: "production", qty: 100, move_type: "issue",
+    # 칸을 비우는 길은 feed(raw 칸 → line_side)다. line_side 는 칸 고르기 대상이 아니라 비어 있어도 고르지 않는다.
+    Inventory::Move.call(product: @bolt, lot: nil, from: "RAW-A-01-05", to: "line_side", qty: 100, move_type: "feed",
                          ref: nil, idempotency_key: next_key)
     again = inbound(NOW + 10)
 
     assert_equal [1, 0], [again[:putaway], again[:waiting]]
     assert_equal ["RAW-A-01-05"], putaways.map { |p| p.to_location.code }
+    assert_equal "raw_store", putaways.last.to_location.zone_code
   end
 
   test "취소된 적치는 다시 계획하되 3번 취소되면 포기한다" do

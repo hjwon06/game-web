@@ -51,7 +51,7 @@ class Inventory::MoveCapacityTest < ActiveSupport::TestCase
 
   test "칸에서 빼내면 자리가 난다" do
     mv("receiving", @bin, 400, "putaway", "cap-out-1")
-    mv(@bin, "production", 150, "issue", "cap-out-2")
+    mv(@bin, "line_side", 150, "feed", "cap-out-2") # 칸에서 나가는 길은 feed(→ line_side)다
     mv("receiving", @bin, 150, "putaway", "cap-out-3")
     assert_equal 400, bin_total(@bin)
   end
@@ -71,8 +71,9 @@ class Inventory::MoveCapacityTest < ActiveSupport::TestCase
   test "용량은 도착지에만 건다: 용량 초과 상태의 칸에서도 출고는 된다" do
     mv("receiving", @bin, 400, "putaway", "cap-over-state")
     Location.where(id: @bin.id).update_all(capacity_units: 100)
-    mv(@bin, "production", 10, "issue", "cap-issue-over")
+    mv(@bin, "line_side", 10, "feed", "cap-feed-over")
     assert_equal 390, bin_total(@bin)
+    assert_equal 10, Quant.where(location_id: Location.find_by!(code: "line_side").id).sum(:qty)
   end
 
   test "용량을 줄이면 다음 입고부터 새 값으로 막는다 (잠금 뒤에 다시 읽는다)" do

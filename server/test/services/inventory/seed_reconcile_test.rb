@@ -55,7 +55,7 @@ class Inventory::SeedReconcileTest < ActiveSupport::TestCase
     assert_equal [100, 70], [line.ordered_qty.to_i, shipped.to_i]
   end
 
-  test "모든 재고 변동이 원장에 있다: 물리 위치 마이너스 0, 이동 유형은 7종 안" do
+  test "모든 재고 변동이 원장에 있다: 물리 위치 마이너스 0, 이동 유형은 9종 전부다(feed·pick 포함)" do
     seed!
     assert_equal 0, Quant.joins(:location).where(locations: { kind: "physical" }).where("quants.qty < 0").count
     assert_empty StockMove.distinct.pluck(:move_type) - StockMove::MOVE_TYPES

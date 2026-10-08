@@ -1,4 +1,5 @@
 # 재고 시드. 재실행 안전: 마스터는 find_or_create, 이동은 고정 멱등키라 두 번째부터는 아무것도 만들지 않는다.
+# 흐름: 입고 → 적치(raw_store) → feed(line_side) → issue(production) → produce → 검사 → pick(shipping) → ship.
 # 모든 재고 변동은 Inventory::Move(Inspect·Ship 포함) 경유다. quants 에 직접 INSERT 하지 않는다.
 # 전제: 작업지시(WO-1001~1004)가 먼저 있어야 한다(db/seeds.rb 가 기계·작업지시를 만든 뒤 이 태스크를 부른다).
 #
@@ -117,9 +118,14 @@ module InventorySeed
         lot = Lot.find_or_create_by!(product: p, lot_no: format("LOT-%s-%02d", sku.delete_prefix("FG-"), i))
         lots[[sku, i]] = lot
 
+        # raw → production 직접 issue 는 없다: 로트마다 필요한 만큼만 line_side 로 feed 하고 바로 issue 해서 비운다.
+        # line_side 에는 한 번에 자재 하나의 한 로트분(최대 160)만 올라가므로 용량 800 을 넘지 않는다.
         bom.sort.each do |raw_sku, qty_per|
-          move(product: raws.fetch(raw_sku), lot: nil, from: "raw_store", to: "production",
-               qty: qty_per * BATCH_QTY, move_type: "issue", idempotency_key: "seed:issue:#{lot.lot_no}:#{raw_sku}")
+          need = qty_per * BATCH_QTY
+          move(product: raws.fetch(raw_sku), lot: nil, from: "raw_store", to: "line_side",
+               qty: need, move_type: "feed", idempotency_key: "seed:feed:#{lot.lot_no}:#{raw_sku}")
+          move(product: raws.fetch(raw_sku), lot: nil, from: "line_side", to: "production",
+               qty: need, move_type: "issue", idempotency_key: "seed:issue:#{lot.lot_no}:#{raw_sku}")
         end
         move(product: p, lot: lot, from: "production", to: "qc", qty: BATCH_QTY, move_type: "produce",
              idempotency_key: "seed:produce:#{lot.lot_no}")
@@ -142,6 +148,9 @@ module InventorySeed
 
       plan.each do |lot_idx, qty|
         lot = lots.fetch([sku, lot_idx])
+        # 출하는 출하대(shipping)에서만 나간다: fg 창고 → 출하대(pick) 를 먼저 한다.
+        move(product: fgs.fetch(sku), lot: lot, from: "fg_store", to: "shipping", qty: qty, move_type: "pick",
+             idempotency_key: "seed:pick:#{so_no}:#{lot.lot_no}")
         Inventory::Ship.call(sales_order_line: line, lot: lot, qty: qty, idempotency_key: "seed:ship:#{so_no}:#{lot.lot_no}")
       end
     end

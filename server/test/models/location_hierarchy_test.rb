@@ -1,18 +1,21 @@
 require "test_helper"
 
 class LocationHierarchyTest < ActiveSupport::TestCase
-  test "칸 48개·랙 8개·구역 2개가 시드되고 기존 9개 위치는 그대로다" do
+  test "칸 48개·랙 8개·구역 2개가 시드되고 기본 위치 10개(line_side 포함)는 그대로다" do
     assert_equal 48, Location.where(level: "bin").count
     assert_equal 8, Location.where(level: "rack").count
     assert_equal 2, Location.where(level: "zone").count
-    assert_equal 67, Location.count # 9 + 2 + 8 + 48
+    assert_equal 68, Location.count # 10 + 2 + 8 + 48
+    assert Location.exists?(code: "line_side"), "line_side 가 시드돼야 한다"
     assert_equal 24, Location.where(level: "bin", parent: Location.where(level: "rack", parent: Location.find_by!(code: "RAW-A"))).count
     assert_equal 24, Location.where(level: "bin", parent: Location.where(level: "rack", parent: Location.find_by!(code: "FG-A"))).count
 
     Location::DEFAULTS.each do |code, _name, kind, role|
       loc = Location.find_by!(code: code)
-      assert_equal [kind, role, nil, nil], [loc.kind, loc.role, loc.parent_id, loc.capacity_units], code
+      capacity = code == "line_side" ? Location::LINE_SIDE_CAPACITY : nil
+      assert_equal [kind, role, nil, capacity], [loc.kind, loc.role, loc.parent_id, loc.capacity_units], code
     end
+    assert_equal 800, Location.find_by!(code: "line_side").capacity_units
   end
 
   test "재실행해도 중복이 생기지 않는다" do
