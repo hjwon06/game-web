@@ -56,7 +56,8 @@ module Simulation
 
     # 검사: 로트별로 qc 에 쌓인 미검사 수량이 팔레트(PALLET_QTY) 이상이거나 가장 오래된 도착분이 이만큼 지나면 inspect 작업 1건.
     # 1건 수량은 min(미검사량, PALLET_QTY)이고 합격분 적치도 그 단위라, 완제품 적치가 팔레트 단위로 일어난다.
-    INSPECT_MAX_WAIT_SECONDS = 300
+    # 작업지시(로트)당 양품이 분당 8~18개라 5분이면 40~90개씩 잘게 나갔다(dev 실측: 완제품 적치 37건 평균 52개). 20분이면 150~350개로 팔레트에 가까워진다.
+    INSPECT_MAX_WAIT_SECONDS = 1200
     INSPECT_LOOKBACK_SECONDS = 21_600 # 검사 끝난 뒤 이만큼까지만 합격분 적치 대기를 다시 찾는다(tasks 스캔 상한)
 
     # 출하: pick 은 PICK_QTY 단위, 한 번에 라인당 최대 PICKS_PER_LINE 건. 한 번 훑는 수주 라인 수 상한은 SHIP_LINES_LIMIT.
@@ -88,7 +89,7 @@ module Simulation
     #                  + 완제품 적치(양품 / PALLET_QTY) + pick(양품 / PICK_QTY)
     #   가동률       = 건수/분 x FORKLIFT_TASK_SECONDS / (FORKLIFT_COUNT x 60)
     # 기본값: 양품 ≈ 149 ea/분, 원자재 ≈ 253 ea/분 → 0.51 + 0.51 + 0.30 + 0.30 = 1.62 건/분 → 1.62 x 40 / 120 ≈ 0.54.
-    # 팔레트를 못 채우고 대기 시간 때문에 나가는 부분 팔레트가 있어 실제는 조금 높다 — 테스트는 0.70 을 넘지 않게 지킨다.
+    # 팔레트를 못 채우고 대기 시간(INSPECT_MAX_WAIT_SECONDS = 20분, 부분 팔레트 약 150~350개) 때문에 나가는 부분 팔레트가 있어 실제는 조금 높다 — 테스트는 0.70 을 넘지 않게 지킨다.
     # 진입 제한: 지게차 대기열이 FORKLIFT_ADMIT_SECONDS 를 넘으면 pick·putaway 계획을 미루고 feed 만 계획한다.
     # 그래서 실제 가동률은 이 추정값을 넘어 계속 오르지 않고 대기열 상한에서 눌리며, 라인 공급(feed)이 항상 먼저 지게차를 받는다. 수식은 진입 제한과 무관하다.
     def self.forklift_load

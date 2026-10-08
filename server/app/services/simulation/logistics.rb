@@ -2,7 +2,7 @@ module Simulation
   # 60초 경계마다 Runner 가 Flusher 다음에 부른다. 생산 → 자재 소비(백플러시), 신규 수주.
   # 입고(트럭·하차·적치)는 Simulation::Inbound, 라인 공급은 LineFeed, 검사는 Inspection, 출하는 Shipping 이 작업으로 계획하고
   # Ops::Tick 이 완료 순간 이동을 만든다. 여기서는 line_side 에 공급된 재고를 꺼내 쓰기만 한다.
-  # 재고는 전부 Inventory::* 를 거친다. 여기서 production_events·work_orders 는 읽기만 한다.
+  # 재고는 전부 Inventory::* 를 거친다. production_events·work_orders 는 읽기만 한다(예외: 매분 처음에 WorkOrderRefill 이 놀고 있는 기계에 작업지시를 올린다).
   # 같은 분에 다시 불려도 이동이 늘지 않는다(produce 키는 (작업지시, 분), issue 키는 거기에 (자재, line_side, 로트)가 붙는다).
   class Logistics
     # 반환: { backflush:, skipped:, order: } (이번 호출에서 실제로 한 일)
@@ -21,6 +21,7 @@ module Simulation
     end
 
     def call
+      step("refill") { WorkOrderRefill.sweep(logger: @logger) } # 놀고 있는 running 기계에 작업지시 보충(재고와 무관해 epoch 보다 먼저)
       epoch = Config.inventory_epoch&.utc # TimeWithZone/로컬 시각이 와도 UTC 로 맞춰 비교한다
       return @counts unless epoch
 

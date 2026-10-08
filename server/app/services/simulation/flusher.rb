@@ -53,12 +53,7 @@ module Simulation
       return order.save! if order.produced_qty < order.target_qty
 
       order.update!(produced_qty: order.produced_qty, status: "done", finished_at: Time.current) # ⑥
-      activate_next(order.machine_id)
-    end
-
-    def activate_next(machine_id)
-      queued = WorkOrder.where(machine_id: machine_id, status: "queued").order(:created_at, :id).lock.first
-      queued&.update!(status: "active", started_at: Time.current)
+      WorkOrderRefill.after_done(order) # queued 가 있으면 올리고, 없으면 같은 품목으로 새로 만든다
     end
   end
 end

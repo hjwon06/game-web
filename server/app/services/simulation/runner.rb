@@ -28,6 +28,7 @@ module Simulation
 
     def run
       @logger.info("sim start forklift_load=#{Config.forklift_load.round(2)} rate_scale=#{Config::RATE_SCALE}")
+      isolated("refill", Time.current) { WorkOrderRefill.sweep(logger: @logger) } # 재시작 전에 멈춰 있던 기계를 1회 채운다
       until @stopped
         sleep(Config::TICK_SECONDS - (Time.current.to_f % Config::TICK_SECONDS))
         step unless @stopped

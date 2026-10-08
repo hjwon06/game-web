@@ -66,7 +66,7 @@ class InspectionTest < ActiveSupport::TestCase
                   task.ref_id, task.ref_type, task.status]
   end
 
-  test "팔레트 미만이고 대기가 300초 미만이면 inspect 를 만들지 않고, 300초가 되면 남은 양으로 1건 만든다" do
+  test "팔레트 미만이고 대기가 WAIT 미만이면 inspect 를 만들지 않고, WAIT 가 되면 남은 양으로 1건 만든다" do
     produce_to_qc(P - 1, M0)
 
     assert_equal 0, plan(M0 + WAIT - 1)[:inspect]
@@ -262,7 +262,7 @@ class InspectionTest < ActiveSupport::TestCase
     events(90, 10)
     ProductionEvent.create!(machine: @machine, work_order: @order, bucket_start: EPOCH - 100, bucket_end: EPOCH - 90,
                             good_qty: 0, defect_qty: 5_000, machine_version: 0)
-    produce_to_qc(125, M0 - 300)
+    produce_to_qc(125, M0 - WAIT)
     plan
     tick
 
