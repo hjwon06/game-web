@@ -1,0 +1,8 @@
+# 값의 단일 출처는 Location::DEFAULTS. 라벨 = code.
+<% Location::DEFAULTS.each do |code, name, kind, role| %>
+<%= code %>:
+  code: <%= code %>
+  name: <%= name %>
+  kind: <%= kind %>
+  role: <%= role %>
+<% end %>

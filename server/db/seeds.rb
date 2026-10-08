@@ -15,6 +15,8 @@ MACHINES = [
   ["M12", "포장기 2", "stopped", ["WO-1012", "박스 W", 270], ["WO-2012", "박스 X", 120]]
 ].freeze
 
+Location.ensure_defaults!
+
 def seed_order(machine, (code, product, target_qty), status)
   WorkOrder.find_or_create_by!(code: code) do |wo|
     wo.machine = machine

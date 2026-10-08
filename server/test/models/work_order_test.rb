@@ -1,11 +1,15 @@
 require "test_helper"
 
 class WorkOrderTest < ActiveSupport::TestCase
-  setup { @machine = Machine.create!(code: "M1", name: "절단기") }
+  setup do
+    @machine = Machine.create!(code: "M1", name: "절단기")
+    @product = Product.create!(sku: "T-BRACKET-A", name: "브래킷 A", uom: "ea", kind: "fg")
+  end
 
   def insert_order(code, status: "active", target_qty: 100)
     WorkOrder.transaction(requires_new: true) do
-      WorkOrder.insert_all!([{ code: code, machine_id: @machine.id, product: "브래킷 A", target_qty: target_qty,
+      WorkOrder.insert_all!([{ code: code, machine_id: @machine.id, product: "브래킷 A", product_id: @product.id,
+                               target_qty: target_qty,
                                status: status, created_at: Time.current, updated_at: Time.current }])
     end
   end

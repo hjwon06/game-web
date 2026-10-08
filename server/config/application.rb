@@ -36,6 +36,9 @@ module GameWeb
     # config.time_zone = "Central Time (US & Canada)"
     # config.eager_load_paths << Rails.root.join("extras")
 
+    # 트리거·함수(stock_moves append-only)는 schema.rb 로 덤프되지 않는다. 구조 덤프는 SQL 로 한다.
+    config.active_record.schema_format = :sql
+
     # Don't generate system test files.
     config.generators.system_tests = nil
   end
