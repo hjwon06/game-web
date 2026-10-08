@@ -153,7 +153,8 @@ class InspectionTest < ActiveSupport::TestCase
     ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { plan(M0 + 600) }
 
     assert_equal 3, inspects.count, "세 로트 모두 5분을 넘겨 검사가 계획됐다"
-    assert_equal 1, arrival_queries.size
+    # 도착 시각식(ARRIVED_AT_SQL)을 쓰는 쿼리: 로트별 도착 조회 1회 + 작업지시별 미검사량(EPOCH 필터, ⑥d) 1회. 로트 수와 무관하게 2회다
+    assert_equal 2, arrival_queries.size
   end
 
   test "D3: 로트별 도착 시각이 따로 계산된다 — 5분 안 된 로트는 건너뛰고 지난 로트만 검사한다" do

@@ -215,14 +215,19 @@ class ShippingTest < ActiveSupport::TestCase
   end
 
   test "6d: 주문 잔량이 0 이면 load 를 계획하지 않는다" do
+    # ordered_qty 는 DB 체크(> 0)라 0 으로 만들 수 없다. 주문량만큼 다 출하해 잔량 0 을 만든다(pick 은 100, 주문 14).
     fg_stock(100)
     line = line_for("SO-T-1", 100)
     plan
     tick
-    line.update_columns(ordered_qty: 0)
+    line.update_columns(ordered_qty: 14)
+    plan
+    tick
+    assert_equal 14, shipped(line)
 
-    assert_equal 0, plan[:load]
-    assert_equal 0, loads.count
+    assert_equal 0, plan[:load], "잔량 0 — pick 해 둔 86 이 남아 있어도 load 를 더 만들지 않는다"
+    assert_equal 1, loads.count
+    assert_equal 0, loads.where(status: "cancelled").count
   end
 
   test "6d: 상차가 MAX 번 취소된 라인·로트는 더 계획하지 않고 포기 로그는 1줄만 남긴다" do

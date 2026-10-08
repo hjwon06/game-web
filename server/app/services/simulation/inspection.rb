@@ -103,9 +103,10 @@ module Simulation
     end
 
     # { 작업지시 id => EPOCH 이후 qc 로 들어온 양 - EPOCH 이후 계획된 검사 작업(취소 제외)의 양 }
-    # 원인(코드로 확정): 이전 식은 produce 합에 EPOCH 를 걸지 않았다(⑥c 가 EPOCH 를 도입하면서 이 쿼리만 빠졌다). sim:rebase 뒤에도
-    # rebase 이전에 qc 로 들어온 양 전부가 "미검사"로 남아 새로 검사됐고, ⑥ 의 예약 때문에 그 검사가 qc 재고 전량을 active 예약으로 잡아
-    # 합격분 적치가 "가용 부족"으로 반복 실패했다(그동안 qc 재고가 안 비어 같은 재고가 또 검사 대상이 됨). 두 합 모두 EPOCH 이후로 맞춘다.
+    # 원인(루미 dev 확인, 2026-10-08): 이전 식은 두 합 모두 전 기간이었다. 그런데 produce 이동은 1단계(작업 큐 이전, 01:01 UTC~)부터 있고
+    # inspect 작업은 2단계(05:56 UTC~)부터만 있다 — 1단계 검사는 작업 없이 처리됐다. 그래서 "미검사량"이 영구히 크게 남아 qc 에 있는 재고가
+    # 검사가 끝나는 대로 다시 검사 대상이 됐다(30분 검사 29,511 / 생산 2,405). Task.prune! 으로 옛 작업이 지워져도 같은 일이 생긴다.
+    # 두 합을 EPOCH 이후로 맞추고, EPOCH 는 작업 큐 도입 이후여야 한다(sim:rebase).
     def uninspected_by_order(qc, order_ids)
       epoch = Config.inventory_epoch&.utc
       moves = StockMove.where(move_type: "produce", ref_type: "WorkOrder", ref_id: order_ids, to_location_id: qc.id)
