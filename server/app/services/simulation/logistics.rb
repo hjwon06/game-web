@@ -18,14 +18,17 @@ module Simulation
     end
 
     def call
-      epoch = Config.inventory_epoch
+      epoch = Config.inventory_epoch&.utc # TimeWithZone/로컬 시각이 와도 UTC 로 맞춰 비교한다
       return @counts unless epoch
 
-      demand = catch_up(epoch)
-      materials = Product.where(id: BomLine.select(:component_id)).order(:id).to_a
-      putaway(materials)
-      replenish(materials, demand)
-      # 검사 → 출하 → 신규 수주. 한 단계가 실패해도 그 단계만 건너뛰고 다음 단계는 한다.
+      materials = []
+      demand = Hash.new(0)
+      # 모든 단계는 자기 트랜잭션(savepoint)에 감싸 한 단계의 실패(PG 오류 포함)가 뒤 단계를 막지 않게 한다.
+      # 같은 분·같은 대상의 멱등키가 이미 있으면 그 단계는 이번 분에 아무것도 하지 않는다(재계산 금지).
+      step("materials") { materials = Product.where(id: BomLine.select(:component_id)).order(:id).to_a }
+      step("backflush") { catch_up(epoch, demand) }
+      step("putaway") { putaway(materials) }
+      step("replenish") { replenish(materials, demand) }
       step("inspect") { inspect_qc(epoch) }
       step("ship") { ship_orders }
       step("order") { new_order }
@@ -35,38 +38,46 @@ module Simulation
 
     private
 
+    def savepoint(&) = ApplicationRecord.transaction(requires_new: true, &)
+
+    # 실패하면 이 단계가 올린 카운트도 롤백과 함께 되돌린다.
     def step(name)
-      yield
+      snapshot = @counts.dup
+      savepoint { yield }
     rescue StandardError => e
+      @counts.replace(snapshot)
       @logger.error("sim logistics #{name} #{@iso}: #{e.class} #{e.message}")
     end
 
-    # 한 항목의 실패가 같은 단계의 나머지를 막지 않게 한다.
+    # 한 항목의 실패가 같은 단계의 나머지를 막지 않게 한다. 항목도 savepoint 라 PG 오류가 단계 트랜잭션을 aborted 로 만들지 않는다.
     def guarded(name, target)
-      yield
+      savepoint { yield }
     rescue StandardError => e
       @logger.error("sim logistics #{name} #{target} #{@iso}: #{e.class} #{e.message}")
     end
 
     # 작업지시별 good(EPOCH 이후 production_events) - done(produce 이동) 이 양수면 그만큼 Backflush.
-    # 자재가 모자란 작업지시는 이번 분을 건너뛰고, 필요했던 자재량을 돌려줘 보충 트럭에 얹는다.
-    def catch_up(epoch)
+    # 자재가 모자란 작업지시는 이번 분을 건너뛰고, 필요했던 자재량을 demand 에 쌓아 보충 트럭에 얹는다.
+    # 이번 분 produce 키가 이미 있는 작업지시는 건드리지 않는다(남은 양은 다음 분 키로 처리된다).
+    def catch_up(epoch, demand)
       good = ProductionEvent.where(bucket_start: epoch...@minute).group(:work_order_id).sum(:good_qty)
       done = StockMove.where(move_type: "produce", ref_type: "WorkOrder", ref_id: good.keys).group(:ref_id).sum(:qty)
       orders = WorkOrder.where(id: good.keys).includes(:item).index_by(&:id)
-      demand = Hash.new(0)
+      keys = good.keys.index_with { |id| "produce:#{id}:#{@iso}" }
+      minted = StockMove.where(idempotency_key: keys.values).pluck(:idempotency_key).to_set
 
       good.sort.each do |order_id, good_qty|
+        next if minted.include?(keys.fetch(order_id))
+
         delta = good_qty.to_i - done.fetch(order_id, 0).to_i
         next unless delta.positive?
 
         backflush(orders.fetch(order_id), delta, demand)
       end
-      demand
     end
 
     def backflush(order, delta, demand)
-      Inventory::Backflush.call(work_order: order, produced_delta: delta, bucket_at: @minute)
+      savepoint { Inventory::Backflush.call(work_order: order, produced_delta: delta, bucket_at: @minute) }
       @counts[:backflush] += 1
     rescue Inventory::InsufficientStock
       BomLine.where(product_id: order.product_id).each { |bom| demand[bom.component_id] += bom.qty_per * delta }
@@ -75,18 +86,23 @@ module Simulation
       @logger.error("sim logistics backflush #{order.code} #{@iso}: #{e.class} #{e.message}")
     end
 
-    # 이번 분보다 앞서 받은 입고대 재고를 자재창고로. 이번 분에 받은 트럭분은 제외한다(같은 분 재실행 대비).
+    # 입고대 재고를 자재창고로. 이번 분에 이 자재의 적치·입고 키가 이미 있으면(같은 분 재실행) 건드리지 않는다.
+    # 입고는 적치 뒤에 도는 단계라, 이번 분 입고 키가 있다는 건 이번 분 적치를 이미 지나갔다는 뜻이다.
     def putaway(materials)
       receiving = Location.find_by!(code: "receiving")
       on_hand = Quant.where(location_id: receiving.id, lot_id: nil, product_id: materials.map(&:id)).pluck(:product_id, :qty).to_h
 
       materials.each do |product|
-        qty = on_hand.fetch(product.id, 0) - (StockMove.find_by(idempotency_key: key("receive", product))&.qty || 0)
+        next if minted?("putaway", product) || minted?("receive", product)
+
+        qty = on_hand.fetch(product.id, 0)
         next unless qty.positive?
 
-        Inventory::Move.call(product: product, lot: nil, from: "receiving", to: "raw_store", qty: qty,
-                             move_type: "putaway", ref: nil, idempotency_key: key("putaway", product))
-        @counts[:putaway] += 1
+        guarded("putaway", "product=#{product.id}") do
+          Inventory::Move.call(product: product, lot: nil, from: "receiving", to: "raw_store", qty: qty,
+                               move_type: "putaway", ref: nil, idempotency_key: key("putaway", product))
+          @counts[:putaway] += 1
+        end
       end
     end
 
@@ -99,14 +115,18 @@ module Simulation
       @counts[:est_daily_moves] = daily_rows + (materials.size * 2 * 86_400 / truck_cycle)
 
       materials.each do |product|
+        next if minted?("receive", product)
+
         backlog = demand[product.id]
         next unless on_hand.fetch(product.id, 0) < (per_second[product.id] * Config::FORECAST_SECONDS).ceil + backlog
         next if recent_truck?(product)
 
         qty = (per_second[product.id] * Config::REPLENISH_SECONDS).ceil + backlog
-        Inventory::Move.call(product: product, lot: nil, from: "supplier", to: "receiving", qty: qty,
-                             move_type: "receive", ref: nil, idempotency_key: key("receive", product))
-        @counts[:receive] += 1
+        guarded("receive", "product=#{product.id}") do
+          Inventory::Move.call(product: product, lot: nil, from: "supplier", to: "receiving", qty: qty,
+                               move_type: "receive", ref: nil, idempotency_key: key("receive", product))
+          @counts[:receive] += 1
+        end
       end
     end
 
@@ -152,6 +172,9 @@ module Simulation
         order = orders[quant.lot.lot_no]
         next unless order && order.product_id == quant.lot.product_id
 
+        inspect_key = key("inspect", order)
+        next if StockMove.exists?(idempotency_key: ["qc_pass:#{inspect_key}", "qc_fail:#{inspect_key}"]) # 이번 분 검사 끝
+
         qty = quant.qty - recent.fetch(quant.lot_id, 0)
         next unless qty.positive?
 
@@ -159,22 +182,23 @@ module Simulation
         fail_qty = total.zero? ? 0 : [(qty * defect.fetch(order.id, 0) / total).round, qty].min
         guarded("inspect", order.code) do
           Inventory::Inspect.call(lot: quant.lot, work_order: order, pass_qty: qty - fail_qty, fail_qty: fail_qty,
-                                  idempotency_key: key("inspect", order))
+                                  idempotency_key: inspect_key)
           @counts[:inspect] += 1
         end
       end
     end
 
-    # 로트별로 검사 한계 시각(이 분 - 2분) 이후에 qc 로 들어온 수량. 도착 시각은 produce 키의 분(시뮬레이션 시계)을 쓰고,
-    # 그 형식이 아니면 created_at 을 쓴다.
+    # produce 키 끝의 분 ISO(시뮬레이션 시계). 그 형식이 아니면 created_at 을 UTC ISO 로 바꿔 쓴다. 고정 폭이라 문자열 비교가 시각 비교다.
+    ARRIVED_AT_SQL = <<~'SQL'.squish.freeze
+      COALESCE(substring(idempotency_key from '\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$'),
+               to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+    SQL
+
+    # 로트별로 검사 한계 시각(이 분 - 2분) 이후에 qc 로 들어온 수량. DB 에서 로트별로 합쳐 온다.
     def recent_arrivals(qc, lot_ids)
-      cutoff = @minute - Config::QC_DWELL_SECONDS
+      cutoff = (@minute - Config::QC_DWELL_SECONDS).iso8601
       StockMove.where(move_type: "produce", to_location_id: qc.id, lot_id: lot_ids)
-               .pluck(:lot_id, :qty, :idempotency_key, :created_at)
-               .each_with_object(Hash.new(0)) do |(lot_id, qty, k, created_at), sums|
-        arrived = k[/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\z/]&.then { |iso| Time.iso8601(iso) } || created_at
-        sums[lot_id] += qty if arrived >= cutoff
-      end
+               .where("#{ARRIVED_AT_SQL} >= ?", cutoff).group(:lot_id).sum(:qty)
     end
 
     # --- C2 출하 -------------------------------------------------------------------------------
@@ -190,7 +214,7 @@ module Simulation
       done_now = SalesOrderLine.where(id: this_minute.select(:ref_id)).select(:sales_order_id)
       # 이번 분에 만든 수주(new_order 가 created_at 을 이 분으로 찍는다)는 다음 분부터 출하한다 — 같은 분 재실행이 새 수주를 당겨 출하하지 않게.
       orders = SalesOrder.where(status: %w[open partial]).or(SalesOrder.where(id: done_now))
-                         .where.not(created_at: @minute).includes(:lines).order(Arel.sql("due_date NULLS LAST"), :id)
+                         .where.not(created_at: @minute...(@minute + 60)).includes(:lines).order(Arel.sql("due_date NULLS LAST"), :id)
 
       served = 0
       orders.each do |order|
@@ -248,7 +272,7 @@ module Simulation
       @counts[:order] += 1
     end
 
-    # 같은 연월 접두사(SO-YYMM-)의 마지막 번호 + 1.
+    # 같은 연월 접두사(SO-YYMM-)의 마지막 번호 + 1. 잠금이 없다: Logistics 는 bin/sim 단일 프로세스에서만 돈다는 전제.
     def next_so_no
       prefix = "SO-#{@minute.strftime('%y%m')}-"
       last = SalesOrder.where("so_no LIKE ?", "#{prefix}%").pluck(:so_no)
@@ -257,5 +281,7 @@ module Simulation
     end
 
     def key(kind, product) = "sim:#{kind}:#{product.id}:#{@iso}"
+
+    def minted?(kind, product) = StockMove.exists?(idempotency_key: key(kind, product))
   end
 end

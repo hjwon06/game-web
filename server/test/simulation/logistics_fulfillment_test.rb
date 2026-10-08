@@ -215,6 +215,60 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
     assert_equal 1, @log.string.lines.grep(/sim logistics ship .*단계 실패/).size
   end
 
+  test "catch_up 이 터져도 입고·검사·출하·수주는 실행된다" do
+    event(90, 10)
+    produce_to_qc(100, M0 - 300)
+    sales_order("SO-T-1", Date.new(2026, 10, 1), 10)
+
+    original = Simulation::Logistics.instance_method(:catch_up)
+    Simulation::Logistics.send(:define_method, :catch_up) { |*| raise "catch_up 실패" }
+    begin
+      result = run_minute(0)
+    ensure
+      Simulation::Logistics.send(:define_method, :catch_up, original)
+    end
+
+    assert_equal [1, 1, 1], [result[:inspect], result[:ship], result[:order]]
+    assert_equal 1, @log.string.lines.grep(/sim logistics backflush .*catch_up 실패/).size
+  end
+
+  test "한 단계의 PG 오류는 그 단계만 되돌리고 다음 단계는 정상이다" do
+    event(90, 10)
+    produce_to_qc(100, M0 - 300)
+
+    original = Simulation::Logistics.instance_method(:ship_orders)
+    Simulation::Logistics.send(:define_method, :ship_orders) do
+      Quant.insert_all([{ product_id: -1, location_id: -1, qty: 1 }]) # 없는 FK → PG 오류, 트랜잭션 aborted
+    end
+    begin
+      result = run_minute(0)
+    ensure
+      Simulation::Logistics.send(:define_method, :ship_orders, original)
+    end
+
+    assert_equal 1, result[:inspect], "앞 단계 결과는 남는다"
+    assert_equal 90, qty_at("fg_store") # 100 중 불량률 10% 는 scrap
+    assert_equal 1, result[:order], "뒤 단계는 aborted 트랜잭션에 걸리지 않는다"
+    assert_equal 1, SalesOrder.count
+    assert_equal 1, @log.string.lines.grep(/sim logistics ship .*ForeignKey/).size
+    assert_equal 1, @log.string.lines.grep(/ERROR/).size
+  end
+
+  test "같은 분 재실행 사이에 qc 재고가 늘어도 검사는 이번 분에 다시 하지 않는다" do
+    event(50, 0)
+    produce_to_qc(50, M0 - 300)
+    assert_equal 1, run_minute(0)[:inspect]
+
+    produce_to_qc(7, M0 - 240) # 2분을 넘긴 도착분이 같은 분 안에 추가됐다
+    before = StockMove.count
+    assert_equal 0, run_minute(0)[:inspect]
+    assert_equal before, StockMove.count
+    assert_equal [], @log.string.lines.grep(/ERROR|IdempotencyConflict/)
+
+    assert_equal 1, run_minute(1)[:inspect]
+    assert_equal 57, StockMove.where(move_type: "qc_pass").sum(:qty)
+  end
+
   test "이어서 돌려도 물리 위치가 마이너스가 되지 않고 Reconcile 이 0 이다" do
     event(90, 10)
     produce_to_qc(100, M0 - 300)

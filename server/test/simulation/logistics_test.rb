@@ -95,6 +95,33 @@ class LogisticsTest < ActiveSupport::TestCase
     assert_equal 0, again[:backflush]
   end
 
+  test "같은 분 재실행 사이에 생산·입고 재고가 늘어도 예외 없이 이동이 늘지 않고, 남은 수량은 다음 분에 처리된다" do
+    stock(@steel, 10_000)
+    stock(@bolt, 10_000)
+    Inventory::Move.call(product: @bolt, lot: nil, from: "supplier", to: "receiving", qty: 100, move_type: "receive",
+                         ref: nil, idempotency_key: "test-recv-extra-1")
+    event(M0 - 20, 30)
+    run_minute(0)
+    assert_equal 100, sim_moves("putaway").sum(:qty)
+    assert_equal [30], moves("produce").pluck(:qty).map(&:to_i)
+
+    event(M0 - 10, 10) # 같은 분 안에 생산이 늘고
+    Inventory::Move.call(product: @bolt, lot: nil, from: "supplier", to: "receiving", qty: 50, move_type: "receive",
+                         ref: nil, idempotency_key: "test-recv-extra-2") # 입고대 재고도 늘었다
+    before = StockMove.count
+    again = run_minute(0)
+
+    assert_equal [], @log.string.lines.grep(/ERROR|IdempotencyConflict/)
+    assert_equal before, StockMove.count
+    assert_equal [0, 0], [again[:backflush], again[:putaway]]
+
+    b = run_minute(1)
+    assert_equal [1, 1], [b[:backflush], b[:putaway]]
+    assert_equal [30, 10], moves("produce").order(:id).pluck(:qty).map(&:to_i)
+    assert_equal 150, sim_moves("putaway").sum(:qty)
+    assert_equal 0, @log.string.lines.grep(/IdempotencyConflict/).size
+  end
+
   test "다음 분에는 새로 생긴 생산분만 소비한다" do
     stock(@steel, 1000)
     stock(@bolt, 1000)
