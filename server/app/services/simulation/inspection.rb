@@ -112,7 +112,8 @@ module Simulation
       moves = StockMove.where(move_type: "produce", ref_type: "WorkOrder", ref_id: order_ids, to_location_id: qc.id)
       moves = moves.where("(#{ARRIVED_AT_SQL}) >= ?", epoch.iso8601) if epoch
       produced = moves.group(:ref_id).sum(:qty)
-      ledger = Inspection.where(work_order_id: order_ids)
+      # ::Inspection — 이 클래스 안의 맨 이름 Inspection 은 Simulation::Inspection 자신이라 모델이 아니다.
+      ledger = ::Inspection.where(work_order_id: order_ids)
       ledger = ledger.where(inspected_at: epoch..) if epoch
       inspected = ledger.group(:work_order_id).sum(:qty)
       open = Task.where(kind: "inspect", ref_type: "WorkOrder", ref_id: order_ids, status: %w[planned started])
@@ -131,7 +132,7 @@ module Simulation
 
       moves = Task.where(kind: "putaway", ref_type: "Task", ref_id: done.map(&:id), status: "done").where.not(stock_move_id: nil)
                   .pluck(:ref_id, :stock_move_id)
-      recorded = Inspection.where(stock_move_id: moves.map(&:last), result: "pass").pluck(:stock_move_id, :qty).to_h
+      recorded = ::Inspection.where(stock_move_id: moves.map(&:last), result: "pass").pluck(:stock_move_id, :qty).to_h
       landed = moves.group_by(&:first).transform_values { |rows| rows.sum { |_, move_id| recorded.fetch(move_id, 0) } }
       done.each_with_object(Hash.new(0)) do |task, sums|
         left = task.qty - (task.stock_move&.qty || 0) - landed.fetch(task.id, 0)

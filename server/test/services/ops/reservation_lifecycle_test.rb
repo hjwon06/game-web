@@ -79,8 +79,9 @@ class Ops::ReservationLifecycleTest < ActiveSupport::TestCase
     stock(500)
     task = plan_feed(400)
     # 계획 뒤에 이 계획을 거치지 않은 이동이 재고를 가져갔다(계획 시점 검증은 통과했다).
-    Inventory::Move.call(product: @steel, lot: nil, from: BIN, to: "line_side", qty: 200, move_type: "feed",
-                         ref: nil, idempotency_key: "rl-steal")
+    # 8c: 8b K1 이 예약 밖 이동(Inventory::Move)을 막으므로(보유 500 - 다른 작업 예약 400 / 요청 200) 이동으로는 이 상황을 못 만든다.
+    # 재고가 장부 밖에서 줄어든 상태(실사 차이·외부 수정)를 수량만 직접 깎아 만든다.
+    Quant.where(product: @steel, location: Location.find_by!(code: BIN)).update_all("qty = qty - 200")
     assert_nil available, "예약 400 이 남은 재고 300 을 넘어 가용이 없다"
 
     Ops::Tick.call(now: task.planned_at)
@@ -90,7 +91,7 @@ class Ops::ReservationLifecycleTest < ActiveSupport::TestCase
     assert_match(/InsufficientStock/, task.cancel_reason)
     assert_equal "released", reservation_of(task).status
     assert_equal 300, available
-    assert_equal 0, StockMove.where(move_type: "feed", ref_type: "Task").count, "작업이 만든 feed 이동은 없다(수동 이동 1건만 있다)"
+    assert_equal 0, StockMove.where(move_type: "feed", ref_type: "Task").count, "작업이 만든 feed 이동은 없다"
   end
 
   test "계획 시점에 가용(현재고 - active 예약)이 모자라면 InsufficientStock 이고 작업·예약이 남지 않는다" do

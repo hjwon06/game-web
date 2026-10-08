@@ -197,13 +197,15 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
 
   test "Plan 이 만든 작업의 예약은 완료 때 consumed, 취소 때 released 이고 다른 작업의 예약은 그대로다" do
     stock_receiving(100)
-    ok = plan_putaway(qty: 60, stock: false)
-    short = plan_putaway(qty: 35, stock: false)
+    short = plan_putaway(qty: 60, stock: false) # 먼저 끝나려는 작업. 아래에서 재고가 모자라게 되어 이쪽이 취소된다
+    ok = plan_putaway(qty: 35, stock: false)
     still = plan_putaway(qty: 5, earliest_at: @t0 + 1.day, stock: false)
     assert_equal %w[active active active], Reservation.order(:task_id).pluck(:status)
-    # 계획을 통과한 뒤 다른 경로가 입고대 재고 20 을 가져갔다: ok(60) 뒤에 남는 20 으로는 short(35)가 완료되지 못한다.
-    Inventory::Move.call(product: @product, lot: nil, from: "receiving", to: "RAW-A-01-02", qty: 20, move_type: "putaway",
-                         ref: nil, idempotency_key: "ops-steal")
+    assert_equal [@fork1.id, @fork2.id], [short.resource_id, ok.resource_id], "Tick 이 자원 id 순이라 short 가 먼저 끝난다"
+    # 계획을 통과한 뒤 입고대 재고 20 이 장부 밖에서 줄었다(수량만 직접 깎는다 — 8b K1 이 예약 밖 이동은 막는다).
+    # 예약 합 100 > 재고 80 이라 먼저 끝나려는 short(60)는 가용(80 - 다른 작업 예약 40)이 모자라 취소되고,
+    # 그 예약이 풀린 뒤 ok(35)는 가용(80 - 5)이 충분해 끝난다.
+    Quant.where(product: @product, location: Location.find_by!(code: "receiving")).update_all("qty = qty - 20")
 
     r = drain(@t0 + 1.hour)
 

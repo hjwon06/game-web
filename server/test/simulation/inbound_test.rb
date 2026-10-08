@@ -543,8 +543,11 @@ class InboundTest < ActiveSupport::TestCase
     assert_equal ["RAW-S"], ordered_skus
     assert_equal 2, ordered_pallets, "6팔레트를 원했지만 빈 칸이 2개"
 
+    # 8c: 8b K5 가 칸 여유를 자재별로 세게 바꿨다 — 강판의 하차 계획분은 볼트의 빈 칸을 깎지 않는다. 그래서 "빈 칸이 없다"는 상황은
+    # 칸 자체가 다 찬 것으로 만든다(남은 2칸에 강판이 실제로 들어 있다). 강판은 열린 발주가 있어 후보가 아니고, 볼트는 빈 칸 0 이다.
+    codes.last(2).each { |code| seed_bin(@steel, code, P) }
     due!(NOW + 600)
-    again = inbound(NOW + 600) # 도착한 발주의 하차 계획분 2팔레트가 남은 칸 2개를 이미 차지한다
+    again = inbound(NOW + 600)
 
     assert_equal 0, again[:orders]
     assert_equal 1, PurchaseOrder.count
