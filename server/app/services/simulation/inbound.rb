@@ -210,14 +210,8 @@ module Simulation
       return if waiting.empty?
 
       stuck = 0
-      deferred = 0
       waiting.each do |unload|
-        # 진입 제한: 지게차 대기열이 길면 새 적치를 만들지 않고 다음 호출로 미룬다(feed 가 먼저 지게차를 받게 한다). 미룬 팔레트는 waiting_unloads 가 다시 찾는다.
-        unless Ops::Plan.forklift_admit?(now: @now)
-          deferred = waiting.size - @counts[:putaway] - stuck
-          break
-        end
-
+        # 원자재 적치는 지게차 진입 제한을 묻지 않는다(우선순위 feed > 원자재 적치 > 완제품 적치 = pick). 제한은 Inspection·Shipping 만 건다.
         # 칸은 적치 규칙(Ops::Putaway)이 고른다. 방금 계획한 적치도 DB 에 있어 다음 팔레트의 칸 계산에 들어간다.
         bin = Ops::Putaway.choose(product: unload.product, qty: unload.qty)
         unless bin
@@ -231,9 +225,6 @@ module Simulation
       end
       @counts[:waiting] = stuck
       @logger.warn("sim inbound #{@now.iso8601} 적치할 칸이 없어 receiving 에 #{stuck}팔레트 대기") if stuck.positive?
-      return unless deferred.positive?
-
-      @logger.info("sim inbound #{@now.iso8601} 지게차 대기 #{Ops::Plan.queue_seconds('forklift', now: @now).round}초 > #{Config::FORKLIFT_ADMIT_SECONDS}초라 적치 #{deferred}팔레트 보류")
     end
 
     def waiting_unloads

@@ -1,8 +1,8 @@
 require "test_helper"
 require "stringio"
 
-# 지게차 진입 제한: 대기열(가장 빨리 비는 지게차까지 남은 초)이 FORKLIFT_ADMIT_SECONDS 를 넘으면 pick·putaway 는 새 작업을 만들지 않고,
-# feed 는 만든다. 큐가 비면 다시 만든다.
+# 지게차 진입 제한: 대기열(가장 빨리 비는 지게차까지 남은 초)이 FORKLIFT_ADMIT_SECONDS 를 넘으면 pick·완제품 적치(Inspection)는 새 작업을 만들지 않고,
+# feed 와 원자재 적치(Inbound)는 만든다. 큐가 비면 다시 만든다. 우선순위: feed > 원자재 적치 > 완제품 적치 = pick.
 class ForkliftAdmitTest < ActiveSupport::TestCase
   Config = Simulation::Config
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
@@ -64,6 +64,14 @@ class ForkliftAdmitTest < ActiveSupport::TestCase
                  planned_at: Time.current - 60, started_at: Time.current - 60, expected_finish_at: Time.current - 30, finished_at: Time.current - 30)
   end
 
+  # @steel 을 쓰는 running 기계 1대 + active 작업지시. line_side 와 raw 칸은 비어 있다.
+  def receiving_machine_setup
+    machine = Machine.create!(code: "M1", name: "절단기", state: "running")
+    fg = Product.create!(sku: "FG-AD3", name: "완제품", uom: "ea", kind: "fg")
+    BomLine.create!(product: fg, component: @steel, qty_per: 1)
+    WorkOrder.create!(code: "WO-AD3", machine: machine, item: fg, product: "완제품", target_qty: 100_000, status: "active", started_at: M0)
+  end
+
   test "queue_seconds: 일이 없으면 0, 모든 지게차에 일이 걸려 있으면 가장 빨리 비는 쪽까지의 초" do
     assert_equal 0, Ops::Plan.queue_seconds("forklift")
 
@@ -102,20 +110,41 @@ class ForkliftAdmitTest < ActiveSupport::TestCase
     assert_operator Ops::Plan.queue_seconds("forklift", now: M0), :<=, Config::FORKLIFT_ADMIT_SECONDS + 50
   end
 
-  test "큐가 길면 원자재 putaway 도 만들지 않고, 큐가 비면 만든다" do
-    # 적치 규칙이 없으면 칸을 못 골라 큐와 무관하게 0 이다(InboundTest setup 과 같은 공용 규칙).
+  test "큐가 길어도 원자재 putaway 는 계획된다(원자재 공급이 먼저)" do
+    # 적치 규칙이 없으면 칸을 못 골라 0 이다(InboundTest setup 과 같은 공용 규칙).
     PutawayRule.create!(product: nil, location: Location.find_by!(code: "raw_store"), priority: 100)
     done_unload
-    fill_forklifts(Config::FORKLIFT_ADMIT_SECONDS + 120)
+    fill_forklifts(Config::FORKLIFT_ADMIT_SECONDS + 120, base: M0)
 
-    result = Simulation::Inbound.new(now: Time.current, logger: logger).send(:plan_putaways)
+    Simulation::Inbound.new(now: M0, logger: logger).send(:plan_putaways)
 
-    assert_equal 0, Task.where(kind: "putaway").count
-    assert_equal 1, @log.string.lines.grep(/지게차 대기 .* 적치 1팔레트 보류/).size, result.inspect
-
-    clear_forklifts
-    Simulation::Inbound.new(now: Time.current, logger: logger).send(:plan_putaways)
     assert_equal 1, Task.where(kind: "putaway").count
+    assert_empty @log.string.lines.grep(/보류/)
+  end
+
+  test "칸 0 · 입고대 500 이면 feed 는 입고대에서 계획된다(크로스도킹)" do
+    receiving_machine_setup
+    Inventory::Move.call(product: @steel, lot: nil, from: "supplier", to: "receiving", qty: 500, move_type: "receive",
+                         ref: nil, idempotency_key: "ad-cross-recv")
+
+    result = Simulation::LineFeed.call(now: M0, logger: logger)
+
+    assert_equal 1, result[:feed]
+    feed = Task.find_by!(kind: "feed")
+    assert_equal "receiving", feed.from_location.code
+  end
+
+  test "입고대 팔레트가 적치 예약 중이면 feed 대상이 아니다" do
+    receiving_machine_setup
+    PutawayRule.create!(product: nil, location: Location.find_by!(code: "raw_store"), priority: 100)
+    done_unload
+    Simulation::Inbound.new(now: M0, logger: logger).send(:plan_putaways)
+    assert_equal 1, Task.where(kind: "putaway").count
+
+    result = Simulation::LineFeed.call(now: M0, logger: logger)
+
+    assert_equal 0, result[:feed]
+    assert_equal 1, result[:waiting]
   end
 
   test "큐가 길어도 feed 는 계획된다" do

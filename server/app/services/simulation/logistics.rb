@@ -152,13 +152,22 @@ module Simulation
 
           machine.update_columns(material_short_since: @minute)
           @logger.info("sim logistics #{@iso} #{machine.code} 자재 대기 시작: #{lacking[:line].component.sku} line_side " \
-                       "#{BigDecimal(lacking[:have].to_s).to_s('F')} / 다음 #{Config::MATERIAL_SHORT_CHECK_SECONDS}초 필요 #{lacking[:need].round(1)}")
+                       "#{BigDecimal(lacking[:have].to_s).to_s('F')} / 다음 #{Config::MATERIAL_SHORT_CHECK_SECONDS}초 필요 #{lacking[:need].round(1)} " \
+                       "#{supply_note(lacking[:line].component_id)}")
         elsif machine.material_short_since
           minutes = ((@minute - machine.material_short_since) / 60).floor
           machine.update_columns(material_short_since: nil)
           @logger.info("sim logistics #{@iso} #{machine.code} 자재 대기 해제 (#{minutes}분)")
         end
       end
+    end
+
+    # 자재 대기 원인 추적용: 이 자재가 raw 칸 / 입고대 / 하차 예정(아직 입고대에 닿지 않음)에 얼마나 있는지.
+    def supply_note(product_id)
+      bins = Quant.where(product_id: product_id, location_id: Inbound.bins_under("raw_store").select(:id)).sum(:qty)
+      receiving = Quant.where(product_id: product_id, location_id: Location.where(code: "receiving").select(:id)).sum(:qty)
+      unloading = Task.where(kind: "unload", status: %w[planned started], product_id: product_id).sum(:qty)
+      "(칸 #{bins.to_f.round(1)} / 입고대 #{receiving.to_f.round(1)} / 하차 예정 #{unloading.to_f.round(1)})"
     end
 
     # 이 기계가 다음 구간에 못 대는 자재 [{ line:, have:, need: }]. 다 대면 nil.
