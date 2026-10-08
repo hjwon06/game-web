@@ -7,14 +7,14 @@ module Simulation
   # 순서: 소비 → 적치 → 보충. 그래서 트럭이 온 분에는 소비가 막혀 있고, 다음 분에 적치되고,
   # 그다음 분부터 소비가 다시 된다.
   class Logistics
-    # 반환: { backflush:, skipped:, putaway:, receive:, est_daily_moves: } (이번 호출에서 실제로 한 일)
+    # 반환: { backflush:, skipped:, putaway:, receive:, est_daily_moves:, inspect:, ship:, order: } (이번 호출에서 실제로 한 일)
     def self.call(now:, logger: Rails.logger) = new(now: now, logger: logger).call
 
     def initialize(now:, logger:)
       @minute = now.utc.beginning_of_minute
       @iso = @minute.iso8601
       @logger = logger
-      @counts = { backflush: 0, skipped: 0, putaway: 0, receive: 0, est_daily_moves: 0 }
+      @counts = { backflush: 0, skipped: 0, putaway: 0, receive: 0, est_daily_moves: 0, inspect: 0, ship: 0, order: 0 }
     end
 
     def call
@@ -25,11 +25,28 @@ module Simulation
       materials = Product.where(id: BomLine.select(:component_id)).order(:id).to_a
       putaway(materials)
       replenish(materials, demand)
+      # 검사 → 출하 → 신규 수주. 한 단계가 실패해도 그 단계만 건너뛰고 다음 단계는 한다.
+      step("inspect") { inspect_qc(epoch) }
+      step("ship") { ship_orders }
+      step("order") { new_order }
       @logger.info("sim logistics #{@iso} #{@counts.map { |k, v| "#{k}=#{v}" }.join(' ')}")
       @counts
     end
 
     private
+
+    def step(name)
+      yield
+    rescue StandardError => e
+      @logger.error("sim logistics #{name} #{@iso}: #{e.class} #{e.message}")
+    end
+
+    # 한 항목의 실패가 같은 단계의 나머지를 막지 않게 한다.
+    def guarded(name, target)
+      yield
+    rescue StandardError => e
+      @logger.error("sim logistics #{name} #{target} #{@iso}: #{e.class} #{e.message}")
+    end
 
     # 작업지시별 good(EPOCH 이후 production_events) - done(produce 이동) 이 양수면 그만큼 Backflush.
     # 자재가 모자란 작업지시는 이번 분을 건너뛰고, 필요했던 자재량을 돌려줘 보충 트럭에 얹는다.
@@ -114,6 +131,128 @@ module Simulation
         rows_per_minute += lines.size + 1
       end
       [per_second, rows_per_minute * 1440]
+    end
+
+    # --- C1 검사 -------------------------------------------------------------------------------
+
+    # qc 에 2분 넘게 머문 로트 재고를 작업지시(로트 번호 = 작업지시 코드)별로 1번 검사한다.
+    # 불량률은 그 작업지시의 EPOCH 이후 production_events 합계(defect / (good + defect)).
+    def inspect_qc(epoch)
+      qc = Location.find_by!(code: "qc")
+      quants = Quant.where(location_id: qc.id).where.not(lot_id: nil).where("qty > 0").includes(:lot).order(:lot_id).to_a
+      return if quants.empty?
+
+      orders = WorkOrder.where(code: quants.map { |q| q.lot.lot_no }).index_by(&:code)
+      recent = recent_arrivals(qc, quants.map(&:lot_id))
+      events = ProductionEvent.where(work_order_id: orders.values.map(&:id), bucket_start: epoch..).group(:work_order_id)
+      good = events.sum(:good_qty)
+      defect = events.sum(:defect_qty)
+
+      quants.each do |quant|
+        order = orders[quant.lot.lot_no]
+        next unless order && order.product_id == quant.lot.product_id
+
+        qty = quant.qty - recent.fetch(quant.lot_id, 0)
+        next unless qty.positive?
+
+        total = good.fetch(order.id, 0) + defect.fetch(order.id, 0)
+        fail_qty = total.zero? ? 0 : [(qty * defect.fetch(order.id, 0) / total).round, qty].min
+        guarded("inspect", order.code) do
+          Inventory::Inspect.call(lot: quant.lot, work_order: order, pass_qty: qty - fail_qty, fail_qty: fail_qty,
+                                  idempotency_key: key("inspect", order))
+          @counts[:inspect] += 1
+        end
+      end
+    end
+
+    # 로트별로 검사 한계 시각(이 분 - 2분) 이후에 qc 로 들어온 수량. 도착 시각은 produce 키의 분(시뮬레이션 시계)을 쓰고,
+    # 그 형식이 아니면 created_at 을 쓴다.
+    def recent_arrivals(qc, lot_ids)
+      cutoff = @minute - Config::QC_DWELL_SECONDS
+      StockMove.where(move_type: "produce", to_location_id: qc.id, lot_id: lot_ids)
+               .pluck(:lot_id, :qty, :idempotency_key, :created_at)
+               .each_with_object(Hash.new(0)) do |(lot_id, qty, k, created_at), sums|
+        arrived = k[/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\z/]&.then { |iso| Time.iso8601(iso) } || created_at
+        sums[lot_id] += qty if arrived >= cutoff
+      end
+    end
+
+    # --- C2 출하 -------------------------------------------------------------------------------
+
+    # 납기 빠른 순으로 수주 3건까지, 라인마다 fg_store 의 가장 오래된 로트에서 가능한 만큼(부분 출하).
+    # 이번 분에 이미 출하한 수주는 done 이 됐어도 후보에 남겨 같은 분 재실행이 4번째 수주로 번지지 않게 한다.
+    def ship_orders
+      fg_store = Location.find_by!(code: "fg_store")
+      stock = Quant.where(location_id: fg_store.id).where.not(lot_id: nil).where("qty > 0").order(:lot_id)
+                   .pluck(:product_id, :lot_id, :qty).group_by(&:first)
+                   .transform_values { |rows| rows.map { |_, lot_id, qty| [lot_id, qty] } }
+      this_minute = StockMove.where(move_type: "ship").where("idempotency_key LIKE ?", "sim:ship:%:#{@iso}")
+      done_now = SalesOrderLine.where(id: this_minute.select(:ref_id)).select(:sales_order_id)
+      orders = SalesOrder.where(status: %w[open partial]).or(SalesOrder.where(id: done_now))
+                         .includes(:lines).order(Arel.sql("due_date NULLS LAST"), :id)
+
+      served = 0
+      orders.each do |order|
+        break if served >= Config::SHIP_ORDERS_PER_MINUTE
+
+        shipped = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: order.lines.map(&:id))
+                           .group(:ref_id).sum(:qty)
+        shipped_any = false
+        order.lines.sort_by(&:id).each do |line|
+          line_key = "sim:ship:#{line.id}:#{@iso}"
+          if StockMove.exists?(idempotency_key: line_key)
+            shipped_any = true
+            next
+          end
+          remaining = line.ordered_qty - shipped.fetch(line.id, 0)
+          slot = (stock[line.product_id] || []).find { |_, q| q.positive? }
+          next unless remaining.positive? && slot
+
+          qty = [remaining, slot[1]].min
+          guarded("ship", "line=#{line.id}") do
+            Inventory::Ship.call(sales_order_line: line, lot: Lot.find(slot[0]), qty: qty, idempotency_key: line_key)
+            slot[1] -= qty
+            @counts[:ship] += 1
+            shipped_any = true
+          end
+        end
+        served += 1 if shipped_any
+      end
+    end
+
+    # --- C3 신규 수주 --------------------------------------------------------------------------
+
+    # 10분에 1건. 수주의 created_at 을 이 분으로 찍어 두고 "최근 10분 안에 수주가 있나"로 판단한다
+    # (같은 분 재실행도 같은 검사로 막힌다).
+    def new_order
+      window = @minute - Config::NEW_ORDER_INTERVAL_SECONDS
+      return if SalesOrder.where("created_at > ? AND created_at <= ?", window, @minute).exists?
+
+      active = WorkOrder.where(status: "active").includes(:machine).to_a
+      return if active.empty?
+
+      rng = Random.new(Config::SEED + (@minute.to_i / 60))
+      hourly = active.group_by(&:product_id).transform_values do |list|
+        list.sum { |wo| Config.rate(wo.machine.code) * (1 - Config.defect_rate(wo.machine.code)) * 3600 }
+      end
+      product_ids = hourly.keys.sort.sample(rng.rand(1..2), random: rng)
+
+      SalesOrder.transaction do
+        order = SalesOrder.create!(so_no: next_so_no, customer: Config::CUSTOMERS[SalesOrder.count % Config::CUSTOMERS.size],
+                                   due_date: (@minute + rng.rand(1..3).days).to_date, status: "open", created_at: @minute)
+        product_ids.each do |product_id|
+          order.lines.create!(product_id: product_id, ordered_qty: [(hourly[product_id] * rng.rand(0.5..2.0)).round, 1].max)
+        end
+      end
+      @counts[:order] += 1
+    end
+
+    # 같은 연월 접두사(SO-YYMM-)의 마지막 번호 + 1.
+    def next_so_no
+      prefix = "SO-#{@minute.strftime('%y%m')}-"
+      last = SalesOrder.where("so_no LIKE ?", "#{prefix}%").pluck(:so_no)
+                       .filter_map { |n| n.delete_prefix(prefix)[/\A\d+\z/]&.to_i }.max || 0
+      format("%s%03d", prefix, last + 1)
     end
 
     def key(kind, product) = "sim:#{kind}:#{product.id}:#{@iso}"

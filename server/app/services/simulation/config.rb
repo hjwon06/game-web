@@ -26,6 +26,12 @@ module Simulation
     REPLENISH_SECONDS = 1800     # 트럭 1대의 보충량 = 이만큼의 예상 소비량
     TRUCK_INTERVAL_SECONDS = 300 # 같은 자재 트럭 간격
 
+    # 검사·출하·신규 수주 숫자.
+    QC_DWELL_SECONDS = 120        # qc 에 이만큼 넘게 머문 재고만 검사한다
+    SHIP_ORDERS_PER_MINUTE = 3
+    NEW_ORDER_INTERVAL_SECONDS = 600
+    CUSTOMERS = %w[한빛정공 대성기계 서진산업 미래오토].freeze # 시드 수주의 고객명. 순환해서 쓴다
+
     # 이 시각 이전 생산은 재고로 소급하지 않는다. ENV 우선, 없으면 locations 첫 생성 시각. 둘 다 없으면 nil.
     def self.inventory_epoch
       raw = ENV["INVENTORY_EPOCH"].presence
