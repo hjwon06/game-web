@@ -192,7 +192,14 @@ export function createUi({ zoomIn, zoomOut, home }) {
     const st = Object.fromEntries((sh.stages || []).map(s => [s.key, s]));
     const at = Object.fromEntries(STAGES.map(([k]) => [k, st[k] && st[k].at]));
     const curIdx = STAGES.findIndex(([k]) => !at[k]); // 현재 단계 = 첫 미도달 단계
-    ol.replaceChildren(...STAGES.map(([k, name], i) => {
+    const before = Number(sh.cutover && sh.cutover.shipped_before); // 단계가 아니라 참고 칸 — curIdx·aria-current 에 넣지 않는다
+    const pre = before > 0 ? (() => {
+      const li = el('li', 'pre');
+      li.title = '수주별 할당 도입 전에 나간 수량 — 아래 단계 계산에서 뺐습니다';
+      li.append(el('span', null, '전환 전 출하'), el('span', 't num', fmt(before)));
+      return li;
+    })() : null;
+    ol.replaceChildren(...(pre ? [pre] : []), ...STAGES.map(([k, name], i) => {
       const li = el('li', at[k] ? 'done' : i === curIdx ? 'cur' : '');
       const pg = st[k] && st[k].progress, run = !at[k] && pg && Number(pg.done) > 0; // 도달 전이라도 누적 수량이 있으면 진행 중
       li.append(el('span', null, name), el('span', 't num', at[k] ? hhmm(at[k]) || '-' : run ? `${fmt(pg.done)} / ${fmt(pg.total)}` : '-'));
