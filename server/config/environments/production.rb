@@ -43,8 +43,8 @@ Rails.application.configure do
   # Don't log any deprecations.
   config.active_support.report_deprecations = false
 
-  # Replace the default in-process memory cache store with a durable alternative.
-  # config.cache_store = :mem_cache_store
+  # ops 응답 1초 공유 캐시용 프로세스 내 저장소(프로세스마다 따로지만 값은 1초 단위 계산이라 같다).
+  config.cache_store = :memory_store, { size: 32.megabytes }
 
   # Replace the default in-process and non-durable queuing backend for Active Job.
   # config.active_job.queue_adapter = :resque

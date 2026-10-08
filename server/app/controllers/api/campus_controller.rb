@@ -14,6 +14,8 @@ module Api
     TASKS_RECENT_DONE = 20
     WORKER_HOME_BUILDING = "hall".freeze # home 위치가 없는 작업자의 기본 건물(가정)
     BIN_ZONE = { "raw_store" => "raw", "fg_store" => "fg" }.freeze
+    OPS_CACHE_TTL = 2.seconds
+    OPS_SO_MAX = 40
     SIM_NOTE = "수주 고객명은 시드 데이터이며, 입고·생산·검사·출하는 시뮬레이터가 만든다.".freeze
 
     # 시간 창이 밀리므로 ETag 는 본문 해시다. last_seq·last_move_id·resources·bins 가 모두 본문에 있어 바뀌면 달라진다.
@@ -61,8 +63,17 @@ module Api
                resources: resources_payload(building_of),
                sim_note: SIM_NOTE }
       body[:bins] = bins_payload(rows) if includes.include?("bins")
-      body[:ops] = ::Campus::OpsCards.call(now: now, rows: rows, so_no: params[:so]) if includes.include?("ops")
+      body[:ops] = ops_cards(now, rows) if includes.include?("ops")
       body
+    end
+
+    # ops 계산은 1초 단위로 공유한다(시뮬은 10초 단위로 움직여 화면 정확도는 같다). so 가 다르면 키가 다르다.
+    # search 는 별도 컨트롤러라 캐시하지 않는다. ETag 는 이 결과가 들어간 본문 해시라 그대로다.
+    def ops_cards(now, rows)
+      so_no = params[:so].to_s.strip[0, OPS_SO_MAX].presence # OpsCards 와 같은 정규화: 공백·긴 값이 키를 늘리지 않게
+      Rails.cache.fetch(["campus_ops", so_no, now.to_i], expires_in: OPS_CACHE_TTL) do
+        ::Campus::OpsCards.call(now: now, rows: rows, so_no: so_no)
+      end
     end
 
     # 쿼리 1: 증분이면 seq > after_seq 최대 100건. 첫 진입이면 진행 중 전부 + 최근 완료 20건(취소는 복원 대상이 아니다).
