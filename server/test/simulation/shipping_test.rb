@@ -263,10 +263,10 @@ class ShippingTest < ActiveSupport::TestCase
     b = line_for("SO-T-B", 100, due: Date.new(2026, 10, 10))
     plan
     tick
-    assert_equal [200, 100], picks.group(:ref_id).order(:ref_id).sum(:qty).values.map(&:to_i)
+    assert_equal [200, 100], picks.reorder(:ref_id).group(:ref_id).sum(:qty).values.map(&:to_i)
 
     plan
-    assert_equal({ a.id => 200, b.id => 100 }, loads.group(:ref_id).sum(:qty).transform_values(&:to_i), "각자 피킹한 만큼만")
+    assert_equal({ a.id => 200, b.id => 100 }, loads.reorder(nil).group(:ref_id).sum(:qty).transform_values(&:to_i), "각자 피킹한 만큼만")
     assert_equal 0, plan[:load], "열린 load 분은 가능량에서 빠진다"
 
     tick
