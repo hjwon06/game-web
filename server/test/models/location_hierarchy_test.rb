@@ -1,12 +1,13 @@
 require "test_helper"
 
 class LocationHierarchyTest < ActiveSupport::TestCase
-  test "칸 48개·랙 8개·구역 2개가 시드되고 기본 위치 10개(line_side 포함)는 그대로다" do
+  test "칸 48개·랙 8개·구역 2개가 시드되고 기본 위치 11개(line_side, inventory_loss 포함)는 그대로다" do
     assert_equal 48, Location.where(level: "bin").count
     assert_equal 8, Location.where(level: "rack").count
     assert_equal 2, Location.where(level: "zone").count
-    assert_equal 68, Location.count # 10 + 2 + 8 + 48
+    assert_equal 69, Location.count # 11 + 2 + 8 + 48
     assert Location.exists?(code: "line_side"), "line_side 가 시드돼야 한다"
+    assert_equal ["virtual", nil], Location.where(code: "inventory_loss").pick(:kind, :capacity_units)
     assert_equal 24, Location.where(level: "bin", parent: Location.where(level: "rack", parent: Location.find_by!(code: "RAW-A"))).count
     assert_equal 24, Location.where(level: "bin", parent: Location.where(level: "rack", parent: Location.find_by!(code: "FG-A"))).count
 

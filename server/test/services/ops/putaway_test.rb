@@ -93,6 +93,9 @@ class Ops::PutawayTest < ActiveSupport::TestCase
   test "이미 계획된 적치도 칸 용량과 품목으로 센다" do
     PutawayRule.create!(product: nil, location: Location.find_by!(code: "RAW-A-01"), priority: 50)
     lot = Lot.create!(product: @steel, lot_no: "LOT-PW")
+    # 계획은 가용 재고를 다시 확인한다 — 입고대에 그 로트가 있어야 한다.
+    Inventory::Move.call(product: @steel, lot: lot, from: "supplier", to: "receiving", qty: Location::BIN_CAPACITY, move_type: "receive",
+                         ref: nil, idempotency_key: "pw-lot-recv")
     Ops::Plan.call(kind: "putaway", product: @steel, lot: lot, qty: Location::BIN_CAPACITY, from: "receiving", to: "RAW-A-01-01",
                    ref: nil, earliest_at: Time.current)
 

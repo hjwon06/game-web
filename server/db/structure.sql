@@ -696,7 +696,7 @@ CREATE TABLE public.stock_moves (
     occurred_at timestamp with time zone DEFAULT now() NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT stock_moves_locations_differ_check CHECK ((from_location_id <> to_location_id)),
-    CONSTRAINT stock_moves_move_type_check CHECK (((move_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'feed'::character varying, 'issue'::character varying, 'produce'::character varying, 'qc_pass'::character varying, 'qc_fail'::character varying, 'pick'::character varying, 'ship'::character varying])::text[]))),
+    CONSTRAINT stock_moves_move_type_check CHECK (((move_type)::text = ANY ((ARRAY['receive'::character varying, 'putaway'::character varying, 'feed'::character varying, 'issue'::character varying, 'produce'::character varying, 'qc_pass'::character varying, 'qc_fail'::character varying, 'pick'::character varying, 'ship'::character varying, 'adjust'::character varying])::text[]))),
     CONSTRAINT stock_moves_qty_check CHECK ((qty > (0)::numeric))
 );
 
@@ -746,7 +746,7 @@ CREATE TABLE public.tasks (
     expected_finish_at timestamp(6) without time zone,
     cancel_reason text,
     CONSTRAINT tasks_finished_at_check CHECK ((((status)::text <> 'done'::text) OR (finished_at IS NOT NULL))),
-    CONSTRAINT tasks_kind_check CHECK (((kind)::text = ANY (ARRAY[('unload'::character varying)::text, ('putaway'::character varying)::text, ('pick'::character varying)::text, ('feed'::character varying)::text, ('inspect'::character varying)::text, ('load'::character varying)::text]))),
+    CONSTRAINT tasks_kind_check CHECK (((kind)::text = ANY (ARRAY[('unload'::character varying)::text, ('putaway'::character varying)::text, ('pick'::character varying)::text, ('feed'::character varying)::text, ('inspect'::character varying)::text, ('load'::character varying)::text, ('count'::character varying)::text]))),
     CONSTRAINT tasks_locations_differ_check CHECK ((from_location_id <> to_location_id)),
     CONSTRAINT tasks_qty_check CHECK ((qty > (0)::numeric)),
     CONSTRAINT tasks_started_at_check CHECK ((((status)::text <> ALL (ARRAY[('started'::character varying)::text, ('done'::character varying)::text])) OR (started_at IS NOT NULL))),
@@ -1848,6 +1848,180 @@ ALTER TABLE ONLY public.tasks
 
 
 --
+-- ⑦ 발주·공급사·순환 실사 (마이그레이션 20261008150001 ~ 20261008150003)
+--
+
+CREATE TABLE public.suppliers (
+    id bigint NOT NULL,
+    code character varying NOT NULL,
+    name character varying NOT NULL,
+    lead_time_seconds integer NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT suppliers_lead_time_check CHECK ((lead_time_seconds > 0))
+);
+
+CREATE SEQUENCE public.suppliers_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.suppliers_id_seq OWNED BY public.suppliers.id;
+
+ALTER TABLE ONLY public.suppliers ALTER COLUMN id SET DEFAULT nextval('public.suppliers_id_seq'::regclass);
+
+ALTER TABLE ONLY public.suppliers
+    ADD CONSTRAINT suppliers_pkey PRIMARY KEY (id);
+
+CREATE UNIQUE INDEX index_suppliers_on_code ON public.suppliers USING btree (code);
+
+CREATE TABLE public.supplier_products (
+    id bigint NOT NULL,
+    supplier_id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL
+);
+
+CREATE SEQUENCE public.supplier_products_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.supplier_products_id_seq OWNED BY public.supplier_products.id;
+
+ALTER TABLE ONLY public.supplier_products ALTER COLUMN id SET DEFAULT nextval('public.supplier_products_id_seq'::regclass);
+
+ALTER TABLE ONLY public.supplier_products
+    ADD CONSTRAINT supplier_products_pkey PRIMARY KEY (id);
+
+CREATE INDEX index_supplier_products_on_product_id ON public.supplier_products USING btree (product_id);
+
+CREATE UNIQUE INDEX index_supplier_products_on_supplier_id_and_product_id ON public.supplier_products USING btree (supplier_id, product_id);
+
+ALTER TABLE ONLY public.supplier_products
+    ADD CONSTRAINT fk_rails_supplier_products_supplier FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+ALTER TABLE ONLY public.supplier_products
+    ADD CONSTRAINT fk_rails_supplier_products_product FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+CREATE TABLE public.purchase_orders (
+    id bigint NOT NULL,
+    po_no character varying NOT NULL,
+    supplier_id bigint NOT NULL,
+    status character varying DEFAULT 'confirmed'::character varying NOT NULL,
+    ordered_at timestamp(6) without time zone NOT NULL,
+    expected_at timestamp(6) without time zone NOT NULL,
+    arrived_at timestamp(6) without time zone,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT purchase_orders_status_check CHECK (((status)::text = ANY (ARRAY[('confirmed'::character varying)::text, ('arrived'::character varying)::text, ('done'::character varying)::text, ('cancelled'::character varying)::text])))
+);
+
+CREATE SEQUENCE public.purchase_orders_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.purchase_orders_id_seq OWNED BY public.purchase_orders.id;
+
+ALTER TABLE ONLY public.purchase_orders ALTER COLUMN id SET DEFAULT nextval('public.purchase_orders_id_seq'::regclass);
+
+ALTER TABLE ONLY public.purchase_orders
+    ADD CONSTRAINT purchase_orders_pkey PRIMARY KEY (id);
+
+CREATE UNIQUE INDEX index_purchase_orders_on_po_no ON public.purchase_orders USING btree (po_no);
+
+CREATE INDEX index_purchase_orders_confirmed_on_expected_at ON public.purchase_orders USING btree (expected_at) WHERE ((status)::text = 'confirmed'::text);
+
+CREATE INDEX index_purchase_orders_on_arrived_at ON public.purchase_orders USING btree (arrived_at) WHERE (arrived_at IS NOT NULL);
+
+ALTER TABLE ONLY public.purchase_orders
+    ADD CONSTRAINT fk_rails_purchase_orders_supplier FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id);
+
+CREATE TABLE public.purchase_order_lines (
+    id bigint NOT NULL,
+    purchase_order_id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    qty_ordered numeric(14,3) NOT NULL,
+    qty_received numeric(14,3) DEFAULT 0 NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT purchase_order_lines_ordered_check CHECK ((qty_ordered > (0)::numeric)),
+    CONSTRAINT purchase_order_lines_received_check CHECK ((qty_received >= (0)::numeric)),
+    CONSTRAINT purchase_order_lines_received_le_ordered_check CHECK ((qty_received <= qty_ordered))
+);
+
+CREATE SEQUENCE public.purchase_order_lines_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.purchase_order_lines_id_seq OWNED BY public.purchase_order_lines.id;
+
+ALTER TABLE ONLY public.purchase_order_lines ALTER COLUMN id SET DEFAULT nextval('public.purchase_order_lines_id_seq'::regclass);
+
+ALTER TABLE ONLY public.purchase_order_lines
+    ADD CONSTRAINT purchase_order_lines_pkey PRIMARY KEY (id);
+
+CREATE INDEX index_purchase_order_lines_on_purchase_order_id ON public.purchase_order_lines USING btree (purchase_order_id);
+
+ALTER TABLE ONLY public.purchase_order_lines
+    ADD CONSTRAINT fk_rails_purchase_order_lines_po FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id);
+
+ALTER TABLE ONLY public.purchase_order_lines
+    ADD CONSTRAINT fk_rails_purchase_order_lines_product FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+CREATE TABLE public.cycle_counts (
+    id bigint NOT NULL,
+    location_id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    task_id bigint,
+    system_qty numeric(14,3) NOT NULL,
+    counted_qty numeric(14,3) NOT NULL,
+    counted_at timestamp(6) without time zone NOT NULL,
+    created_at timestamp(6) without time zone NOT NULL,
+    updated_at timestamp(6) without time zone NOT NULL,
+    CONSTRAINT cycle_counts_qty_check CHECK (((system_qty >= (0)::numeric) AND (counted_qty >= (0)::numeric)))
+);
+
+CREATE SEQUENCE public.cycle_counts_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.cycle_counts_id_seq OWNED BY public.cycle_counts.id;
+
+ALTER TABLE ONLY public.cycle_counts ALTER COLUMN id SET DEFAULT nextval('public.cycle_counts_id_seq'::regclass);
+
+ALTER TABLE ONLY public.cycle_counts
+    ADD CONSTRAINT cycle_counts_pkey PRIMARY KEY (id);
+
+CREATE INDEX index_cycle_counts_on_location_id_and_counted_at ON public.cycle_counts USING btree (location_id, counted_at);
+
+CREATE UNIQUE INDEX index_cycle_counts_on_task_and_product ON public.cycle_counts USING btree (task_id, product_id) WHERE (task_id IS NOT NULL);
+
+ALTER TABLE ONLY public.cycle_counts
+    ADD CONSTRAINT fk_rails_cycle_counts_location FOREIGN KEY (location_id) REFERENCES public.locations(id);
+
+ALTER TABLE ONLY public.cycle_counts
+    ADD CONSTRAINT fk_rails_cycle_counts_product FOREIGN KEY (product_id) REFERENCES public.products(id);
+
+ALTER TABLE ONLY public.cycle_counts
+    ADD CONSTRAINT fk_rails_cycle_counts_task FOREIGN KEY (task_id) REFERENCES public.tasks(id) ON DELETE SET NULL;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -1855,6 +2029,9 @@ SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
 ('20261009000002'),
+('20261008150003'),
+('20261008150002'),
+('20261008150001'),
 ('20261009000001'),
 ('20261008140002'),
 ('20261008140001'),

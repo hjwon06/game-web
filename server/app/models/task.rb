@@ -2,7 +2,7 @@
 # seq 는 DB 트리거(tasks_assign_seq)가 INSERT/UPDATE 마다 새로 배정한다. 앱은 쓰지 않고, 저장 직후 값은 reload 해야 보인다.
 # 화면 증분 스트림은 `where("seq > ?", last)` 로 읽되, nextval 순서 != 커밋 순서라서 last 에서 여유 구간을 두고 다시 읽는다.
 class Task < ApplicationRecord
-  KINDS = %w[unload putaway pick feed inspect load].freeze
+  KINDS = %w[unload putaway pick feed inspect load count].freeze
   STATUSES = %w[planned started done cancelled].freeze
   RETENTION = 7.days
 

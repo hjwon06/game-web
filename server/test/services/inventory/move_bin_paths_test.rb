@@ -1,6 +1,6 @@
 require "test_helper"
 
-# 이동 유형 9개와 경로 표는 그대로고, 위치 판정만 "조상 중 구역 루트" 기준이라 칸(bin)끼리도 경로가 맞는다.
+# 이동 유형 10개(⑦ 에서 adjust 가 늘었다)와 경로 표는 그대로고, 위치 판정만 "조상 중 구역 루트" 기준이라 칸(bin)끼리도 경로가 맞는다.
 class Inventory::MoveBinPathsTest < ActiveSupport::TestCase
   setup do
     @product = Product.create!(sku: "RAW-BIN", name: "칸 강판", uom: "ea", kind: "raw")
@@ -76,10 +76,28 @@ class Inventory::MoveBinPathsTest < ActiveSupport::TestCase
     assert_equal 1, StockMove.count
   end
 
-  test "이동 유형은 9개이고 경로 표와 StockMove::MOVE_TYPES 가 같다" do
-    assert_equal 9, Inventory::Move::ALLOWED_PATHS.size
+  test "이동 유형은 10개이고 경로 표와 StockMove::MOVE_TYPES 가 같다" do
+    assert_equal 10, Inventory::Move::ALLOWED_PATHS.size
     assert_equal Inventory::Move::ALLOWED_PATHS.keys.sort, StockMove::MOVE_TYPES.sort
-    assert_equal %w[feed pick], StockMove::MOVE_TYPES.sort - %w[issue produce putaway qc_fail qc_pass receive ship]
+    assert_equal %w[adjust feed pick], StockMove::MOVE_TYPES.sort - %w[issue produce putaway qc_fail qc_pass receive ship]
+  end
+
+  test "adjust 는 가상 위치 inventory_loss 와 raw·fg 칸 사이에서만, 양방향으로 된다" do
+    mv("supplier", "receiving", 50, "receive", "adj-recv")
+    mv("receiving", @raw_bin, 50, "putaway", "adj-put")
+
+    mv(@raw_bin, "inventory_loss", 5, "adjust", "adj-loss")
+    mv("inventory_loss", @raw_bin, 2, "adjust", "adj-gain")
+    mv("inventory_loss", @fg_bin, 1, "adjust", "adj-gain-fg")
+    mv(@fg_bin, "inventory_loss", 1, "adjust", "adj-loss-fg")
+
+    assert_equal 47, on_hand(@raw_bin)
+    assert_equal 0, on_hand(@fg_bin)
+    assert_equal 3, on_hand(Location.find_by!(code: "inventory_loss")), "칸이 잃은 5 - 되돌려 준 2 - fg 로 간 1 + fg 에서 돌아온 1"
+    assert_raises(Inventory::Move::InvalidPath) { mv(@raw_bin, "scrap", 1, "adjust", "adj-bad-1") }
+    assert_raises(Inventory::Move::InvalidPath) { mv("receiving", "inventory_loss", 1, "adjust", "adj-bad-2") }
+    assert_raises(Inventory::Move::InvalidPath) { mv("inventory_loss", "line_side", 1, "adjust", "adj-bad-3") }
+    assert_equal [], Inventory::Reconcile.call
   end
 
   test "line_side 는 용량 4000(팔레트 8개)의 물리 위치이고 구역 루트다" do

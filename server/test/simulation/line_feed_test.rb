@@ -210,8 +210,8 @@ class LineFeedTest < ActiveSupport::TestCase
 
     assert_equal [200], feeds.where(product_id: @steel.id).map { |t| t.qty.to_i }, "700 - 이미 잡힌 500"
 
-    Ops::Plan.call(kind: "pick", product: @bolt, lot: nil, qty: 300, from: BIN1, to: "shipping", ref: nil, earliest_at: M0)
     raw_stock(@bolt, BIN1, 300)
+    Ops::Plan.call(kind: "pick", product: @bolt, lot: nil, qty: 300, from: BIN1, to: "shipping", ref: nil, earliest_at: M0)
     again = feed(M0 + 10)
 
     assert_equal 1, again[:waiting], "볼트 300 은 이미 pick 이 잡았다"

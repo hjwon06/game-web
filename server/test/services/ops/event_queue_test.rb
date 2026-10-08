@@ -9,6 +9,7 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
     @fork2 = Resource.find_by!(code: "FORK-02")
     @bin = Location.find_by!(code: "RAW-A-01-01")
     @t0 = Time.current.change(usec: 0) + 1.hour
+    @auto = 0
   end
 
   def stock_receiving(qty, key: "ops-recv")
@@ -16,7 +17,9 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
                          ref: nil, idempotency_key: key)
   end
 
-  def plan_putaway(qty: 10, to: @bin, earliest_at: @t0)
+  # 계획은 가용 재고를 다시 확인하므로 기본은 계획할 수량만큼 입고대에 먼저 채운다. stock: false 면 이미 있는 재고만 쓴다.
+  def plan_putaway(qty: 10, to: @bin, earliest_at: @t0, stock: true)
+    stock_receiving(qty, key: "ops-auto-#{@auto += 1}") if stock
     Ops::Plan.call(kind: "putaway", product: @product, lot: nil, qty: qty, from: "receiving", to: to, ref: nil,
                    earliest_at: earliest_at)
   end
@@ -69,6 +72,10 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
   end
 
   test "kind 마다 맞는 자원 종류를 고른다" do
+    # 출발지가 물리 위치인 kind 는 계획이 가용 재고를 확인하므로 각 출발지에 재고를 만들어 둔다(Ops 를 거치지 않는다).
+    %w[shipping qc fg_store raw_store].each do |code|
+      Quant.create!(product: @product, lot: nil, location: Location.find_by!(code: code), qty: 5)
+    end
     {
       "unload" => ["dock_in", "supplier", "receiving"], "load" => ["dock_out", "shipping", "customer"],
       "inspect" => ["worker", "qc", "fg_store"], "pick" => ["forklift", "fg_store", "shipping"],
@@ -190,10 +197,13 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
 
   test "Plan 이 만든 작업의 예약은 완료 때 consumed, 취소 때 released 이고 다른 작업의 예약은 그대로다" do
     stock_receiving(100)
-    ok = plan_putaway(qty: 60)
-    short = plan_putaway(qty: 60) # 입고대에 40 만 남아 부족
-    still = plan_putaway(qty: 5, earliest_at: @t0 + 1.day)
+    ok = plan_putaway(qty: 60, stock: false)
+    short = plan_putaway(qty: 35, stock: false)
+    still = plan_putaway(qty: 5, earliest_at: @t0 + 1.day, stock: false)
     assert_equal %w[active active active], Reservation.order(:task_id).pluck(:status)
+    # 계획을 통과한 뒤 다른 경로가 입고대 재고 20 을 가져갔다: ok(60) 뒤에 남는 20 으로는 short(35)가 완료되지 못한다.
+    Inventory::Move.call(product: @product, lot: nil, from: "receiving", to: "RAW-A-01-02", qty: 20, move_type: "putaway",
+                         ref: nil, idempotency_key: "ops-steal")
 
     r = drain(@t0 + 1.hour)
 

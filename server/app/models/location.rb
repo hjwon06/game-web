@@ -35,13 +35,14 @@ class Location < ApplicationRecord
   end
   LINE_SIDE_CAPACITY = Simulation::Config::LINE_SIDE_CAPACITY # 라인 공급대 하나의 용량(품목 무관 qty 합). 칸(BIN_CAPACITY)이 아니라 루트에 직접 걸린다
 
-  # 위치 10개는 스키마가 아니라 데이터다. line_side 는 ③b 에서 늘었다(마이그레이션 20261008050000 도 같은 값을 넣는다).
+  # 위치 11개는 스키마가 아니라 데이터다. line_side 는 ③b(마이그레이션 20261008050000), inventory_loss 는 ⑦(20261008150003)에서 늘었다.
   # [code, name, kind, role]
   DEFAULTS = [
     ["supplier",   "공급처",     "virtual",  "supplier"],
     ["customer",   "고객",       "virtual",  "customer"],
     ["production", "생산",       "virtual",  "production"],
     ["scrap",      "폐기",       "virtual",  "scrap"],
+    ["inventory_loss", "재고 조정", "virtual", "inventory_loss"],
     ["receiving",  "입고대",     "physical", "receiving"],
     ["raw_store",  "자재창고",   "physical", "storage"],
     ["line_side",  "라인 공급대", "physical", "line_side"],

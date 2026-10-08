@@ -1,5 +1,5 @@
 module Api
-  # 단지 화면용 한 방 응답. 3초 폴링 대상이라 쿼리 수가 고정이어야 한다(인증 제외 기본 12개, bins 포함 15개).
+  # 단지 화면용 한 방 응답. 3초 폴링 대상이라 쿼리 수가 고정이어야 한다(인증 제외 기본 13개, bins 포함 16개).
   # 작업(tasks)은 서버가 확정한 시작·예상 완료 시각을 내려주고 화면이 server_time 기준으로 보간한다.
   # production_events 는 건드리지 않는다. 집계는 quants.location_id / stock_moves.from_location_id 인덱스를 탄다.
   class CampusController < BaseController
@@ -48,9 +48,10 @@ module Api
       moves = moves_payload(code_of, after_id)
       statuses = SalesOrder.group(:status).count # 쿼리 2
       flow = flow_window(loc, now)
+      pos = purchase_orders(now)
       tasks = tasks_payload(code_of, building_of, after_seq)
 
-      body = { buildings: { office: office(statuses), material: material(loc, flow),
+      body = { buildings: { office: office(statuses, pos), material: material(loc, pos),
                             hall: hall, qc: qc(loc, flow), shipping: shipping(loc, flow, statuses) },
                moves: moves,
                last_move_id: moves.last&.fetch(:id) || after_id || 0,
@@ -65,7 +66,8 @@ module Api
     # 쿼리 1: 증분이면 seq > after_seq 최대 100건. 첫 진입이면 진행 중 전부 + 최근 완료 20건(취소는 복원 대상이 아니다).
     # ref 는 다형이라 이동 목록처럼 WorkOrder/SalesOrderLine 만 코드로 푼다.
     def tasks_payload(code_of, building_of, after_seq)
-      scope = Task.joins("INNER JOIN products p ON p.id = tasks.product_id")
+      scope = Task.where.not(kind: "count") # 실사는 화면에 아직 없는 작업 종류라 내려주지 않는다(화면은 모르는 종류를 못 그린다)
+                  .joins("INNER JOIN products p ON p.id = tasks.product_id")
                   .joins("LEFT JOIN lots l ON l.id = tasks.lot_id")
                   .joins("LEFT JOIN resources r ON r.id = tasks.resource_id")
                   .joins("LEFT JOIN work_orders wo ON tasks.ref_type = 'WorkOrder' AND wo.id = tasks.ref_id")
@@ -95,7 +97,7 @@ module Api
 
     # 쿼리 2개: 자원 전부 + 진행 중(started) 작업. 자원 하나에 started 는 최대 1건이다.
     def resources_payload(building_of)
-      running = Task.where(status: "started").where.not(resource_id: nil).order(:id).pluck(:resource_id, :id).to_h
+      running = Task.where(status: "started").where.not(resource_id: nil).where.not(kind: "count").order(:id).pluck(:resource_id, :id).to_h
       Resource.order(:id).pluck(:id, :code, :kind, :home_location_id).map do |id, code, kind, home|
         task_id = running[id]
         { code: code, kind: kind, status: task_id ? "busy" : "idle", current_task_id: task_id,
@@ -136,21 +138,37 @@ module Api
 
     def iso(time) = time&.utc&.iso8601(3)
 
-    def office(statuses)
+    # 발주 요약. 쿼리 2개: 열린 발주 수(confirmed + arrived)와 최근 10분에 도착한 발주 수를 한 번에, 최근 발주 3건.
+    # 도착 수는 arrived_at 기준이라 이미 done 이 된 발주도 센다.
+    def purchase_orders(now)
+      since = now - RECEIVE_WINDOW
+      open_sql = PurchaseOrder.sanitize_sql_array(["COUNT(*) FILTER (WHERE status IN (?))", PurchaseOrder::OPEN])
+      arrived_sql = PurchaseOrder.sanitize_sql_array(["COUNT(*) FILTER (WHERE arrived_at >= ?)", since])
+      open, arrived = PurchaseOrder.where("status IN (?) OR arrived_at >= ?", PurchaseOrder::OPEN, since)
+                                   .pick(Arel.sql(open_sql), Arel.sql(arrived_sql))
+      recent = PurchaseOrder.joins(:supplier).order(ordered_at: :desc, id: :desc).limit(RECENT_ORDERS)
+                            .pluck("purchase_orders.po_no", "suppliers.name", "purchase_orders.status", "purchase_orders.expected_at")
+      { open: open.to_i, arrived_10m: arrived.to_i,
+        recent: recent.map { |po_no, supplier, status, expected| { po_no: po_no, supplier: supplier, status: status, expected_at: iso(expected) } } }
+    end
+
+    def office(statuses, pos)
       recent = SalesOrder.order(created_at: :desc, id: :desc).limit(RECENT_ORDERS) # 쿼리 3
                          .pluck(:so_no, :customer, :due_date, :status)
       { orders: SalesOrder::STATUSES.to_h { |s| [s, statuses.fetch(s, 0)] },
-        recent: recent.map { |so_no, customer, due, status| { so_no: so_no, customer: customer, due_date: due, status: status } } }
+        recent: recent.map { |so_no, customer, due, status| { so_no: so_no, customer: customer, due_date: due, status: status } },
+        open_pos: pos[:open], recent_pos: pos[:recent] }
     end
 
     # 쿼리 4: raw_store 자재별 재고, 쿼리 5: receiving/qc 합(위치별 한 번)
-    def material(loc, flow)
+    # received_trucks_10m = 최근 10분에 도착한 발주(PO) 건수. 예전에는 receive 이동 건수였는데 그건 트럭이 아니라 팔레트 수였다.
+    def material(loc, pos)
       stock = Quant.joins(:product).where(location_id: loc["raw_store"]).where("quants.qty > 0")
                    .group("products.sku", "products.name").order("products.sku")
                    .pluck("products.sku", "products.name", Arel.sql("SUM(quants.qty)"))
       { raw_store: stock.map { |sku, name, qty| { sku: sku, name: name, qty: num(qty) } },
         receiving_qty: num(on_hand(loc)[loc["receiving"]]),
-        received_trucks_10m: flow[:trucks] }
+        received_trucks_10m: pos[:arrived_10m] }
     end
 
     def hall
@@ -181,21 +199,14 @@ module Api
       @on_hand ||= Quant.where(location_id: loc.values_at("receiving", "qc")).group(:location_id).sum(:qty)
     end
 
-    # 쿼리 7: 최근 60분 receive/qc_pass/qc_fail/ship 을 from 위치 인덱스로 한 번에. 트럭 = 최근 10분 receive 건수.
+    # 쿼리 7: 최근 60분 receive/qc_pass/qc_fail/ship 을 from 위치 인덱스로 한 번에.
     # ship 의 출발지는 shipping(출하대)이다. fg_store 는 pick 의 출발지라 거기서는 ship 이 잡히지 않는다.
     def flow_window(loc, now)
       qty = Hash.new(BigDecimal("0"))
-      trucks = 0
-      trucks_sql = StockMove.sanitize_sql_array(
-        ["COUNT(*) FILTER (WHERE move_type = 'receive' AND occurred_at >= ?)", now - RECEIVE_WINDOW]
-      )
       StockMove.where(from_location_id: loc.values_at("supplier", "qc", "shipping"), occurred_at: (now - FLOW_WINDOW)..)
-               .group(:move_type).pluck(:move_type, Arel.sql("SUM(qty)"), Arel.sql(trucks_sql))
-               .each do |type, sum, recv|
-        qty[type] = sum
-        trucks += recv.to_i
-      end
-      { qty: qty, trucks: trucks }
+               .group(:move_type).pluck(:move_type, Arel.sql("SUM(qty)"))
+               .each { |type, sum| qty[type] = sum }
+      { qty: qty }
     end
 
     # 쿼리 9: 이름·로트·참조 코드를 조인으로 한 번에 가져온다(ref 는 다형이라 ref_type 으로 가른다).

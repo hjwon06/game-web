@@ -17,7 +17,12 @@ module Inventory
       "qc_pass" => %w[qc fg_store],
       "qc_fail" => %w[qc scrap],
       "pick"    => %w[fg_store shipping],
-      "ship"    => %w[shipping customer]
+      "ship"    => %w[shipping customer],
+      "adjust"  => %w[inventory_loss raw_store]
+    }.freeze
+    # adjust(순환 실사 조정)만 경로가 여럿이다: 가상 위치 inventory_loss <-> raw_store·fg_store 칸, 양방향(부족분은 칸 -> inventory_loss, 초과분은 반대).
+    EXTRA_PATHS = {
+      "adjust" => [%w[raw_store inventory_loss], %w[inventory_loss fg_store], %w[fg_store inventory_loss]]
     }.freeze
     KIND_BY_CODE = Location::DEFAULTS.to_h { |code, _name, kind, _role| [code, kind] }.freeze
 
@@ -94,11 +99,12 @@ module Inventory
       raise ArgumentError, "qty 는 0보다 커야 한다: #{@qty}" unless @qty.positive?
 
       path = ALLOWED_PATHS[@move_type] or raise InvalidPath, "알 수 없는 move_type: #{@move_type}"
+      paths = [path] + EXTRA_PATHS.fetch(@move_type, [])
       from_zone = @from.zone_code
       to_zone = @to.zone_code
       kinds_ok = [[from_zone, @from], [to_zone, @to]].all? { |zone, loc| KIND_BY_CODE[zone] == loc.kind }
-      unless [from_zone, to_zone] == path && kinds_ok
-        raise InvalidPath, "#{@move_type} 는 #{path.join('→')} 만 허용한다 " \
+      unless paths.include?([from_zone, to_zone]) && kinds_ok
+        raise InvalidPath, "#{@move_type} 는 #{paths.map { |p| p.join('→') }.join(', ')} 만 허용한다 " \
                            "(요청: #{@from.code}[#{from_zone}](#{@from.kind})→#{@to.code}[#{to_zone}](#{@to.kind}))"
       end
 

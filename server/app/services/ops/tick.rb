@@ -7,6 +7,8 @@ module Ops
   #   unload → receive, putaway → putaway (qc 에서 나가는 적치는 qc_pass), feed → feed, pick → pick,
   #   load → ship (Inventory::Ship: 수주 라인 출하량·수주 상태도 같이 갱신)
   #   inspect → 불량분 qc_fail(qc → scrap) 1건. 불량이 0이면 이동 없이 done. 합격분은 Simulation::Inspection 이 적치(qc_pass)로 계획한다.
+  #   count → 이동 없이 done. cycle_counts 행을 남기고, 센 수량이 시스템 수량과 다르면 adjust 이동(Ops::CycleCount)으로 맞춘다.
+  # 하차(unload)의 ref 가 발주 라인(PurchaseOrderLine)이면 같은 트랜잭션에서 그 라인 qty_received 를 올리고, 전 라인을 받았으면 발주를 done 으로 닫는다.
   class Tick
     # 키: "task:<id>". inspect 의 불량 이동 키는 Inventory::Inspect 가 "qc_fail:task:<id>" 로 만든다.
     MOVE_TYPE = { "unload" => "receive", "putaway" => "putaway", "feed" => "feed", "pick" => "pick", "load" => "ship" }.freeze
@@ -75,19 +77,30 @@ module Ops
           move = complete(task)
           # 예약은 Task 가 상태 저장과 같은 트랜잭션에서 닫는다(done -> consumed). 이동이 되돌아가면 예약도 active 로 남는다.
           task.update!(status: "done", finished_at: finished_at, stock_move: move)
+          # 발주 하차라면 라인 입고량도 같은 트랜잭션에서 올린다. 이동이 되돌아가면 입고량도 오르지 않는다.
+          receive_order_line(task)
         end
         @result.done << task.id
       rescue *TASK_FAILURES => e
         # 작업 취소와 예약 해제(cancelled -> released)가 process_resource 의 같은 트랜잭션에서 커밋된다.
         task.update!(status: "cancelled", finished_at: finished_at, cancel_reason: "#{e.class.name.demodulize}: #{e.message}")
+        PurchaseOrder.unload_cancelled!(task)
         @result.cancelled << task.id
       end
+    end
+
+    # 발주 라인(ref)을 가리키는 하차가 끝났으면 라인 qty_received 를 올리고, 전 라인을 다 받았으면 발주를 done 으로 닫는다.
+    def receive_order_line(task)
+      return unless task.kind == "unload" && task.ref_type == "PurchaseOrderLine"
+
+      PurchaseOrderLine.find_by(id: task.ref_id)&.receive!(task.qty)
     end
 
     # 작업의 재고 이동을 만들고 그 이동을 돌려준다(없으면 nil).
     def complete(task)
       case task.kind
       when "inspect" then fail_inspected(task)
+      when "count" then count(task)
       when "load" then ship(task) || move(task, "ship")
       else
         move(task, move_type_for(task)).tap { |m| record_pass(task, m) if m.move_type == "qc_pass" }
@@ -114,6 +127,12 @@ module Ops
 
       line = SalesOrderLine.find_by(id: task.ref_id) or return nil
       Inventory::Ship.call(sales_order_line: line, lot: task.lot, qty: task.qty, idempotency_key: "task:#{task.id}")
+    end
+
+    # 실사 완료: 실사 기록을 남긴다. 작업 자체는 이동이 없어 nil 이다(시뮬에서는 센 수량 = 시스템 수량이라 조정도 없다).
+    def count(task)
+      Ops::CycleCount.complete(task, at: task.expected_finish_at)
+      nil
     end
 
     # 검사 완료: 작업지시의 불량률만큼 qc_fail(qc → scrap)을 이 작업의 완료로 만든다. 합격분은 이동하지 않는다.

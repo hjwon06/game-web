@@ -232,19 +232,20 @@ class RunnerTest < ActiveSupport::TestCase
   end
 
   def build_full_runner(order, errors: {})
-    steps = %i[tick inbound line_feed inspection shipping].to_h { |name| [name, RecordingStep.new(name, order, error: errors[name])] }
+    steps = %i[tick inbound line_feed inspection shipping cycle_count].to_h { |name| [name, RecordingStep.new(name, order, error: errors[name])] }
     Simulation::Runner.new(logger: Logger.new(@log), logistics: RecordingLogistics.new, ops_tick: steps[:tick], inbound: steps[:inbound],
-                           line_feed: steps[:line_feed], inspection: steps[:inspection], shipping: steps[:shipping])
+                           line_feed: steps[:line_feed], inspection: steps[:inspection], shipping: steps[:shipping],
+                           cycle_count: steps[:cycle_count])
   end
 
-  test "10초 경계마다 Tick → Inbound → 라인 공급 → 검사 → 출하 순서로 부른다" do
+  test "10초 경계마다 Tick → Inbound → 라인 공급 → 검사 → 출하 → 순환 실사 순서로 부른다" do
     order = []
     runner = build_full_runner(order)
 
     2.times { |window| run_window(runner, window) }
 
-    assert_equal %i[tick inbound line_feed inspection shipping] * 2, order.map(&:first)
-    assert_equal [T0 + 10] * 5 + [T0 + 20] * 5, order.map { |_, at, _| at }
+    assert_equal %i[tick inbound line_feed inspection shipping cycle_count] * 2, order.map(&:first)
+    assert_equal [T0 + 10] * 6 + [T0 + 20] * 6, order.map { |_, at, _| at }
   end
 
   test "라인 공급·검사·출하 중 하나가 예외를 던져도 나머지와 Flusher 는 계속된다" do

@@ -1,7 +1,7 @@
 # 이동 원장. append-only. 진짜 방어선은 DB 트리거이고, readonly? 는 앱 레벨 2차 방어다.
 class StockMove < ApplicationRecord
-  # 9개 동결. 추가 금지. feed·pick 은 ③b 에서 늘었다(DB CHECK 는 마이그레이션 20261008050000).
-  MOVE_TYPES = %w[receive putaway feed issue produce qc_pass qc_fail pick ship].freeze
+  # feed·pick 은 ③b, adjust(순환 실사의 재고 조정)는 ⑦ 에서 늘었다(DB CHECK 는 마이그레이션 20261008050000, 20261008150003). 더 늘리지 않는다.
+  MOVE_TYPES = %w[receive putaway feed issue produce qc_pass qc_fail pick ship adjust].freeze
 
   belongs_to :product
   belongs_to :lot, optional: true

@@ -39,7 +39,8 @@ class Ops::ReservationLifecycleTest < ActiveSupport::TestCase
 
   test "from 이 가상 위치(supplier)인 작업은 예약이 없다. 물리 위치(receiving)면 있다" do
     unload = Ops::Plan.call(kind: "unload", product: @steel, lot: nil, qty: 100, from: "supplier", to: "receiving", ref: nil, earliest_at: @t0)
-    stock(100)
+    Inventory::Move.call(product: @steel, lot: nil, from: "supplier", to: "receiving", qty: 100, move_type: "receive",
+                         ref: nil, idempotency_key: "rl-recv-only") # 입고대에 100 (칸으로는 옮기지 않는다)
     put = Ops::Plan.call(kind: "putaway", product: @steel, lot: nil, qty: 100, from: "receiving", to: BIN, ref: nil, earliest_at: @t0)
 
     assert_nil Reservation.find_by(task_id: unload.id)
@@ -47,6 +48,7 @@ class Ops::ReservationLifecycleTest < ActiveSupport::TestCase
   end
 
   test "예약 생성이 실패하면 작업도 남지 않는다(같은 트랜잭션)" do
+    stock(500)
     Reservation.define_singleton_method(:create!) { |*| raise ActiveRecord::RecordInvalid }
     begin
       assert_raises(ActiveRecord::RecordInvalid) { plan_feed(10) }
@@ -75,8 +77,11 @@ class Ops::ReservationLifecycleTest < ActiveSupport::TestCase
 
   test "재고 부족으로 취소되면 released 가 되고 그 재고를 다시 잡을 수 있다" do
     stock(500)
-    task = plan_feed(600)
-    assert_nil available, "예약 600 이 재고 500 을 넘어 가용이 없다"
+    task = plan_feed(400)
+    # 계획 뒤에 이 계획을 거치지 않은 이동이 재고를 가져갔다(계획 시점 검증은 통과했다).
+    Inventory::Move.call(product: @steel, lot: nil, from: BIN, to: "line_side", qty: 200, move_type: "feed",
+                         ref: nil, idempotency_key: "rl-steal")
+    assert_nil available, "예약 400 이 남은 재고 300 을 넘어 가용이 없다"
 
     Ops::Tick.call(now: task.planned_at)
     Ops::Tick.call(now: task.expected_finish_at)
@@ -84,8 +89,30 @@ class Ops::ReservationLifecycleTest < ActiveSupport::TestCase
     assert_equal "cancelled", task.reload.status
     assert_match(/InsufficientStock/, task.cancel_reason)
     assert_equal "released", reservation_of(task).status
-    assert_equal 500, available
-    assert_equal 0, StockMove.where(move_type: "feed").count
+    assert_equal 300, available
+    assert_equal 0, StockMove.where(move_type: "feed", ref_type: "Task").count, "작업이 만든 feed 이동은 없다(수동 이동 1건만 있다)"
+  end
+
+  test "계획 시점에 가용(현재고 - active 예약)이 모자라면 InsufficientStock 이고 작업·예약이 남지 않는다" do
+    stock(500)
+    first = plan_feed(300)
+
+    error = assert_raises(Inventory::InsufficientStock) { plan_feed(300) }
+
+    assert_match(/가용 부족/, error.message)
+    assert_equal [first.id], Task.pluck(:id)
+    assert_equal [first.id], Reservation.pluck(:task_id)
+    assert_equal 200, available, "실패한 계획이 예약을 남기지 않았다"
+  end
+
+  test "계획 시점에 도착 칸 자리(현재고 + 그 칸으로 가는 열린 작업)가 모자라면 CapacityExceeded 다" do
+    stock(500)
+    Location.where(code: "line_side").update_all(capacity_units: 400)
+    first = plan_feed(300)
+
+    assert_raises(Inventory::CapacityExceeded) { plan_feed(150) }
+    assert_equal [first.id], Task.pluck(:id)
+    assert_nothing_raised { plan_feed(100) }
   end
 
   test "이동이 실패하면 savepoint 와 함께 되돌아가 예약이 consumed 로 남지 않는다" do

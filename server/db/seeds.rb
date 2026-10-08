@@ -45,3 +45,6 @@ Rake::Task["inventory:seed"].invoke
 # 적치 규칙: 자재별 전용 랙 1개씩(강판 RAW-A-01, 볼트 RAW-A-02, 패킹 RAW-A-03), 공용 RAW-A-04 는 priority 90, 완제품은 FG 랙 4개 공용.
 # 자재 품목이 있어야 전용 규칙이 만들어지므로 재고 시드 뒤에 둔다. 이미 있는 규칙(바꿔 둔 priority 포함)은 건드리지 않는다.
 PutawayRule.ensure_defaults!
+
+# 공급사: 강판 1곳(리드타임 120초), 볼트·패킹 1곳(180초). 자재 품목이 있어야 연결되므로 역시 재고 시드 뒤에 둔다. 이미 있는 값은 건드리지 않는다.
+Supplier.ensure_defaults!

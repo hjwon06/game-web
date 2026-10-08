@@ -60,8 +60,8 @@ class Inventory::FlowTest < ActiveSupport::TestCase
     assert_equal [0, 9], [qty(@fg, "shipping"), qty(@fg, "customer")].map(&:to_i)
     assert_equal "done", @order.reload.status
 
-    # 이동 유형 9종이 모두 한 번 이상 나왔다
-    assert_equal StockMove::MOVE_TYPES.sort, StockMove.distinct.pluck(:move_type).sort
+    # 실사 조정(adjust)을 뺀 이동 유형 9종이 모두 한 번 이상 나왔다
+    assert_equal (StockMove::MOVE_TYPES - %w[adjust]).sort, StockMove.distinct.pluck(:move_type).sort
     assert_equal [], Inventory::Reconcile.call
   end
 end
