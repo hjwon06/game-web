@@ -70,14 +70,29 @@ class Inventory::StockGuardTest < ActiveSupport::TestCase
     assert_equal 0, physical_negative_count
   end
 
-  test "DB CHECK 가 물리 위치 마이너스를 직접 UPDATE 로도 막는다" do
+  test "DB 트리거가 물리 위치 마이너스를 raw SQL UPDATE 로도 막는다" do
     move(@steel, nil, "supplier", "receiving", 2, "receive", "g-check")
     quant = Quant.find_by!(product_id: @steel.id, location_id: Location.find_by!(code: "receiving").id)
 
     error = assert_raises(ActiveRecord::StatementInvalid) do
-      ActiveRecord::Base.transaction(requires_new: true) { Quant.where(id: quant.id).update_all(qty: -1) }
+      ActiveRecord::Base.transaction(requires_new: true) do
+        ActiveRecord::Base.connection.execute("UPDATE quants SET qty = -1 WHERE id = #{quant.id.to_i}")
+      end
     end
-    assert_match(/quants_physical_non_negative_check/, error.message)
+    assert_match(/quants_physical_non_negative/, error.message)
     assert_equal 2, quant.reload.qty
+  end
+
+  test "물리 위치 quant 를 음수로 INSERT 해도 막히고, 우회용 플래그 컬럼은 없다" do
+    receiving = Location.find_by!(code: "receiving")
+    assert_raises(ActiveRecord::StatementInvalid) do
+      ActiveRecord::Base.transaction(requires_new: true) do
+        ActiveRecord::Base.connection.execute(
+          "INSERT INTO quants (product_id, location_id, qty, created_at, updated_at) " \
+          "VALUES (#{@steel.id}, #{receiving.id}, -1, now(), now())"
+        )
+      end
+    end
+    assert_not Quant.column_names.include?("negative_allowed"), "우회용 플래그 컬럼이 남아 있다"
   end
 end

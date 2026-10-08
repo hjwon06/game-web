@@ -45,6 +45,19 @@ class Inventory::MoveTest < ActiveSupport::TestCase
     assert_equal 0, on_hand(@raw_store)
   end
 
+  test "supplier 자리에 물리 위치를 넣으면 InvalidPath (code 가 같아도 kind 가 다르면 거부)" do
+    # supplier 행의 kind 를 physical 로 바꿔 놓고 receive 를 시도한다. 트랜잭션 테스트라 롤백된다.
+    Location.where(code: "supplier").update_all(kind: "physical")
+
+    assert_raises(Inventory::Move::InvalidPath) do
+      move(from: Location.find_by!(code: "supplier"), to: @receiving, qty: 1, type: "receive", key: "k-kind-1")
+    end
+    assert_raises(Inventory::Move::InvalidPath) do
+      move(from: @receiving, to: @raw_store, qty: 1, type: "receive", key: "k-kind-2")
+    end
+    assert_equal 0, StockMove.count
+  end
+
   test "허용 경로를 어기면 InvalidPath" do
     assert_raises(Inventory::Move::InvalidPath) do
       move(from: @supplier, to: @raw_store, qty: 1, type: "receive", key: "k-bad-path")

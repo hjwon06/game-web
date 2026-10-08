@@ -22,7 +22,7 @@ module Inventory
 
         # 재실행은 초과 검사보다 먼저 돌려준다(전량 출하 뒤의 재시도가 예외가 되면 안 된다).
         existing = StockMove.find_by(idempotency_key: @key)
-        next existing if existing
+        next same_as_request!(existing) if existing
 
         shipped = shipped_by_line([@line.id])[@line.id]
         if shipped + @qty > @line.ordered_qty
@@ -38,6 +38,14 @@ module Inventory
     end
 
     private
+
+    def same_as_request!(existing)
+      Move.ensure_same!(existing, product_id: @line.product_id, lot_id: @lot.id, from_id: location_id("fg_store"),
+                                  to_id: location_id("customer"), qty: @qty, move_type: "ship",
+                                  ref_type: "SalesOrderLine", ref_id: @line.id)
+    end
+
+    def location_id(code) = Location.find_by!(code: code).id
 
     # 라인별 출하 누계. 출하 이동의 ref 가 수주 라인이다.
     def shipped_by_line(line_ids)

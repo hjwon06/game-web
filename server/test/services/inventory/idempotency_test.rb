@@ -24,13 +24,56 @@ class Inventory::IdempotencyTest < ActiveSupport::TestCase
     assert_equal 10, receiving_qty
   end
 
-  test "수량을 바꿔 같은 키로 다시 불러도 새 이동은 없고 처음 값이 남는다" do
+  test "같은 키에 다른 수량이면 IdempotencyConflict 이고 새 이동도 재고 변화도 없다" do
     receive(10, "idem-2")
-    again = receive(99, "idem-2")
 
-    assert_equal 10, again.qty
+    error = assert_raises(Inventory::IdempotencyConflict) { receive(99, "idem-2") }
+    assert_match(/qty/, error.message)
     assert_equal 1, StockMove.count
     assert_equal 10, receiving_qty
+  end
+
+  test "같은 키에 다른 품목·위치·유형·참조여도 IdempotencyConflict" do
+    receive(10, "idem-2b")
+    other = Product.create!(sku: "RAW-IDEM-2", name: "다른 자재", uom: "ea", kind: "raw")
+
+    assert_raises(Inventory::IdempotencyConflict) do
+      Inventory::Move.call(product: other, lot: nil, from: "supplier", to: "receiving", qty: 10, move_type: "receive",
+                           ref: nil, idempotency_key: "idem-2b")
+    end
+    assert_raises(Inventory::IdempotencyConflict) do
+      Inventory::Move.call(product: @product, lot: nil, from: "receiving", to: "raw_store", qty: 10, move_type: "putaway",
+                           ref: nil, idempotency_key: "idem-2b")
+    end
+    assert_raises(Inventory::IdempotencyConflict) do
+      Inventory::Move.call(product: @product, lot: nil, from: "supplier", to: "receiving", qty: 10, move_type: "receive",
+                           ref: other, idempotency_key: "idem-2b")
+    end
+    assert_equal 1, StockMove.count
+  end
+
+  test "Ship 도 같은 키에 다른 수량이나 다른 수주 라인이면 IdempotencyConflict" do
+    fg = Product.create!(sku: "FG-IDEM-SHIP", name: "멱등 출하품", uom: "ea", kind: "fg")
+    lot = Lot.create!(product: fg, lot_no: "LOT-IDEM-SHIP")
+    Inventory::Move.call(product: fg, lot: lot, from: "production", to: "qc", qty: 10, move_type: "produce", ref: nil,
+                         idempotency_key: "idem-ship-prod")
+    Inventory::Move.call(product: fg, lot: lot, from: "qc", to: "fg_store", qty: 10, move_type: "qc_pass", ref: nil,
+                         idempotency_key: "idem-ship-pass")
+    order = SalesOrder.create!(so_no: "SO-IDEM", customer: "멱등고객")
+    line = SalesOrderLine.create!(sales_order: order, product: fg, ordered_qty: 10)
+    other_order = SalesOrder.create!(so_no: "SO-IDEM-2", customer: "멱등고객2")
+    other_line = SalesOrderLine.create!(sales_order: other_order, product: fg, ordered_qty: 10)
+
+    first = Inventory::Ship.call(sales_order_line: line, lot: lot, qty: 4, idempotency_key: "idem-ship")
+    assert_equal first.id, Inventory::Ship.call(sales_order_line: line, lot: lot, qty: 4, idempotency_key: "idem-ship").id
+
+    assert_raises(Inventory::IdempotencyConflict) do
+      Inventory::Ship.call(sales_order_line: line, lot: lot, qty: 5, idempotency_key: "idem-ship")
+    end
+    assert_raises(Inventory::IdempotencyConflict) do
+      Inventory::Ship.call(sales_order_line: other_line, lot: lot, qty: 4, idempotency_key: "idem-ship")
+    end
+    assert_equal 1, StockMove.where(move_type: "ship").count
   end
 
   test "다른 키는 별개 이동이다" do

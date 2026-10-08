@@ -10,6 +10,23 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
+-- Name: quants_physical_non_negative(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.quants_physical_non_negative() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+      BEGIN
+        IF NEW.qty < 0 AND EXISTS (SELECT 1 FROM locations WHERE id = NEW.location_id AND kind = 'physical') THEN
+          RAISE EXCEPTION 'quants_physical_non_negative: physical location % cannot hold negative qty (%)', NEW.location_id, NEW.qty
+            USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+
+
+--
 -- Name: stock_moves_append_only(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -367,10 +384,8 @@ CREATE TABLE public.quants (
     lot_id bigint,
     location_id bigint NOT NULL,
     qty numeric(14,3) DEFAULT 0.0 NOT NULL,
-    negative_allowed boolean DEFAULT false NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
-    updated_at timestamp(6) without time zone NOT NULL,
-    CONSTRAINT quants_physical_non_negative_check CHECK (((qty >= (0)::numeric) OR negative_allowed))
+    updated_at timestamp(6) without time zone NOT NULL
 );
 
 
@@ -1108,6 +1123,13 @@ CREATE UNIQUE INDEX index_work_orders_one_active_per_machine ON public.work_orde
 
 
 --
+-- Name: quants quants_physical_non_negative; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER quants_physical_non_negative BEFORE INSERT OR UPDATE ON public.quants FOR EACH ROW EXECUTE FUNCTION public.quants_physical_non_negative();
+
+
+--
 -- Name: stock_moves stock_moves_no_truncate; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1328,6 +1350,7 @@ ALTER TABLE ONLY public.sales_order_lines
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20261009000001'),
 ('20261008000010'),
 ('20261008000009'),
 ('20261008000008'),
