@@ -99,7 +99,9 @@ function applyCampus(c,same,withBins){
   if(Array.isArray(c.resources))S.res=c.resources;
   (c.tasks||[]).forEach(t=>{S.tasks.set(t.id,normTask(t));if(typeof t.seq==='number')S.seq=Math.max(S.seq==null?0:S.seq,t.seq);});
   if(typeof c.last_seq==='number')S.seq=Math.max(S.seq==null?0:S.seq,c.last_seq); // 단조 증가만
-  if(withBins&&Array.isArray(c.bins)){S.bins=c.bins;S.binsAt=Date.now();}
+  // 서버(④)는 bins 를 {raw:[…], fg:[…]} 로 준다. 배열로 펴서 쓴다(배열로 와도 그대로).
+  const bins=Array.isArray(c.bins)?c.bins:(c.bins&&typeof c.bins==='object'?[].concat(c.bins.raw||[],c.bins.fg||[]):null);
+  if(withBins&&bins){S.bins=bins;S.binsAt=Date.now();}
   syncBins();
 }
 let busy=false;
