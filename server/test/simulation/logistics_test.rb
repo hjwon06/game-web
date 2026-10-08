@@ -1,9 +1,12 @@
 require "test_helper"
 require "stringio"
 
+# 생산 → 자재 소비(백플러시). 입고(트럭·하차·적치)는 inbound_test.rb 에서 본다.
 class LogisticsTest < ActiveSupport::TestCase
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
   EPOCH = M0 - 3600
+  BIN1 = "RAW-A-01-01".freeze
+  BIN2 = "RAW-A-01-02".freeze
 
   setup do
     @old_epoch = ENV["INVENTORY_EPOCH"]
@@ -17,17 +20,20 @@ class LogisticsTest < ActiveSupport::TestCase
     @order = WorkOrder.create!(code: "WO-L1", machine: @machine, item: @fg, product: "브래킷", target_qty: 100_000,
                                status: "active", started_at: M0)
     @log = StringIO.new
+    Location.where(id: Simulation::Inbound.bins_under("raw_store").select(:id)).update_all(capacity_units: 1_000_000) # 용량은 inbound_test 에서 본다
   end
 
   teardown do
     @old_epoch.nil? ? ENV.delete("INVENTORY_EPOCH") : ENV["INVENTORY_EPOCH"] = @old_epoch
   end
 
-  def stock(product, qty)
-    Inventory::Move.call(product: product, lot: nil, from: "supplier", to: "receiving", qty: qty, move_type: "receive",
-                         ref: nil, idempotency_key: "test-recv-#{product.id}-#{qty}")
-    Inventory::Move.call(product: product, lot: nil, from: "receiving", to: "raw_store", qty: qty, move_type: "putaway",
-                         ref: nil, idempotency_key: "test-put-#{product.id}-#{qty}")
+  # 공급처 → 입고대 → 칸. Ops 를 거치지 않고 재고만 만든다(소비 쪽만 보려는 테스트용).
+  def stock(product, qty, bin: BIN1, lot: nil)
+    tag = "#{product.id}-#{qty}-#{bin}-#{lot&.id}"
+    Inventory::Move.call(product: product, lot: lot, from: "supplier", to: "receiving", qty: qty, move_type: "receive",
+                         ref: nil, idempotency_key: "test-recv-#{tag}")
+    Inventory::Move.call(product: product, lot: lot, from: "receiving", to: bin, qty: qty, move_type: "putaway",
+                         ref: nil, idempotency_key: "test-put-#{tag}")
   end
 
   def event(at, good)
@@ -39,14 +45,17 @@ class LogisticsTest < ActiveSupport::TestCase
     Simulation::Logistics.call(now: M0 + (n * 60), logger: Logger.new(@log))
   end
 
-  def qty_at(product, code)
-    Quant.joins(:location).where(product_id: product.id, lot_id: nil, locations: { code: code }).sum(:qty)
+  # product 의 raw_store 하위 칸(+ raw_store 자체) 재고 합.
+  def store_qty(product)
+    ids = Location.where(code: "raw_store").pluck(:id) + Simulation::Inbound.bins_under("raw_store").pluck(:id)
+    Quant.where(product_id: product.id, location_id: ids).sum(:qty)
+  end
+
+  def bin_qty(product, code)
+    Quant.joins(:location).where(product_id: product.id, locations: { code: code }).sum(:qty)
   end
 
   def moves(type) = StockMove.where(move_type: type)
-
-  # setup 의 stock() 이 만든 receive·putaway 는 빼고 Logistics 가 만든 것만.
-  def sim_moves(type) = moves(type).where("idempotency_key LIKE 'sim:%'")
 
   test "EPOCH 이전 생산은 소비하지 않는다" do
     stock(@steel, 1000)
@@ -58,8 +67,8 @@ class LogisticsTest < ActiveSupport::TestCase
     run_minute(0)
 
     assert_equal 25, moves("produce").sum(:qty)
-    assert_equal 950, qty_at(@steel, "raw_store")
-    assert_equal 975, qty_at(@bolt, "raw_store")
+    assert_equal 950, store_qty(@steel)
+    assert_equal 975, store_qty(@bolt)
   end
 
   test "EPOCH 이후 생산이 없으면 아무것도 소비하지 않는다" do
@@ -80,6 +89,14 @@ class LogisticsTest < ActiveSupport::TestCase
     assert_equal Time.utc(2026, 10, 8), Simulation::Config.inventory_epoch
   end
 
+  test "Logistics 는 입고를 하지 않는다: 결과 키에 receive·putaway 가 없고 재고가 0 이어도 이동을 만들지 않는다" do
+    result = run_minute(0)
+
+    assert_equal %i[backflush skipped inspect ship order], result.keys
+    assert_equal 0, moves("receive").count
+    assert_equal 0, moves("putaway").count
+  end
+
   test "같은 분을 두 번 실행해도 이동이 늘지 않는다" do
     stock(@steel, 1000)
     stock(@bolt, 1000)
@@ -89,36 +106,29 @@ class LogisticsTest < ActiveSupport::TestCase
     before = StockMove.count
     again = run_minute(0)
 
-    assert_operator before, :>, 4
-    assert_equal before, StockMove.count
     assert_equal 1, first[:backflush]
+    assert_equal 3, moves("issue").count + moves("produce").count, "issue 2(강판·볼트) + produce 1"
+    assert_equal before, StockMove.count
     assert_equal 0, again[:backflush]
   end
 
-  test "같은 분 재실행 사이에 생산·입고 재고가 늘어도 예외 없이 이동이 늘지 않고, 남은 수량은 다음 분에 처리된다" do
+  test "같은 분 재실행 사이에 생산이 늘어도 예외 없이 이동이 늘지 않고, 남은 수량은 다음 분에 처리된다" do
     stock(@steel, 10_000)
     stock(@bolt, 10_000)
-    Inventory::Move.call(product: @bolt, lot: nil, from: "supplier", to: "receiving", qty: 100, move_type: "receive",
-                         ref: nil, idempotency_key: "test-recv-extra-1")
     event(M0 - 20, 30)
     run_minute(0)
-    assert_equal 100, sim_moves("putaway").sum(:qty)
     assert_equal [30], moves("produce").pluck(:qty).map(&:to_i)
 
-    event(M0 - 10, 10) # 같은 분 안에 생산이 늘고
-    Inventory::Move.call(product: @bolt, lot: nil, from: "supplier", to: "receiving", qty: 50, move_type: "receive",
-                         ref: nil, idempotency_key: "test-recv-extra-2") # 입고대 재고도 늘었다
+    event(M0 - 10, 10) # 같은 분 안에 생산이 늘었다
     before = StockMove.count
     again = run_minute(0)
 
     assert_equal [], @log.string.lines.grep(/ERROR|IdempotencyConflict/)
     assert_equal before, StockMove.count
-    assert_equal [0, 0], [again[:backflush], again[:putaway]]
+    assert_equal 0, again[:backflush]
 
-    b = run_minute(1)
-    assert_equal [1, 1], [b[:backflush], b[:putaway]]
+    assert_equal 1, run_minute(1)[:backflush]
     assert_equal [30, 10], moves("produce").order(:id).pluck(:qty).map(&:to_i)
-    assert_equal 150, sim_moves("putaway").sum(:qty)
     assert_equal 0, @log.string.lines.grep(/IdempotencyConflict/).size
   end
 
@@ -133,94 +143,68 @@ class LogisticsTest < ActiveSupport::TestCase
     assert_equal [30, 10], moves("produce").order(:id).pluck(:qty).map(&:to_i)
   end
 
-  test "자재 부족 → 소비 건너뜀 + 트럭 1건 → 다음 분 적치 → 그다음 분 소비 재개" do
+  test "자재 부족이면 그 분은 건너뛰고(이동 0), 칸에 재고가 들어오면 다음 분에 소비를 재개한다" do
     stock(@steel, 10) # 100개 생산에 200 필요
     stock(@bolt, 10_000)
     event(M0 - 20, 100)
 
     a = run_minute(0)
-    assert_equal [0, 1, 1], [moves("produce").count, a[:skipped], a[:receive]]
-    assert_equal ["RAW-S"], sim_moves("receive").map { |m| m.product.sku }
-    assert_equal 10, qty_at(@steel, "raw_store"), "입고대에만 있고 아직 적치 전이다"
+    assert_equal [0, 1], [a[:backflush], a[:skipped]]
+    assert_equal 0, moves("produce").count
+    assert_equal 0, moves("issue").count, "볼트는 충분했지만 전체가 롤백돼 아무것도 빠지지 않는다"
+    assert_equal 10, store_qty(@steel)
+    assert_equal 0, moves("receive").where("idempotency_key LIKE 'sim:%'").count, "Logistics 는 트럭을 부르지 않는다"
 
+    stock(@steel, 500)
     b = run_minute(1)
-    assert_equal [0, 1, 1], [moves("produce").count, b[:skipped], b[:putaway]], "적치는 소비 뒤라 이 분에도 소비는 막혀 있다"
-    assert_equal 0, b[:receive]
-    assert_operator qty_at(@steel, "raw_store"), :>, 200
-
-    c = run_minute(2)
-    assert_equal [1, 0, 0], [moves("produce").count, c[:skipped], c[:receive]]
+    assert_equal [1, 0], [b[:backflush], b[:skipped]]
     assert_equal 100, moves("produce").sum(:qty)
-    assert_equal 1, sim_moves("receive").count
+    assert_equal 310, store_qty(@steel)
     assert_equal 0, Quant.joins(:location).where(locations: { kind: "physical" }).where("quants.qty < 0").count
     assert_equal [], Inventory::Reconcile.call
   end
 
-  test "트럭은 30분치 + 못 뺀 양을 싣는다" do
-    stock(@steel, 10)
-    stock(@bolt, 10_000)
+  test "칸이 여럿이면 코드 순으로 차감하고, 한 칸이 모자라면 다음 칸에서 이어 뺀다" do
+    lot_a = Lot.create!(product: @steel, lot_no: "R-T-A")
+    lot_b = Lot.create!(product: @steel, lot_no: "R-T-B")
+    stock(@steel, 150, bin: BIN2, lot: lot_b) # 코드가 뒤인 칸을 먼저 채워도
+    stock(@steel, 100, bin: BIN1, lot: lot_a) # 앞 칸부터 빠진다
+    stock(@bolt, 500)
+    event(M0 - 20, 100) # 강판 200, 볼트 100
+
+    run_minute(0)
+
+    steel_issues = moves("issue").where(product_id: @steel.id).order(:id).to_a
+    assert_equal [BIN1, BIN2], steel_issues.map { |m| m.from_location.code }
+    assert_equal [100, 100], steel_issues.map { |m| m.qty.to_i }
+    assert_equal [lot_a.id, lot_b.id], steel_issues.map(&:lot_id), "빼는 이동이 칸의 로트를 그대로 따른다"
+    assert_equal 0, bin_qty(@steel, BIN1)
+    assert_equal 50, bin_qty(@steel, BIN2)
+    assert_equal 400, bin_qty(@bolt, BIN1)
+    assert_equal [], Inventory::Reconcile.call
+  end
+
+  test "칸이 생기기 전 raw_store 자체의 재고는 칸 재고 다음에 쓴다" do
+    stock(@steel, 50, bin: BIN1)
+    stock(@steel, 200, bin: "raw_store")
+    stock(@bolt, 500)
     event(M0 - 20, 100)
+
     run_minute(0)
 
-    # 강판 양품 0.784/s x 2 = 1.568/s → 1800초 = 2822.4 → 2823, 거기에 못 뺀 200
-    assert_equal 2823 + 200, sim_moves("receive").sum(:qty)
+    assert_equal 0, bin_qty(@steel, BIN1)
+    assert_equal 50, bin_qty(@steel, "raw_store"), "칸 50 을 먼저 쓰고 나머지 150 을 자체 재고에서"
+    assert_equal ["raw_store"], moves("issue").where(product_id: @steel.id).order(:id).last(1).map { |m| m.from_location.code }
   end
 
-  test "같은 자재 트럭은 5분에 한 번이다" do
-    stock(@bolt, 10_000)
-    run_minute(0)
-    assert_equal 1, sim_moves("receive").count
-    run_minute(1) # 적치
-    drain(@steel)
-
-    (2..4).each do |n|
-      run_minute(n)
-      assert_equal 1, sim_moves("receive").count, "#{n}분: 5분 안이라 트럭이 없다"
-    end
-    run_minute(5)
-    assert_equal 2, sim_moves("receive").count
-  end
-
-  test "같은 분 재실행은 이번 분에 받은 트럭을 적치하지 않는다" do
-    stock(@bolt, 10_000)
-    run_minute(0)
-    count = StockMove.count
+  test "issue 멱등키는 issue:<작업지시>:<자재>:<칸>:<로트>:<분 ISO> 이다" do
+    stock(@steel, 1000)
+    stock(@bolt, 1000)
+    event(M0 - 20, 10)
     run_minute(0)
 
-    assert_equal count, StockMove.count
-    assert_equal 0, sim_moves("putaway").count
-  end
-
-  test "멱등키는 sim:<종류>:<품목 id>:<분 ISO> 이다" do
-    stock(@bolt, 10_000)
-    run_minute(0)
-    run_minute(1)
-
-    assert_equal ["sim:receive:#{@steel.id}:2026-10-08T12:00:00Z"], sim_moves("receive").pluck(:idempotency_key)
-    assert_equal ["sim:putaway:#{@steel.id}:2026-10-08T12:01:00Z"], sim_moves("putaway").pluck(:idempotency_key)
-  end
-
-  test "하루 예상 이동 행 수를 로그 한 줄로 남긴다" do
-    stock(@steel, 10_000)
-    stock(@bolt, 10_000)
-    result = run_minute(0)
-
-    # 분당 issue 2 + produce 1 = 3행 x 1440 + 자재 2종 x (receive+putaway) x 하루 트럭 수(86400 / 1200)
-    assert_equal (3 * 1440) + (2 * 2 * 72), result[:est_daily_moves]
-    assert_equal 1, @log.string.lines.grep(/est_daily_moves=#{result[:est_daily_moves]}/).size
-  end
-
-  test "stopped 기계는 소비 예상에 넣지 않아 트럭이 없다" do
-    @machine.update!(state: "stopped")
-    run_minute(0)
-    assert_equal 0, sim_moves("receive").count
-  end
-
-  private
-
-  def drain(product)
-    qty = qty_at(product, "raw_store")
-    Inventory::Move.call(product: product, lot: nil, from: "raw_store", to: "production", qty: qty, move_type: "issue",
-                         ref: nil, idempotency_key: "test-drain-#{product.id}") if qty.positive?
+    bin = Location.find_by!(code: BIN1)
+    assert_equal ["issue:#{@order.id}:#{@steel.id}:#{bin.id}:0:2026-10-08T12:00:00Z"],
+                 moves("issue").where(product_id: @steel.id).pluck(:idempotency_key)
   end
 end

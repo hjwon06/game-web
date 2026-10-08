@@ -215,7 +215,7 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
     assert_equal 1, @log.string.lines.grep(/sim logistics ship .*단계 실패/).size
   end
 
-  test "catch_up 이 터져도 입고·검사·출하·수주는 실행된다" do
+  test "catch_up 이 터져도 검사·출하·수주는 실행된다" do
     event(90, 10)
     produce_to_qc(100, M0 - 300)
     sales_order("SO-T-1", Date.new(2026, 10, 1), 10)

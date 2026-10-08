@@ -202,7 +202,61 @@ class RunnerTest < ActiveSupport::TestCase
     runner = build_runner(Simulation::Flusher)
     7.times { |window| run_window(runner, window) }
     assert_equal 7, ProductionEvent.count
-    assert_no_match(/logistics failed/, @log.string)
+    assert_no_match(/failed/, @log.string, "Ops::Tick·Inbound 실제 구현도 같이 돌았지만 실패 로그가 없다")
     assert_equal 1, @log.string.scan(/sim logistics 2026-10-06T12:01:00Z/).size
+  end
+
+  # Ops::Tick(now:) 과 Inbound(now:, logger:) 모두 받는 기록용 대역. 공용 순서 배열에 [이름, 시각, 그때 기록된 구간 수] 를 쌓는다.
+  class RecordingStep
+    def initialize(name, order, error: nil)
+      @name = name
+      @order = order
+      @error = error
+    end
+
+    def call(now:, **)
+      @order << [@name, now, ProductionEvent.count]
+      raise @error if @error
+    end
+  end
+
+  test "Ops::Tick 과 Inbound 는 10초 경계마다 Flusher 다음에 Tick → Inbound 순서로 부른다" do
+    order = []
+    runner = Simulation::Runner.new(logger: Logger.new(@log), ops_tick: RecordingStep.new(:tick, order),
+                                    inbound: RecordingStep.new(:inbound, order), logistics: RecordingLogistics.new)
+
+    3.times { |window| run_window(runner, window) }
+
+    assert_equal [[:tick, T0 + 10, 1], [:inbound, T0 + 10, 1], [:tick, T0 + 20, 2], [:inbound, T0 + 20, 2],
+                  [:tick, T0 + 30, 3], [:inbound, T0 + 30, 3]], order
+  end
+
+  test "Tick 과 Inbound 가 예외를 던져도 서로와 Logistics 와 Flusher 는 계속된다" do
+    order = []
+    logistics = RecordingLogistics.new
+    runner = Simulation::Runner.new(logger: Logger.new(@log), logistics: logistics,
+                                    ops_tick: RecordingStep.new(:tick, order, error: RuntimeError.new("tick boom")),
+                                    inbound: RecordingStep.new(:inbound, order, error: RuntimeError.new("inbound boom")))
+
+    7.times { |window| run_window(runner, window) }
+
+    assert_equal 7, order.count { |name, _, _| name == :tick }
+    assert_equal 7, order.count { |name, _, _| name == :inbound }, "Tick 이 터져도 Inbound 는 돈다"
+    assert_equal [T0 + 60], logistics.calls, "둘 다 터져도 Logistics 는 60초 경계에서 돈다"
+    assert_equal 7, ProductionEvent.count
+    assert_equal 7, @log.string.scan(/sim ops tick failed .*RuntimeError tick boom/).size
+    assert_equal 7, @log.string.scan(/sim inbound failed .*RuntimeError inbound boom/).size
+  end
+
+  test "Tick 과 Inbound 의 실패는 Flusher 의 재시도·폐기 흐름을 바꾸지 않는다" do
+    order = []
+    runner = Simulation::Runner.new(logger: Logger.new(@log), flusher: FlakyFlusher.new(fail_bucket: bucket(0), fail_times: 1),
+                                    ops_tick: RecordingStep.new(:tick, order, error: RuntimeError.new("x")),
+                                    inbound: RecordingStep.new(:inbound, order, error: RuntimeError.new("y")))
+
+    2.times { |window| run_window(runner, window) }
+
+    assert_equal [bucket(0), bucket(1)], ProductionEvent.order(:bucket_start).map(&:bucket_start)
+    assert_equal [0, 2], order.select { |name, _, _| name == :tick }.map(&:last), "첫 경계는 flush 실패라 0, 다음 경계는 재시도로 2"
   end
 end

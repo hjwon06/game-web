@@ -20,11 +20,16 @@ module Simulation
       "M7" => 0.02, "M8" => 0.03, "M9" => 0.04, "M10" => 0.01, "M11" => 0.03, "M12" => 0.05
     }.freeze
 
-    # 물류(자재 소비·입고 보충) 숫자.
+    # 물류(자재 소비) 숫자.
     LOGISTICS_SECONDS = 60
-    FORECAST_SECONDS = 600       # 이만큼의 예상 소비량보다 자재창고 재고가 적으면 트럭을 부른다
-    REPLENISH_SECONDS = 1800     # 트럭 1대의 보충량 = 이만큼의 예상 소비량
-    TRUCK_INTERVAL_SECONDS = 300 # 같은 자재 트럭 간격
+
+    # 입고(트럭 → 하차 → 칸 적치) 숫자. Runner 가 BUCKET_SECONDS(10초)마다 Inbound 를 부른다.
+    FORECAST_SECONDS = 1800                  # 이만큼의 예상 소비량 대비 (칸 재고 + 들어오는 중) 이 가장 모자란 자재를 싣는다
+    TRUCK_INTERVAL_SECONDS = (240..480).freeze # 트럭 도착 간격(초) 균등난수
+    PALLETS_PER_TRUCK = (4..8).freeze
+    PALLET_QTY = 100                         # 팔레트 1개 = 100 ea
+    PUTAWAY_LOOKBACK_SECONDS = 21_600        # 하차가 끝난 뒤 이만큼까지만 적치 대기분을 다시 찾는다(tasks 스캔 상한)
+    MAX_PUTAWAY_CANCELS = 3                  # 한 팔레트의 적치가 이만큼 취소되면 더 계획하지 않는다
 
     # 검사·출하·신규 수주 숫자.
     QC_DWELL_SECONDS = 120        # qc 에 이만큼 넘게 머문 재고만 검사한다

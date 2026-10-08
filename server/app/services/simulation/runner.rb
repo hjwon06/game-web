@@ -1,13 +1,16 @@
 module Simulation
-  # 1초마다 스냅샷을 읽어 tick 하고, 10초 경계에서 flush 한다. SIGTERM 에서는 마지막 flush 없이 끝난다.
+  # 1초마다 스냅샷을 읽어 tick 하고, 10초 경계에서 flush → Ops::Tick → Inbound 를 돌리고 60초 경계에서 Logistics 를 부른다.
+  # SIGTERM 에서는 마지막 flush 없이 끝난다.
   class Runner
     MAX_FAILURES = 3
     MAX_PENDING = 6 # 10초 구간 6개 = 1분
 
-    def initialize(logger: Rails.logger, flusher: Flusher, logistics: Logistics)
+    def initialize(logger: Rails.logger, flusher: Flusher, logistics: Logistics, inbound: Inbound, ops_tick: Ops::Tick)
       @logger = logger
       @flusher = flusher
       @logistics = logistics
+      @inbound = inbound
+      @ops_tick = ops_tick
       @pending = []
       @accumulator = Accumulator.new
       @rng = Random.new(Config::SEED)
@@ -49,7 +52,18 @@ module Simulation
       @pending << { bucket: bucket, accumulator: current, failures: 0 }
       drop_overflow
       @pending.shift while @pending.any? && settled?(@pending.first)
-      logistics(bucket + Config::BUCKET_SECONDS) if ((bucket.to_i + Config::BUCKET_SECONDS) % Config::LOGISTICS_SECONDS).zero?
+      boundary = bucket + Config::BUCKET_SECONDS
+      # 순서: 작업 진행(Tick) → 입고(Inbound). 방금 끝난 하차의 적치가 같은 경계에서 계획된다.
+      isolated("ops tick", boundary) { @ops_tick.call(now: boundary) }
+      isolated("inbound", boundary) { @inbound.call(now: boundary, logger: @logger) }
+      logistics(boundary) if (boundary.to_i % Config::LOGISTICS_SECONDS).zero?
+    end
+
+    # Flusher·Logistics 와 별개로 돈다. 하나가 예외를 던져도 나머지와 다음 경계는 계속된다.
+    def isolated(name, boundary)
+      yield
+    rescue StandardError => e
+      @logger.error("sim #{name} failed #{boundary.utc.iso8601}: #{e.class} #{e.message}")
     end
 
     # 60초 경계마다 Flusher 다음에 한 번. 실패해도 Runner·Flusher 는 멈추지 않는다.
