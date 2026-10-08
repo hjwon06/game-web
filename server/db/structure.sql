@@ -637,6 +637,8 @@ CREATE TABLE public.tasks (
     seq bigint NOT NULL,
     created_at timestamp(6) without time zone NOT NULL,
     updated_at timestamp(6) without time zone NOT NULL,
+    expected_finish_at timestamp(6) without time zone,
+    cancel_reason text,
     CONSTRAINT tasks_finished_at_check CHECK ((((status)::text <> 'done'::text) OR (finished_at IS NOT NULL))),
     CONSTRAINT tasks_kind_check CHECK (((kind)::text = ANY (ARRAY[('unload'::character varying)::text, ('putaway'::character varying)::text, ('pick'::character varying)::text, ('feed'::character varying)::text, ('inspect'::character varying)::text, ('load'::character varying)::text]))),
     CONSTRAINT tasks_locations_differ_check CHECK ((from_location_id <> to_location_id)),
@@ -1619,6 +1621,7 @@ SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
 ('20261009000001'),
+('20261008130004'),
 ('20261008130003'),
 ('20261008130002'),
 ('20261008130001'),
