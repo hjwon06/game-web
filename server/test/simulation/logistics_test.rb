@@ -214,7 +214,8 @@ class LogisticsTest < ActiveSupport::TestCase
 
     stock(@steel, 2000, bin: "RAW-A-01-02")
     assert_equal 1, run_minute(3)[:backflush]
-    assert_equal 800, moves("produce").sum(:qty), "공급되자 상한 300 만큼 이어서 소비"
+    # pending 은 BACKLOG_CAP(= 상한 300 x 2 = 600) 에서 잘렸으므로 남은 100 만 이어서 소비한다(⑥c)
+    assert_equal Simulation::Config::BACKLOG_CAP, moves("produce").sum(:qty), "공급되자 남은 pending 만큼 이어서 소비"
     assert_equal [], Inventory::Reconcile.call
   end
 
