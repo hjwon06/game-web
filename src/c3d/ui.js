@@ -9,6 +9,7 @@ const SITE_NAME = { mat: '자재창고', ship: '출하장', qc: '품질검사', 
 export const OPS = { data: null };
 // 검색 결과 building → 건물 키(단지 건물)
 const SEARCH_SITE = { office: 'office', material: 'mat', shipping_dock: 'ship', shipping_wh: 'ship', shipping: 'ship', qc: 'qc', hall: 'prod', production: 'prod' };
+const TASK_KO = { putaway: '적치', pick: '피킹', feed: '라인 공급', unload: '하차', load: '상차', inspect: '검사', count: '실사' }; // nav.js 의 TASK_KO 와 같은 값
 const MACHINE_ST = { running: ['가동 중', 'ok'], stopped: ['정지', ''], broken: ['고장', 'bad'] };
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -154,7 +155,7 @@ export function createUi({ zoomIn, zoomOut, home }) {
       if (f) {
         const k = f.task;
         pl.append(k ? pill('작업 중', 'act') : pill('대기'));
-        if (k) parts.push(rowEl('작업', k.kind || '-'), rowEl('품목', `${k.product || '-'} ${fmt(k.qty)}`), rowEl('경로', `${k.from_code || '-'} → ${k.to_code || '-'}`), rowEl('진행률', pct(f.progress) + '%'), barEl(f.progress <= 1 ? f.progress : f.progress / 100));
+        if (k) parts.push(rowEl('작업', TASK_KO[k.kind] || k.kind || '-'), rowEl('품목', `${k.product || '-'} ${fmt(k.qty)}`), rowEl('경로', `${k.from_code || '-'} → ${k.to_code || '-'}`), rowEl('진행률', pct(f.progress) + '%'), barEl(f.progress <= 1 ? f.progress : f.progress / 100));
         parts.push(rowEl('대기 건수', `${f.planned_count || 0}건`));
       } else parts.push(el('div', 'empty', '지게차 정보가 없습니다'));
     } else if (type === 'machine') {
@@ -188,11 +189,13 @@ export function createUi({ zoomIn, zoomOut, home }) {
     const sh = ops.shipment, ol = $('stages');
     $('ship-who').textContent = sh ? `${sh.so_no || ''} · ${sh.customer || ''}` : '';
     if (!sh) { const li = el('li', null, '추적할 수주가 없습니다'); ol.replaceChildren(li); return; }
-    const at = Object.fromEntries((sh.stages || []).map(s => [s.key, s.at]));
-    const curIdx = STAGES.findIndex(([k]) => !at[k]);
+    const st = Object.fromEntries((sh.stages || []).map(s => [s.key, s]));
+    const at = Object.fromEntries(STAGES.map(([k]) => [k, st[k] && st[k].at]));
+    const curIdx = STAGES.findIndex(([k]) => !at[k]); // 현재 단계 = 첫 미도달 단계
     ol.replaceChildren(...STAGES.map(([k, name], i) => {
       const li = el('li', at[k] ? 'done' : i === curIdx ? 'cur' : '');
-      li.append(el('span', null, name), el('span', 't num', at[k] ? hhmm(at[k]) : i === curIdx ? '진행 중' : '-'));
+      const pg = st[k] && st[k].progress, run = !at[k] && pg && Number(pg.done) > 0; // 도달 전이라도 누적 수량이 있으면 진행 중
+      li.append(el('span', null, name), el('span', 't num', at[k] ? hhmm(at[k]) || '-' : run ? `${fmt(pg.done)} / ${fmt(pg.total)}` : '-'));
       if (i === curIdx) li.setAttribute('aria-current', 'step');
       return li;
     }));
@@ -217,7 +220,7 @@ export function createUi({ zoomIn, zoomOut, home }) {
     };
     let rows;
     if (tab === 'dock') rows = docks.map(d => { const out = d.kind === 'dock_out' || d.kind === 'out', tr = d.truck && (d.truck.no || d.truck), t = trucks.find(x => String(x.no) === String(tr)); return row(d.code, d.occupied ? `트럭 ${tr || ''}` : (out ? '출하 도크' : '입고 도크'), d.occupied ? statusKo(t ? t.status : out ? 'loading' : 'unloading') : ['비어 있음', ''], t && t.total ? t.done / t.total : 0, tr ? 'truck' : 'site', tr ? String(tr) : (out ? 'ship' : 'mat')); });
-    else if (tab === 'fork') rows = forks.map(f => row(f.code, f.task ? `${f.task.from_code || '-'} → ${f.task.to_code || '-'}` : '대기 위치', f.task ? ['이동 중', 'act'] : ['대기', ''], f.progress <= 1 ? f.progress : f.progress / 100, 'forklift', f.code));
+    else if (tab === 'fork') rows = forks.map(f => row(f.code, f.task ? `${TASK_KO[f.task.kind] || f.task.kind || '작업'} · ${f.task.from_code || '-'} → ${f.task.to_code || '-'}` : '대기 위치', f.task ? ['이동 중', 'act'] : ['대기', ''], f.progress <= 1 ? f.progress : f.progress / 100, 'forklift', f.code));
     else rows = trucks.map(t => row(t.no, `${t.type === 'in' ? '입고' : '출하'} · ${t.dock || '도크 대기'}`, statusKo(t.status), t.total ? t.done / t.total : 0, 'truck', String(t.no)));
     const list = $('tab-list'), top = list.scrollTop;
     list.replaceChildren(...(rows.length ? rows : [el('li', 'empty', '해당하는 항목이 없습니다')]));

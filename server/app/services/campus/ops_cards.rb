@@ -185,50 +185,46 @@ module Campus
 
     # --- O5 shipment ----------------------------------------------------------------------------
 
-    # 쿼리 4: 대상 수주, 작업 집계, 주문량 합, 출하 이동 시각. 수주를 못 찾으면 쿼리 1개만 쓰고 nil.
+    # 쿼리 4: 대상 수주, 끝난 pick·load 작업, 주문량 합, 출하 이동. 수주를 못 찾으면 쿼리 1개만 쓰고 nil.
+    # 단계는 회차가 아니라 주문 수량 누적으로 정의한다(피킹분은 출하대에 쌓였다가 다른 회차에 실리므로 회차로 자르면 단계가 비는 응답이 나온다).
+    # picked = 첫 완료 pick / staged = 완료 pick 누적 >= 주문량 / loaded = 완료 load 누적 >= 주문량 / shipped = ship 이동 누적 >= 주문량.
+    # 도달 전이면 at=nil 이다. progress{done,total} 은 단계별 누적 수량 / 주문량이다. 주문량이 0 이하면 누적 단계는 도달할 수 없다.
     def shipment
-      id, so_no, customer, created_at, status = target_order
+      id, so_no, customer, created_at, _status = target_order
       return nil unless id
 
-      tasks = Task.where(kind: %w[pick load]).where.not(status: "cancelled")
-                  .joins("JOIN sales_order_lines sol ON tasks.ref_type = 'SalesOrderLine' AND sol.id = tasks.ref_id")
-                  .where("sol.sales_order_id = ?", id)
-                  .pluck("tasks.kind", "tasks.status", "tasks.qty", "tasks.planned_at", "tasks.started_at", "tasks.finished_at")
+      done = Task.where(kind: %w[pick load], status: "done").where.not(finished_at: nil)
+                 .joins("JOIN sales_order_lines sol ON tasks.ref_type = 'SalesOrderLine' AND sol.id = tasks.ref_id")
+                 .where("sol.sales_order_id = ?", id)
+                 .pluck("tasks.kind", "tasks.finished_at", "tasks.qty")
       lines = SalesOrderLine.where(sales_order_id: id)
       ordered = lines.sum(:ordered_qty)
-      ships = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: lines.select(:id)).order(:occurred_at).pluck(:occurred_at, :qty)
-      stages = round_stages(tasks, ships, ordered)
-      at = [created_at, *stages.values_at(:picked, :staged, :loaded, :shipped)]
-      # 단계 시각은 단조 증가해야 한다. 앞 단계보다 이른 시각은 다른 회차의 흔적이니 비운다.
+      ships = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: lines.select(:id)).pluck(:occurred_at, :qty)
+      picks = done.filter_map { |kind, at, qty| [at, qty] if kind == "pick" }
+      loads = done.filter_map { |kind, at, qty| [at, qty] if kind == "load" }
+
+      stages = [{ key: "received", at: iso(created_at) }]
       floor = created_at
-      %i[picked staged loaded shipped].each_with_index do |key, i|
-        if at[i + 1] && at[i + 1] < floor then at[i + 1] = nil
-        elsif at[i + 1] then floor = at[i + 1]
-        end
+      [[:picked, picks.map(&:first).min, picks], [:staged, reached_at(picks, ordered), picks],
+       [:loaded, reached_at(loads, ordered), loads], [:shipped, reached_at(ships, ordered), ships]].each do |key, at, events|
+        # 단계 시각은 단조 증가해야 한다: 앞 단계보다 이르게 찍힌 기록(상차가 마지막 pick 보다 먼저 끝난 경우 등)은 앞 단계 시각으로 올린다.
+        at = [at, floor].max if at
+        floor = at if at
+        stages << { key: key.to_s, at: iso(at), progress: { done: num(events.sum { |_, qty| qty }), total: num(ordered) } }
       end
-      { so_no: so_no, customer: customer,
-        stages: [{ key: "received", at: iso(at[0]) }, { key: "picked", at: iso(at[1]) }, { key: "staged", at: iso(at[2]) },
-                 { key: "loaded", at: iso(at[3]) }, { key: "shipped", at: iso(at[4]) }] }
+      { so_no: so_no, customer: customer, stages: stages }
     end
 
-    # 분할 출하 수주는 출하가 여러 번이다. 현재 회차 = 마지막 ship 이동 이후의 활동, 그 뒤 활동이 없으면 마지막 회차 전체(직전 ship 이후 ~ 마지막 ship).
-    # picked·staged·loaded·shipped 는 같은 회차 이벤트만 쓴다. 현재 회차가 아직 안 나갔으면 shipped 는 비어 있다.
-    # staged = 그 회차 pick 이 모두 끝난 시각: 열린 pick 이 없고 끝난 pick 수량이 (주문량 - 이전 회차 출하량) 이상. 재고가 모자라 일부만 pick 했으면 비어 있다.
-    def round_stages(tasks, ships, ordered)
-      active_at = ->(t) { t[5] || t[4] || t[3] }
-      last_ship = ships.last&.first
-      later = last_ship && tasks.any? { |t| active_at.(t) > last_ship }
-      if ships.empty? || later
-        from, upto, shipped, before = last_ship, nil, nil, ships
-      else
-        from, upto, shipped, before = ships[-2]&.first, last_ship, last_ship, ships[0...-1]
+    # 시각순 이벤트 수량을 누적해 target 이상이 되는 첫 시각. 도달 못 하거나 target 이 0 이하면 nil.
+    def reached_at(events, target)
+      return nil unless target.positive?
+
+      sum = 0
+      events.sort_by(&:first).each do |at, qty|
+        sum += qty
+        return at if sum >= target
       end
-      round = tasks.select { |t| (from.nil? || active_at.(t) > from) && (upto.nil? || active_at.(t) <= upto) }
-      picks = round.select { |t| t[0] == "pick" }
-      done = picks.select { |t| t[1] == "done" && t[5] }
-      remaining = ordered - before.sum { |_, qty| qty }
-      staged = done.any? && done.size == picks.size && done.sum { |t| t[2] } >= remaining ? done.map { |t| t[5] }.max : nil
-      { picked: done.map { |t| t[5] }.min, staged: staged, loaded: round.select { |t| t[0] == "load" }.filter_map { |t| t[4] }.min, shipped: shipped }
+      nil
     end
 
     # ?so= 가 있으면 그 수주(상태 무관). 없으면 열린(open·partial) 수주 중 pick·load 작업이 가장 최근에 바뀐 것, 작업이 없으면 가장 새 수주.

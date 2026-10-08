@@ -10,6 +10,8 @@ import { GW } from './layout.js';
 
 const VIS_MIN = 4000, VIS_MAX = 10000, FORK_N = 2, TRUCK_MAX = 2, ENTER_MS = 5000, LEAVE_MS = 4000, HOLD_MS = 2000, PRUNE_MS = 30000;
 const FORK_KINDS = ['putaway', 'pick', 'feed'];
+// 지게차 차체 길이 ≈ 2.5(마스트 끝~카운터웨이트) + 여유 0.6 = 3.1 이상. 방향은 건물 안으로 들어가지 않는 쪽(기본 남쪽)
+const SLOT_GAP = 3.2, SPREAD = { ship: [-1, 0], qc: [-1, 0] };
 const RET_SPEED = 6, LIFT = .35, FLOOR_Y = .06, WORKER_AT = [31, 30.2];
 
 // ---- 도로 그래프(campus_flow.js 와 같은 값. 2D 그리드 (x, y) = 3D (x, z)) ----
@@ -61,8 +63,8 @@ function exit(side, i, hint) {
   }
   if (b === 'ship' && bin) { const x = avgX(bin); return { pts: [[x, 17.7], [x, NODE.j6[1]], NODE.j6], node: 'j6' }; } // 출하장 칸: 북쪽 길
   if (b === 'prod') return { pts: [[12.7 + i, 16.6], [13.2, 15.5], [13.2, NODE.j3[1]], NODE.j3], node: 'j3' }; // 생산동 북쪽 출입 틈(x 12~14.4)
-  const n = NODE[b] ? b : 'mat';
-  return { pts: i ? [[NODE[n][0], NODE[n][1] + i * .9], NODE[n]] : [NODE[n]], node: n };
+  const n = NODE[b] ? b : 'mat', d = SPREAD[n] || [0, 1], g = i * SLOT_GAP; // 같은 노드를 쓰는 지게차는 번호마다 한 칸씩 비켜 선다
+  return { pts: i ? [[NODE[n][0] + d[0] * g, NODE[n][1] + d[1] * g], NODE[n]] : [NODE[n]], node: n };
 }
 function pathBetween(a, b, i) {
   const A = exit(a, i, hintNode(b)), B = exit(b, i, hintNode(a));

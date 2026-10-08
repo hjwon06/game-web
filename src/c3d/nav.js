@@ -10,7 +10,7 @@ import { OPS } from './ui.js';
 
 const FLY_MS = 900, BLUE = 0x2563EB, DRAG_PX = 5;
 const KEY_SITE = { 1: 'office', 2: 'mat', 3: 'prod', 4: 'qc', 5: 'ship', 6: 'maint', 7: 'util' };
-const TASK_KO = { putaway: '적치', pick: '피킹', feed: '라인 공급' };
+const TASK_KO = { putaway: '적치', pick: '피킹', feed: '라인 공급', unload: '하차', load: '상차', inspect: '검사', count: '실사' }; // ui.js 의 TASK_KO 와 같은 값
 const TRUCK_ST = { enter: '진입 중', leave: '출발 중' };
 
 // 건물 7곳(생산동은 HALL). cx·cz = 바닥 중심, h = 벽 높이
