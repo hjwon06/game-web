@@ -188,8 +188,9 @@ module Simulation
                    .transform_values { |rows| rows.map { |_, lot_id, qty| [lot_id, qty] } }
       this_minute = StockMove.where(move_type: "ship").where("idempotency_key LIKE ?", "sim:ship:%:#{@iso}")
       done_now = SalesOrderLine.where(id: this_minute.select(:ref_id)).select(:sales_order_id)
+      # 이번 분에 만든 수주(new_order 가 created_at 을 이 분으로 찍는다)는 다음 분부터 출하한다 — 같은 분 재실행이 새 수주를 당겨 출하하지 않게.
       orders = SalesOrder.where(status: %w[open partial]).or(SalesOrder.where(id: done_now))
-                         .includes(:lines).order(Arel.sql("due_date NULLS LAST"), :id)
+                         .where.not(created_at: @minute).includes(:lines).order(Arel.sql("due_date NULLS LAST"), :id)
 
       served = 0
       orders.each do |order|

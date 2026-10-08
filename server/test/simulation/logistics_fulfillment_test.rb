@@ -132,7 +132,8 @@ class LogisticsFulfillmentTest < ActiveSupport::TestCase
     again = run_minute(0)
     assert_equal 0, again[:ship], "같은 분 재실행은 4번째 수주로 번지지 않는다"
     assert_equal 30, StockMove.where(move_type: "ship").sum(:qty)
-    assert_equal %w[open open], lines.last(2).map { |l| l.sales_order.reload.status }
+    # lines 는 [5,4,3,2,1] 일수 순이라 last(2) 는 납기가 가장 빠른(=이미 출하된) SO-T-2, SO-T-1 이다. so_no 로 직접 본다.
+    assert_equal({ "SO-T-4" => "open", "SO-T-5" => "open" }, SalesOrder.where(so_no: %w[SO-T-4 SO-T-5]).pluck(:so_no, :status).to_h)
   end
 
   test "출하 멱등키는 sim:ship:<라인 id>:<분 ISO> 이다" do
