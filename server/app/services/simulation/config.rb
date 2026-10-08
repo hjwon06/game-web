@@ -37,9 +37,9 @@ module Simulation
     STARVE_LOG_MINUTES = 10                  # 작업지시가 이만큼 연속으로 자재 부족이면 그 뒤 이 간격마다 로그 1줄
 
     # 입고(트럭 → 하차 → 칸 적치) 숫자. Runner 가 BUCKET_SECONDS(10초)마다 Inbound 를 부른다.
-    FORECAST_SECONDS = 1800                  # 이만큼의 예상 소비량 대비 (칸 재고 + 들어오는 중) 이 가장 모자란 자재를 싣는다
-    TRUCK_INTERVAL_SECONDS = (240..480).freeze # 트럭 도착 간격(초) 균등난수
-    PALLETS_PER_TRUCK = (4..8).freeze
+    FORECAST_SECONDS = 1800                  # 트럭 적재량 = 이만큼(30분)의 자재 수요를 팔레트로 올림한 값
+    TRUCK_INTERVAL_SECONDS = (180..360).freeze # 트럭 도착 간격(초) 균등난수 3~6분
+    PALLETS_PER_TRUCK = (4..12).freeze       # 적재량 하한·상한(팔레트). 칸이 모자라면 하한 아래로도 줄인다
     PUTAWAY_LOOKBACK_SECONDS = 21_600        # 하차가 끝난 뒤 이만큼까지만 적치 대기분을 다시 찾는다(tasks 스캔 상한)
     MAX_PUTAWAY_CANCELS = 3                  # 한 팔레트의 적치가 이만큼 취소되면 더 계획하지 않는다
 

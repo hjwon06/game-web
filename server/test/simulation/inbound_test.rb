@@ -68,29 +68,28 @@ class InboundTest < ActiveSupport::TestCase
     from + seconds
   end
 
-  test "시계를 흘리면 트럭 간격은 4~8분이고 예정 시각에서 10초 안에 도착한다" do
+  test "시계를 흘리면 트럭 간격은 3~6분이고 예정 시각에서 10초 안에 도착한다" do
     drive(Time.current.change(usec: 0), 3600)
 
     schedule = @schedule.map(&:last)
-    assert_operator schedule.size, :>=, 7, "한 시간에 예정이 7번 이상 바뀐다(간격 최대 8분)"
-    schedule.each_cons(2) { |a, b| assert_includes 240..480, b - a, "간격 #{b - a}초" }
+    assert_operator schedule.size, :>=, 10, "한 시간에 예정이 10번 이상 바뀐다(간격 최대 6분)"
+    schedule.each_cons(2) { |a, b| assert_includes 180..360, b - a, "간격 #{b - a}초" }
     @schedule.each_cons(2) do |(_, prev), (called, _)|
       assert_operator called - prev, :>=, 0
       assert_operator called - prev, :<, 10, "예정 #{prev} 인데 #{called} 에 도착"
     end
-    # 팔레트가 500개라 트럭 한 대가 30분 소비량(강판 2822·볼트 1411)을 거의 채운다. 소비가 없는 이 테스트에서는 자재마다 한두 대면 끝난다.
-    assert_operator truck_lots.count, :>=, 2
+    assert_operator truck_lots.count, :>=, 2, "두 자재 모두 실려 온다"
   end
 
   test "팔레트마다 unload 1건·putaway 1건이고, 이동 시각이 서로 달라 같은 초에 2건 이하다" do
     t = drive(Time.current.change(usec: 0), 3600)
-    @machine.update!(state: "stopped") # 소비 예상이 0 이 되어 새 트럭이 없다
+    @machine.update!(state: "stopped") # 수요가 0 이 되어 새 트럭이 없다
     drive(t, 1200) # 남은 하차·적치가 끝날 때까지
 
     unloads = Task.where(kind: "unload").order(:id).to_a
     assert_operator unloads.size, :>=, 8
     assert unloads.all? { |u| u.status == "done" }, "하차가 전부 끝났다"
-    unloads.group_by(&:lot_id).each_value { |list| assert_includes 4..8, list.size, "트럭당 팔레트 4~8개" }
+    unloads.group_by(&:lot_id).each_value { |list| assert_includes 4..12, list.size, "트럭당 팔레트 4~12개" }
     assert_equal unloads.map(&:lot_id).uniq.size, truck_lots.count, "트럭 1대 = 로트 1개"
     assert unloads.all? { |u| u.qty == P && u.from_location.code == "supplier" && u.to_location.code == "receiving" }
 
@@ -114,14 +113,14 @@ class InboundTest < ActiveSupport::TestCase
     assert_equal 0, @log.string.lines.grep(/ERROR/).size
   end
 
-  test "로트는 R-yyyymmddHHMM-sku 로 트럭당 1개이고, 팔레트는 4~8개다" do
+  test "로트는 R-yyyymmddHHMM-sku 로 트럭당 1개이고, 팔레트는 30분 수요 올림(강판 2822 → 6)이다" do
     due!(NOW)
 
     result = inbound(NOW)
 
     assert_equal 1, result[:trucks]
-    assert_includes 4..8, result[:unload]
-    assert_equal ["R-202610081207-RAW-S"], truck_lots.pluck(:lot_no), "아무 재고도 없으면 30분 소비가 가장 큰 강판이다"
+    assert_equal 6, result[:unload]
+    assert_equal ["R-202610081207-RAW-S"], truck_lots.pluck(:lot_no), "둘 다 재고 0 인 동률이고 직전 트럭이 없으면 id 순 첫 자재다"
     tasks = Task.where(kind: "unload")
     assert_equal result[:unload], tasks.count
     assert_equal [truck_lots.first.id], tasks.pluck(:lot_id).uniq
@@ -197,7 +196,7 @@ class InboundTest < ActiveSupport::TestCase
     assert_equal first[:unload], Task.where(kind: "unload").count
     assert_equal scheduled_after, InboundState.pick(:next_truck_at)
     assert_equal 1, InboundState.count
-    assert_includes 240..480, scheduled_after - (NOW - 1)
+    assert_includes 180..360, scheduled_after - (NOW - 1)
   end
 
   test "상태 행이 없으면 첫 호출이 만들고 트럭은 간격 뒤에 온다" do
@@ -207,7 +206,7 @@ class InboundTest < ActiveSupport::TestCase
 
     assert_equal 0, result[:trucks]
     assert_equal 1, InboundState.count
-    assert_includes 240..480, InboundState.pick(:next_truck_at) - NOW
+    assert_includes 180..360, InboundState.pick(:next_truck_at) - NOW
   end
 
   test "오래 멈췄다 돌아와도 트럭은 1대만 오고 다음 도착은 지금 + 간격이다" do
@@ -216,22 +215,108 @@ class InboundTest < ActiveSupport::TestCase
     result = inbound(NOW)
 
     assert_equal 1, result[:trucks]
-    assert_includes 240..480, InboundState.pick(:next_truck_at) - NOW
+    assert_includes 180..360, InboundState.pick(:next_truck_at) - NOW
     assert_equal 0, inbound(NOW + 10)[:trucks]
   end
 
-  test "부족한 자재가 없으면 트럭이 오지 않고 다음 시각만 잡는다" do
+  test "재고가 넉넉해도 트럭은 온다: 보유 분수가 가장 작은 자재를 싣는다" do
     roomy_bins!
-    seed_bin(@steel, "RAW-A-01-01", 3000) # 2822.4 이상
-    seed_bin(@bolt, "RAW-A-01-02", 1500)  # 1411.2 이상
+    seed_bin(@steel, "RAW-A-01-01", 3000) # 31.9분
+    seed_bin(@bolt, "RAW-A-01-02", 1600)  # 34.0분
     due!(NOW)
 
     result = inbound(NOW)
 
-    assert_equal 0, result[:trucks]
-    assert_equal 0, Task.count
-    assert_equal 0, truck_lots.count
-    assert_operator InboundState.pick(:next_truck_at), :>, NOW
+    assert_equal 1, result[:trucks]
+    assert_equal ["R-202610081207-RAW-S"], truck_lots.pluck(:lot_no)
+  end
+
+  test "재고 0 인 자재가 먼저 선택된다" do
+    roomy_bins!
+    seed_bin(@steel, "RAW-A-01-01", 500)
+    due!(NOW)
+
+    inbound(NOW)
+
+    assert_equal ["R-202610081207-RAW-B"], truck_lots.pluck(:lot_no)
+  end
+
+  test "동률(둘 다 보유 0)이면 직전 트럭과 다른 자재다" do
+    roomy_bins!
+    Task.insert_all!([{ kind: "unload", status: "cancelled", product_id: @steel.id, qty: P, planned_at: NOW - 600,
+                        from_location_id: Location.find_by!(code: "supplier").id, to_location_id: Location.find_by!(code: "receiving").id,
+                        created_at: NOW, updated_at: NOW }]) # 직전 트럭 = 강판(취소돼 보유량에는 안 잡힌다)
+    due!(NOW)
+
+    inbound(NOW)
+
+    assert_equal ["R-202610081207-RAW-B"], truck_lots.pluck(:lot_no), "id 순이면 강판이지만 직전이 강판이라 볼트"
+  end
+
+  test "수요 0 인 자재는 후보가 아니다" do
+    BomLine.where(component: @steel).delete_all # 강판 수요 0, 재고 0 이어도 볼트만 실린다
+    due!(NOW)
+
+    inbound(NOW)
+
+    assert_equal ["R-202610081207-RAW-B"], truck_lots.pluck(:lot_no)
+  end
+
+  test "적재량 하한: 30분 수요가 3팔레트(볼트 1411)여도 4팔레트다" do
+    roomy_bins!
+    seed_bin(@steel, "RAW-A-01-01", 10_000)
+    due!(NOW)
+
+    result = inbound(NOW)
+
+    assert_equal ["R-202610081207-RAW-B"], truck_lots.pluck(:lot_no)
+    assert_equal 4, result[:unload]
+  end
+
+  test "적재량 상한: 30분 수요가 18팔레트 넘으면 12팔레트다" do
+    roomy_bins!
+    fg2 = Product.create!(sku: "FG-X", name: "대형", uom: "ea", kind: "fg")
+    BomLine.create!(product: fg2, component: @steel, qty_per: 10) # M2 양품 0.48/s × 10 = 288/분 + 94/분 → 30분 11,462 → 23팔레트
+    WorkOrder.create!(code: "WO-I2", machine: Machine.create!(code: "M2", name: "프레스", state: "running"), item: fg2,
+                      product: "대형", target_qty: 100_000, status: "active", started_at: NOW)
+    due!(NOW)
+
+    result = inbound(NOW)
+
+    assert_equal ["R-202610081207-RAW-S"], truck_lots.pluck(:lot_no)
+    assert_equal 12, result[:unload]
+  end
+
+  test "칸이 모자라면 남은 칸 용량만큼 싣고, 빈 칸이 없으면 트럭이 오지 않는다" do
+    codes = Simulation::Inbound.bins_under("raw_store").pluck(:code)
+    Location.where(code: codes).update_all(capacity_units: P) # 칸마다 팔레트 1개
+    codes.first(codes.size - 2).each { |code| seed_bin(@bolt, code, P) } # 볼트가 점유: 강판이 들어갈 칸은 2개
+    due!(NOW)
+
+    result = inbound(NOW)
+
+    assert_equal ["R-202610081207-RAW-S"], truck_lots.pluck(:lot_no)
+    assert_equal 2, result[:unload], "6팔레트를 원했지만 빈 칸이 2개"
+
+    due!(NOW + 600)
+    again = inbound(NOW + 600) # 하차 계획분 2팔레트가 남은 칸 2개를 이미 차지한다
+
+    assert_equal [0, 0], [again[:trucks], again[:unload]]
+    assert_operator InboundState.pick(:next_truck_at), :>, NOW + 600
+  end
+
+  test "10분 경계에서만 자재별 coverage 와 총수요/총공급을 로그로 남긴다" do
+    roomy_bins!
+    seed_bin(@steel, "RAW-A-01-01", 940) # 10.0분
+    boundary = Time.utc(2026, 10, 8, 12, 10, 0)
+
+    inbound(boundary - 10)
+    assert_no_match(/sim inbound balance/, @log.string)
+
+    inbound(boundary)
+
+    line = @log.string.lines.grep(/sim inbound balance/).first
+    assert_match(/coverage\[RAW-S=10\.0min RAW-B=0\.0min\] demand_per_min=141\.1 supply_per_min=0\.0 supply\/demand=0\.0/, line)
   end
 
   test "소비가 없으면(기계 정지) 트럭이 오지 않는다" do
@@ -266,9 +351,9 @@ class InboundTest < ActiveSupport::TestCase
 
   test "이미 계획된 하차분도 입고 예정으로 센다" do
     roomy_bins!
-    seed_bin(@steel, "RAW-A-01-01", 2800) # 부족 22.4
-    Task.create!(kind: "unload", status: "planned", product: @bolt, qty: 1400, planned_at: NOW + 60, from_location: Location.find_by!(code: "supplier"),
-                 to_location: Location.find_by!(code: "receiving")) # 볼트 부족 11.2
+    seed_bin(@steel, "RAW-A-01-01", 2000) # 21.3분
+    Task.create!(kind: "unload", status: "planned", product: @bolt, qty: 1500, planned_at: NOW + 60, from_location: Location.find_by!(code: "supplier"),
+                 to_location: Location.find_by!(code: "receiving")) # 볼트 31.9분(하차 계획분이 없으면 0분이라 볼트가 뽑힌다)
     due!(NOW)
 
     inbound(NOW)

@@ -33,6 +33,7 @@ module Simulation
       InboundState.transaction do
         state = InboundState.lock_row!(default_next_truck_at: @now + interval(Random.new(Config::SEED + @now.to_i)))
         step("putaway") { plan_putaways }
+        step("balance") { log_balance }
         step("truck") { deliver_truck(state) } if state.next_truck_at <= @now
       end
       @logger.info("sim inbound #{@now.iso8601} #{@counts.map { |k, v| "#{k}=#{v}" }.join(' ')}") if @counts.values.any?(&:positive?)
@@ -55,14 +56,14 @@ module Simulation
     # --- 트럭 ------------------------------------------------------------------------------------
 
     # 다음 도착 시각은 예정 시각 + 간격. 오래 멈췄다 돌아와 이미 지난 시각이 되면 지금 + 간격(밀린 트럭을 몰아 보내지 않는다).
-    # 부족한 자재가 없으면 이번 트럭은 오지 않고 다음 시각만 잡는다.
+    # 수요가 있는 자재가 없거나 칸이 없으면 이번 트럭은 오지 않고 다음 시각만 잡는다.
     def deliver_truck(state)
       scheduled = state.next_truck_at
       rng = Random.new(Config::SEED + scheduled.to_i)
-      product = most_short_material
+      product, pallets = next_load
       if product
         lot = Lot.find_or_create_by!(product: product, lot_no: "R-#{@now.strftime('%Y%m%d%H%M')}-#{product.sku}")
-        rng.rand(Config::PALLETS_PER_TRUCK).times do
+        pallets.times do
           Ops::Plan.call(kind: "unload", product: product, lot: lot, qty: Config::PALLET_QTY,
                          from: "supplier", to: "receiving", ref: nil, earliest_at: @now)
           @counts[:unload] += 1
@@ -74,28 +75,58 @@ module Simulation
       state.update!(next_truck_at: following)
     end
 
-    # (raw 칸 재고 + line_side 재고 + 입고대 + 하차 계획분) 이 다음 30분 예상 소비량에 가장 못 미치는 자재. 모자란 자재가 없으면 nil.
-    # 진행 중 feed 는 완료 전까지 raw 칸 재고에 그대로 들어 있어 따로 더하지 않는다(더하면 이중으로 센다).
-    def most_short_material
-      need = consumption_per_second.transform_values { |per_second| per_second * Config::FORECAST_SECONDS }
-      return nil if need.empty?
+    # 이번 트럭이 싣고 올 [자재, 팔레트 수]. 실을 게 없으면 nil.
+    # ① 보유 분수(coverage = 보유량 / 분당 수요) 가 가장 작은 자재(수요 0 인 자재는 후보가 아니다).
+    #    동률이면 직전 트럭과 다른 자재, 그래도 같으면 id 순.
+    # ② 팔레트 수 = ceil(그 자재 30분 수요 / 팔레트), PALLETS_PER_TRUCK 로 자른다.
+    # ③ 칸이 모자라면 남은 칸 용량만큼으로 줄인다(0 이면 트럭이 오지 않는다).
+    def next_load
+      demand = demand_per_minute
+      return nil if demand.empty?
 
-      ids = need.keys
+      held = holdings(demand.keys)
+      coverage = demand.to_h { |id, per_minute| [id, held.fetch(id, 0) / per_minute] }
+      lowest = coverage.values.min
+      tied = coverage.select { |_, minutes| minutes == lowest }.keys.sort
+      last = Task.where(kind: "unload").order(id: :desc).pick(:product_id)
+      id = tied.find { |pid| pid != last } || tied.first
+
+      wanted = (demand.fetch(id) * (Config::FORECAST_SECONDS / 60.0) / Config::PALLET_QTY).ceil
+      wanted = wanted.clamp(Config::PALLETS_PER_TRUCK.min, Config::PALLETS_PER_TRUCK.max)
+      pallets = [wanted, free_pallets(id)].min
+      pallets.positive? ? [Product.find(id), pallets] : nil
+    end
+
+    # 자재별 보유량 = raw 칸 + line_side + 입고대 + 아직 입고대에 닿지 않은 하차 계획분.
+    # 진행 중 putaway(입고대 → 칸)·feed(칸 → line_side)는 끝나기 전까지 출발 위치에 재고가 그대로 있어 따로 더하지 않는다(더하면 이중으로 센다).
+    def holdings(ids)
       in_stock = Quant.where(product_id: ids, location_id: store_location_ids + Location.where(code: "line_side").pluck(:id))
                       .group(:product_id).sum(:qty)
       receiving = Quant.where(product_id: ids, location_id: Location.where(code: "receiving").select(:id)).group(:product_id).sum(:qty)
       coming = Task.where(kind: "unload", status: %w[planned started], product_id: ids).group(:product_id).sum(:qty)
+      ids.to_h { |id| [id, in_stock.fetch(id, 0) + receiving.fetch(id, 0) + coming.fetch(id, 0)] }
+    end
 
-      shortage = need.to_h { |id, qty| [id, qty - in_stock.fetch(id, 0) - receiving.fetch(id, 0) - coming.fetch(id, 0)] }
-      id, short = shortage.max_by { |pid, s| [s, -pid] }
-      short.positive? ? Product.find(id) : nil
+    # 이 자재 팔레트가 더 들어갈 수 있는 칸 용량(팔레트 수) - 이미 들어오는 중이라 칸을 차지할 팔레트(입고대 + 하차 계획분).
+    def free_pallets(product_id)
+      cap = Config::PALLETS_PER_TRUCK.max
+      fit = load_bins.sum do |bin|
+        free = if bin.products.include?(product_id) then bin.capacity - bin.used
+               elsif bin.products.empty? then bin.capacity
+               else 0
+               end
+        (free / Config::PALLET_QTY).clamp(0, cap).floor
+      end
+      receiving = Quant.where(location_id: Location.where(code: "receiving").select(:id)).sum(:qty)
+      coming = Task.where(kind: "unload", status: %w[planned started]).sum(:qty)
+      fit - ((receiving + coming).to_f / Config::PALLET_QTY).ceil
     end
 
     # 칸이 생기기 전 재고가 창고 자체에 있을 수 있어 raw_store 도 함께 센다.
     def store_location_ids = Location.where(code: "raw_store").pluck(:id) + self.class.bins_under("raw_store").pluck(:id)
 
-    # 자재별 초당 예상 소비량(running 기계의 active 작업지시 기준).
-    def consumption_per_second
+    # 자재별 분당 예상 소비량(running 기계의 active 작업지시 양품 × BOM).
+    def demand_per_minute
       bom = BomLine.all.group_by(&:product_id)
       per_second = Hash.new(0.0)
       WorkOrder.where(status: "active").joins(:machine).where(machines: { state: "running" })
@@ -103,7 +134,23 @@ module Simulation
         good_rate = Config.rate(code) * (1 - Config.defect_rate(code))
         bom.fetch(product_id, []).each { |line| per_second[line.component_id] += good_rate * line.qty_per }
       end
-      per_second.reject { |_, v| v.zero? }
+      per_second.reject { |_, v| v.zero? }.transform_values { |v| v * 60 }
+    end
+
+    # BALANCE_LOG_SECONDS 마다 한 줄: 자재별 coverage 분, 총수요/총공급(최근 10분 하차 완료량) 분당.
+    def log_balance
+      return unless (@now.to_i % Config::BALANCE_LOG_SECONDS).zero?
+
+      demand = demand_per_minute
+      held = holdings(demand.keys)
+      skus = Product.where(id: demand.keys).pluck(:id, :sku).to_h
+      coverage = demand.map { |id, per_minute| "#{skus[id]}=#{(held.fetch(id, 0) / per_minute).round(1)}min" }.join(" ")
+      window = Config::BALANCE_LOG_SECONDS
+      supply = Task.where(kind: "unload", status: "done", finished_at: (@now - window)..@now).sum(:qty) * 60.0 / window
+      total = demand.values.sum
+      ratio = total.zero? ? "-" : (supply / total).round(2)
+      @logger.info("sim inbound balance #{@now.iso8601} coverage[#{coverage}] demand_per_min=#{total.round(1)} " \
+                   "supply_per_min=#{supply.round(1)} supply/demand=#{ratio}")
     end
 
     # --- 적치 ------------------------------------------------------------------------------------
