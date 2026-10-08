@@ -3,6 +3,7 @@ require "stringio"
 
 # Logistics 의 신규 수주 단계와 단계 격리. 검사는 inspection_test.rb, 출하는 shipping_test.rb 로 옮겼다.
 class LogisticsFulfillmentTest < ActiveSupport::TestCase
+  include UnscaledRatesHelper
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
   EPOCH = M0 - 3600
 

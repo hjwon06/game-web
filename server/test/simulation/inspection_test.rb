@@ -1,7 +1,7 @@
 require "test_helper"
 require "stringio"
 
-# 검사: qc 에 쌓인 완제품을 작업지시별로 묶어 100개 이상이거나 3분이 지나면 inspect 작업(작업자) 1건.
+# 검사: qc 에 쌓인 완제품을 로트별로 묶어 팔레트(500개) 이상이거나 5분이 지나면 inspect 작업(작업자) 1건. 1건은 팔레트 1개를 넘지 않는다.
 # 완료하면 불량분은 qc_fail(qc → scrap), 합격분은 지게차 적치(qc → fg 칸, 이동 유형 qc_pass).
 class InspectionTest < ActiveSupport::TestCase
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
@@ -50,45 +50,61 @@ class InspectionTest < ActiveSupport::TestCase
 
   def putaways = Task.where(kind: "putaway", from_location_id: Location.find_by!(code: "qc").id).order(:id)
 
-  test "미검사 수량이 100개 이상이면 바로 inspect 작업 1건이 작업자에게 계획된다" do
-    lot = produce_to_qc(100, M0)
+  P = Simulation::Config::PALLET_QTY
+  WAIT = Simulation::Config::INSPECT_MAX_WAIT_SECONDS
+
+  test "미검사 수량이 팔레트 이상이면 바로 inspect 작업 1건이 작업자에게 계획된다" do
+    lot = produce_to_qc(P, M0)
 
     result = plan
 
     assert_equal 1, result[:inspect]
     task = inspects.sole
-    assert_equal ["worker", "qc", "fg_store", 100, lot.id, @order.id, "WorkOrder", "planned"],
+    assert_equal ["worker", "qc", "fg_store", P, lot.id, @order.id, "WorkOrder", "planned"],
                  [task.resource.kind, task.from_location.code, task.to_location.code, task.qty.to_i, task.lot_id,
                   task.ref_id, task.ref_type, task.status]
   end
 
-  test "100개 미만이면 가장 오래된 도착분이 3분을 넘기 전에는 검사하지 않고, 3분이 되면 검사한다" do
-    produce_to_qc(40, M0)
+  test "팔레트 미만이고 대기가 300초 미만이면 inspect 를 만들지 않고, 300초가 되면 남은 양으로 1건 만든다" do
+    produce_to_qc(P - 1, M0)
 
-    assert_equal 0, plan(M0 + 179)[:inspect]
+    assert_equal 0, plan(M0 + WAIT - 1)[:inspect]
     assert_equal 0, inspects.count
 
-    assert_equal 1, plan(M0 + 180)[:inspect]
-    assert_equal 40, inspects.sole.qty.to_i
+    assert_equal 1, plan(M0 + WAIT)[:inspect]
+    assert_equal P - 1, inspects.sole.qty.to_i
+  end
+
+  test "한 inspect 수량은 팔레트를 넘지 않는다: 2.5 팔레트가 쌓이면 팔레트씩 나눠 계획한다" do
+    produce_to_qc(P * 2 + P / 2, M0)
+
+    assert_equal 1, plan(M0)[:inspect]
+    assert_equal 1, plan(M0)[:inspect]
+    assert_equal 0, plan(M0)[:inspect], "남은 반 팔레트는 대기 시간 전이다"
+    assert_equal [P, P], inspects.map { |t| t.qty.to_i }
+
+    assert_equal 1, plan(M0 + WAIT)[:inspect]
+    assert_equal [P, P, P / 2], inspects.map { |t| t.qty.to_i }
+    assert inspects.all? { |t| t.qty.to_i <= P }
   end
 
   test "작업지시별로 묶는다: 여러 분에 걸쳐 도착한 수량을 합쳐 1건으로 검사한다" do
     produce_to_qc(60, M0)
     produce_to_qc(70, M0 + 60)
 
-    plan(M0 + 60)
+    plan(M0 + WAIT)
 
     assert_equal [130], inspects.map { |t| t.qty.to_i }
   end
 
   test "도착 시각은 가장 오래된 미검사 도착분 기준이다: 이미 검사에 맡긴 앞 도착분은 세지 않는다" do
-    produce_to_qc(100, M0)
+    produce_to_qc(P, M0)
     plan(M0)
     produce_to_qc(20, M0 + 170)
 
     assert_equal 0, plan(M0 + 200)[:inspect], "새 20개는 30초밖에 안 됐다"
-    assert_equal 1, plan(M0 + 170 + 180)[:inspect]
-    assert_equal [100, 20], inspects.map { |t| t.qty.to_i }
+    assert_equal 1, plan(M0 + 170 + WAIT)[:inspect]
+    assert_equal [P, 20], inspects.map { |t| t.qty.to_i }
   end
 
   # 작업지시 하나에 로트가 여럿인 모양. lot_no 는 유일(인덱스 + 검증)해서 실제로는 한 로트뿐이지만, 계획 코드는 로트별로 도니
@@ -109,7 +125,7 @@ class InspectionTest < ActiveSupport::TestCase
     produce(b, 200, M0, ref: nil)       # 로트 재고는 각각 300 / 200 / 200 이지만
     produce(c, 200, M0, ref: nil)       # 작업지시 미검사 수량은 300 뿐이다
 
-    result = plan
+    result = plan(M0 + WAIT)
 
     assert_equal 300, inspects.sum(:qty).to_i, "로트마다 min(300, 재고)로 잡으면 700 이 된다"
     assert_equal [a.id], inspects.map(&:lot_id), "앞 로트가 미검사를 다 가져가 나머지 로트는 계획하지 않는다"
@@ -136,22 +152,22 @@ class InspectionTest < ActiveSupport::TestCase
 
     ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { plan(M0 + 600) }
 
-    assert_equal 3, inspects.count, "세 로트 모두 3분을 넘겨 검사가 계획됐다"
+    assert_equal 3, inspects.count, "세 로트 모두 5분을 넘겨 검사가 계획됐다"
     assert_equal 1, arrival_queries.size
   end
 
-  test "D3: 로트별 도착 시각이 따로 계산된다 — 3분 안 된 로트는 건너뛰고 지난 로트만 검사한다" do
+  test "D3: 로트별 도착 시각이 따로 계산된다 — 5분 안 된 로트는 건너뛰고 지난 로트만 검사한다" do
     a, b = multi_lots(2)
     produce(a, 30, M0)
-    produce(b, 30, M0 + 150)
+    produce(b, 30, M0 + 250)
 
-    plan(M0 + 200)
+    plan(M0 + 310)
 
-    assert_equal [a.id], inspects.map(&:lot_id), "b 는 50초밖에 안 됐다"
+    assert_equal [a.id], inspects.map(&:lot_id), "b 는 60초밖에 안 됐다"
   end
 
   test "같은 시각에 다시 불러도 작업·이동이 늘지 않는다" do
-    produce_to_qc(100, M0)
+    produce_to_qc(100, M0 - WAIT)
     plan
     tick
     plan
@@ -167,7 +183,7 @@ class InspectionTest < ActiveSupport::TestCase
 
   test "완료하면 불량분은 qc_fail(qc → scrap)이고 합격분은 지게차 적치로 fg 칸에 qc_pass 로 들어간다" do
     events(90, 10) # 불량률 10%
-    produce_to_qc(100, M0)
+    produce_to_qc(100, M0 - WAIT)
     plan
 
     base = StockMove.count
@@ -195,7 +211,7 @@ class InspectionTest < ActiveSupport::TestCase
 
   test "불량률 0 이면 qc_fail 없이 검사가 끝나고 전량 적치된다" do
     events(100, 0)
-    produce_to_qc(50, M0 - 300)
+    produce_to_qc(50, M0 - WAIT)
     plan
     base = StockMove.count
 
@@ -229,14 +245,14 @@ class InspectionTest < ActiveSupport::TestCase
     Inventory::Move.call(product: other, lot: nil, from: "qc", to: "FG-A-01-01", qty: 10, move_type: "qc_pass", ref: nil,
                          idempotency_key: "ins-other-pass")
     events(100, 0)
-    produce_to_qc(100, M0)
+    produce_to_qc(100, M0 - WAIT)
     plan
     tick
     plan
     assert_equal ["FG-A-01-02"], putaways.map { |t| t.to_location.code }, "01 칸은 다른 품목이 있어 다음 빈 칸"
     tick
 
-    produce_to_qc(100, M0 + 60)
+    produce_to_qc(100, M0 - 240)
     plan(M0 + 60)
     tick
     plan(M0 + 60)
@@ -245,7 +261,7 @@ class InspectionTest < ActiveSupport::TestCase
 
   test "합격 적치가 취소돼 qc 에 남은 수량은 다시 검사하지 않고 적치만 다시 계획한다(3번까지)" do
     events(100, 0)
-    produce_to_qc(100, M0)
+    produce_to_qc(100, M0 - WAIT)
     plan
     tick
     plan
@@ -267,7 +283,7 @@ class InspectionTest < ActiveSupport::TestCase
   test "적치 규칙이 없으면 합격분은 칸을 못 받아 qc 에 남고 waiting 으로 센다" do
     PutawayRule.delete_all
     events(100, 0)
-    produce_to_qc(100, M0)
+    produce_to_qc(100, M0 - WAIT)
     plan
     tick
 
@@ -288,7 +304,7 @@ class InspectionTest < ActiveSupport::TestCase
   end
 
   test "한 단계가 실패해도 다른 단계는 계속되고 실패는 로그에 남는다" do
-    produce_to_qc(100, M0)
+    produce_to_qc(100, M0 - WAIT)
     original = Simulation::Inspection.instance_method(:plan_inspections)
     Simulation::Inspection.send(:define_method, :plan_inspections) { raise "검사 계획 실패" }
     begin

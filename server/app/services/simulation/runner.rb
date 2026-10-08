@@ -26,6 +26,7 @@ module Simulation
     end
 
     def run
+      @logger.info("sim start forklift_load=#{Config.forklift_load.round(2)} rate_scale=#{Config::RATE_SCALE}")
       until @stopped
         sleep(Config::TICK_SECONDS - (Time.current.to_f % Config::TICK_SECONDS))
         step unless @stopped

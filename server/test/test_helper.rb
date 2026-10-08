@@ -17,6 +17,22 @@ module ActiveSupport
   end
 end
 
+# 기계 속도를 배율 없이(RATES 그대로) 가정하고 숫자를 박아 둔 테스트용. RATE_SCALE 을 1.0 으로 고정했다가 끝나면 되돌린다.
+# 배율 자체는 simulation/config_test.rb 가 기본값으로 검사한다. 테스트는 프로세스 병렬이라 상수를 바꿔도 서로 섞이지 않는다.
+module UnscaledRatesHelper
+  def self.included(base)
+    base.setup { UnscaledRatesHelper.set(1.0) }
+    base.teardown { UnscaledRatesHelper.set(UnscaledRatesHelper::ORIGINAL) }
+  end
+
+  ORIGINAL = Simulation::Config::RATE_SCALE
+
+  def self.set(value)
+    Simulation::Config.send(:remove_const, :RATE_SCALE)
+    Simulation::Config.const_set(:RATE_SCALE, value)
+  end
+end
+
 module AuthHelper
   TEST_PASSWORD = "factory-pass-1".freeze
 

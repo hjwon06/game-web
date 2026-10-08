@@ -3,7 +3,8 @@ module Simulation
   # Runner 가 10초마다 부른다. 재고는 여기서 움직이지 않는다 — Ops::Tick 이 inspect 완료 순간 불량분 qc_fail(qc → scrap) 1건을,
   # 적치 완료 순간 qc_pass(qc → fg 칸) 1건을 만든다.
   #
-  # 검사 시점: 작업지시의 미검사 수량이 INSPECT_BATCH_QTY 이상이거나, 그 수량 중 가장 오래된 도착분이 INSPECT_WAIT_SECONDS 를 넘었을 때.
+  # 검사 시점: 미검사 수량이 팔레트(PALLET_QTY) 이상이거나, 그 수량 중 가장 오래된 도착분이 INSPECT_MAX_WAIT_SECONDS 를 넘었을 때.
+  # 1건 수량은 min(미검사량, PALLET_QTY)라 합격분 적치도 팔레트 단위다(더 쌓였으면 다음 호출에 이어서 계획한다).
   # 미검사 수량 = min(원장 기준(qc 로 들어온 produce 합 - 검사 작업 합), qc 현재고 - 이미 맡겨진 수량). 둘 중 작은 쪽이라
   # 검사 작업 기록이 지워져도(Task.prune!) qc 재고보다 많이 검사하지 않고, 적치가 취소돼 qc 에 남은 합격분을 다시 검사하지도 않는다.
   # 상태 기반이라 같은 시각에 다시 불려도 작업이 늘지 않는다.
@@ -73,13 +74,13 @@ module Simulation
         pending = [uninspected.fetch(order.id, 0), quant.qty - claimed.fetch(quant.lot_id, 0)].min
         [quant, order, pending] if pending.positive?
       end
-      arrivals = arrivals_by_lot(qc, candidates.select { |_, _, pending| pending < Config::INSPECT_BATCH_QTY }.map { |q, _, _| q.lot_id })
+      arrivals = arrivals_by_lot(qc, candidates.select { |_, _, pending| pending < Config::PALLET_QTY }.map { |q, _, _| q.lot_id })
       candidates.each do |quant, order, _|
         # 앞 로트가 방금 차감했으므로 pending 을 다시 계산한다.
         pending = [uninspected.fetch(order.id, 0), quant.qty - claimed.fetch(quant.lot_id, 0)].min
         next unless pending.positive? && due?(arrivals[quant.lot_id], pending)
 
-        qty = [pending, Location::BIN_CAPACITY].min
+        qty = [pending, Config::PALLET_QTY].min
         Ops::Plan.call(kind: "inspect", product: order.item, lot: quant.lot, qty: qty,
                        from: qc, to: "fg_store", ref: order, earliest_at: @now)
         uninspected[order.id] -= qty
@@ -106,7 +107,7 @@ module Simulation
 
     # arrivals: arrivals_by_lot 의 이 로트 몫(최근 도착 순 [수량, 도착 ISO]). 배치 수량 이상이면 도착 시각을 보지 않는다.
     def due?(arrivals, pending)
-      pending >= Config::INSPECT_BATCH_QTY || oldest_arrival(arrivals, pending) <= @now - Config::INSPECT_WAIT_SECONDS
+      pending >= Config::PALLET_QTY || oldest_arrival(arrivals, pending) <= @now - Config::INSPECT_MAX_WAIT_SECONDS
     end
 
     ARRIVALS_PER_LOT = 200

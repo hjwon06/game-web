@@ -1,6 +1,7 @@
 require "test_helper"
 
 class AccumulatorTest < ActiveSupport::TestCase
+  include UnscaledRatesHelper
   def snapshot(version: 0, m1: "running", m2: "stopped", m3: "broken")
     [{ code: "M1", state: m1, version: version },
      { code: "M2", state: m2, version: version },

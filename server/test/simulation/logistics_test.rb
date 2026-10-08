@@ -3,6 +3,7 @@ require "stringio"
 
 # 생산 → 자재 소비(백플러시). 자재는 line_side 에서만 나간다. 입고는 inbound_test.rb, 라인 공급은 line_feed_test.rb 에서 본다.
 class LogisticsTest < ActiveSupport::TestCase
+  include UnscaledRatesHelper
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
   EPOCH = M0 - 3600
   BIN1 = "RAW-A-01-01".freeze

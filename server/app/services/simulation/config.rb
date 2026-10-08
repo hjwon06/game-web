@@ -8,7 +8,10 @@ module Simulation
     DEFAULT_RATE = 0.5
     DEFAULT_DEFECT_RATE = 0.03
 
-    # 기계 code 별 초당 생산 기대값.
+    # 생산 속도 배율. 지게차 2대가 감당하는 물량으로 줄인다(forklift_load 참고). 기계별 상대 차이는 RATES 가 그대로 가진다.
+    RATE_SCALE = 0.33
+
+    # 기계 code 별 초당 생산 기대값(배율 적용 전). 읽을 때는 Config.rate 를 쓴다.
     RATES = {
       "M1" => 0.8, "M2" => 0.5, "M3" => 0.6, "M4" => 0.7, "M5" => 0.9, "M6" => 0.4,
       "M7" => 0.65, "M8" => 0.55, "M9" => 0.75, "M10" => 0.45, "M11" => 0.85, "M12" => 0.6
@@ -25,7 +28,9 @@ module Simulation
     BIN_CAPACITY = PALLET_QTY * 4            # raw·fg 칸 1개 = 팔레트 4개
     LINE_SIDE_CAPACITY = PALLET_QTY * 8      # 라인 공급대 하나(품목 무관 합) = 팔레트 8개. 800 이면 팔레트 1개 feed 뒤 여유가 없다
     PICK_QTY = PALLET_QTY                    # 완제품 피킹 단위
-    FORKLIFT_TASK_SECONDS = 40               # 지게차 작업(putaway 45·pick 40·feed 35) 평균 소요. 처리량 추정용
+    FORKLIFT_COUNT = 2                       # Resource::DEFAULTS 의 지게차 수. 화면 원칙(운반 주체 ≤5)상 늘리지 않는다
+    MATERIAL_PER_FG = 1.7                    # 완제품 1개당 원자재 소비(ea). dev 실측: 원자재 750 ea/분 ÷ 완제품 450 ea/분
+    FORKLIFT_TASK_SECONDS = 40              # 지게차 작업(putaway 45·pick 40·feed 35) 평균 소요. 처리량 추정용
 
     # 수요/공급 로그: Runner 가 이 간격마다 est_feed_per_min 과 forklift_capacity_per_min 을 한 줄로 남긴다.
     BALANCE_LOG_SECONDS = 600
@@ -46,9 +51,9 @@ module Simulation
     # 라인 공급(feed): line_side 자재 재고가 이만큼의 예상 소비량에 못 미치면 팔레트 1개(PALLET_QTY)를 공급한다.
     LINE_FEED_FORECAST_SECONDS = 600
 
-    # 검사: 작업지시별로 qc 에 쌓인 미검사 수량이 이만큼이거나 가장 오래된 도착분이 이만큼 지나면 inspect 작업 1건.
-    INSPECT_BATCH_QTY = 100
-    INSPECT_WAIT_SECONDS = 180
+    # 검사: 로트별로 qc 에 쌓인 미검사 수량이 팔레트(PALLET_QTY) 이상이거나 가장 오래된 도착분이 이만큼 지나면 inspect 작업 1건.
+    # 1건 수량은 min(미검사량, PALLET_QTY)이고 합격분 적치도 그 단위라, 완제품 적치가 팔레트 단위로 일어난다.
+    INSPECT_MAX_WAIT_SECONDS = 300
     INSPECT_LOOKBACK_SECONDS = 21_600 # 검사 끝난 뒤 이만큼까지만 합격분 적치 대기를 다시 찾는다(tasks 스캔 상한)
 
     # 출하: pick 은 PICK_QTY 단위, 한 번에 라인당 최대 PICKS_PER_LINE 건. 한 번 훑는 수주 라인 수 상한은 SHIP_LINES_LIMIT.
@@ -67,7 +72,22 @@ module Simulation
     end
 
     def self.rate(code)
-      RATES.fetch(code, DEFAULT_RATE)
+      RATES.fetch(code, DEFAULT_RATE) * RATE_SCALE
+    end
+
+    # 지게차 예상 가동률(0~1)을 Config 값만으로 계산한다. 12대가 모두 돌 때의 상한이다.
+    #   양품 ea/분   = Σ rate(code) x (1 - defect_rate(code)) x 60
+    #   원자재 ea/분 = 양품 ea/분 x MATERIAL_PER_FG
+    #   건수/분      = 원자재 적치(원자재 / PALLET_QTY) + feed(원자재 / PALLET_QTY)
+    #                  + 완제품 적치(양품 / PALLET_QTY) + pick(양품 / PICK_QTY)
+    #   가동률       = 건수/분 x FORKLIFT_TASK_SECONDS / (FORKLIFT_COUNT x 60)
+    # 기본값: 양품 ≈ 149 ea/분, 원자재 ≈ 253 ea/분 → 0.51 + 0.51 + 0.30 + 0.30 = 1.62 건/분 → 1.62 x 40 / 120 ≈ 0.54.
+    # 팔레트를 못 채우고 대기 시간 때문에 나가는 부분 팔레트가 있어 실제는 조금 높다 — 테스트는 0.70 을 넘지 않게 지킨다.
+    def self.forklift_load
+      good_per_minute = RATES.keys.sum { |code| rate(code) * (1 - defect_rate(code)) } * 60
+      material_per_minute = good_per_minute * MATERIAL_PER_FG
+      tasks_per_minute = (material_per_minute / PALLET_QTY) * 2 + good_per_minute / PALLET_QTY + good_per_minute / PICK_QTY
+      tasks_per_minute * FORKLIFT_TASK_SECONDS / (FORKLIFT_COUNT * 60.0)
     end
 
     def self.defect_rate(code)

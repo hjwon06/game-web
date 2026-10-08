@@ -3,6 +3,7 @@ require "stringio"
 
 # 라인 공급: line_side 재고 < 다음 10분 소비 예상이면 raw 칸에서 line_side 로 feed 작업 1팔레트(FIFO 칸).
 class LineFeedTest < ActiveSupport::TestCase
+  include UnscaledRatesHelper
   M0 = Time.utc(2026, 10, 8, 12, 0, 0)
   EPOCH = M0 - 3600
   BIN1 = "RAW-A-01-01".freeze
