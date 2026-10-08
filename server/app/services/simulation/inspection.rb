@@ -88,7 +88,7 @@ module Simulation
 
         qty = [pending, Config::PALLET_QTY].min
         Ops::Plan.call(kind: "inspect", product: order.item, lot: quant.lot, qty: qty,
-                       from: qc, to: "fg_store", ref: order, earliest_at: @now)
+                       from: qc, to: "fg_store", ref: order, earliest_at: @now, now: @now)
         uninspected[order.id] -= qty
         @counts[:inspect] += 1
       end
@@ -245,7 +245,7 @@ module Simulation
 
       planned_task = ApplicationRecord.transaction(requires_new: true) do
         Ops::Plan.call(kind: "putaway", product: task.product, lot: task.lot, qty: qty, from: "qc", to: bin,
-                       ref: task, earliest_at: task.finished_at || @now)
+                       ref: task, earliest_at: task.finished_at || @now, now: @now)
       end
       @avail[key] -= qty
       planned_task

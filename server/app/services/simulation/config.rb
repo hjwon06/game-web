@@ -31,7 +31,8 @@ module Simulation
     FORKLIFT_COUNT = 2                       # Resource::DEFAULTS 의 지게차 수. 화면 원칙(운반 주체 ≤5)상 늘리지 않는다
     MATERIAL_PER_FG = 1.7                    # 완제품 1개당 원자재 소비(ea). dev 실측: 원자재 750 ea/분 ÷ 완제품 450 ea/분
     FORKLIFT_TASK_SECONDS = 40              # 지게차 작업(putaway 45·pick 40·feed 35) 평균 소요. 처리량 추정용
-    FORKLIFT_ADMIT_SECONDS = 60              # 지게차 대기열(가장 빨리 비는 지게차까지 남은 초)이 이보다 길면 pick·putaway 를 새로 계획하지 않는다. feed 는 제한 없음
+    PRIORITY_AGING_SECONDS = 120             # planned 작업이 이만큼 기다릴 때마다 끼어들기 판단용 유효 우선순위가 10 씩 내려간다(하한 10). 저장된 priority 는 그대로
+    FORKLIFT_ADMIT_SECONDS = 60             # 지게차 대기열(가장 빨리 비는 지게차까지 남은 초)이 이보다 길면 pick·putaway 를 새로 계획하지 않는다. feed 는 제한 없음
 
     # 수요/공급 로그: Runner 가 이 간격마다 est_feed_per_min 과 forklift_capacity_per_min 을 한 줄로 남긴다.
     BALANCE_LOG_SECONDS = 600

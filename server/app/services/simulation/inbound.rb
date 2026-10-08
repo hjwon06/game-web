@@ -72,7 +72,7 @@ module Simulation
         pallets.times do |i|
           qty = [Config::PALLET_QTY, line.qty_ordered - (i * Config::PALLET_QTY)].min
           Ops::Plan.call(kind: "unload", product: line.product, lot: lot, qty: qty,
-                         from: "supplier", to: "receiving", ref: line, earliest_at: @now)
+                         from: "supplier", to: "receiving", ref: line, earliest_at: @now, now: @now)
           @counts[:unload] += 1
         end
       end
@@ -220,7 +220,7 @@ module Simulation
         end
 
         Ops::Plan.call(kind: "putaway", product: unload.product, lot: unload.lot, qty: unload.qty,
-                       from: "receiving", to: bin, ref: unload, earliest_at: unload.finished_at)
+                       from: "receiving", to: bin, ref: unload, earliest_at: unload.finished_at, now: @now)
         @counts[:putaway] += 1
       end
       @counts[:waiting] = stuck

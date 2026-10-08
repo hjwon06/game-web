@@ -106,6 +106,64 @@ class OpsPlanPriorityTest < ActiveSupport::TestCase
     assert_equal T0 + 10, feed.planned_at
   end
 
+  # 시뮬 시각 now 로 계획한다(벽시계도 그 시각으로 옮겨 created_at·updated_at 이 같은 기준이 되게 한다).
+  def plan_at(now, kind, product: @steel, to: "production")
+    travel_to now
+    Ops::Plan.call(kind: kind, product: product, lot: nil, qty: 1, from: "supplier", to: to, ref: nil, earliest_at: now, now: now)
+  end
+
+  test "에이징: pick 이 240초 기다리면 유효 우선순위 30 - 새 feed 는 앞, 새 원자재 적치는 뒤" do
+    block_b
+    pick = make(@a, status: "planned", from_s: 0, secs: 40, priority: 50, kind: "pick") # created_at = T0
+    now = T0 + 240
+
+    feed = plan_at(now, "feed")
+    assert_operator feed.planned_at, :<, pick.reload.planned_at
+    assert_equal 50, pick.priority # 저장값은 그대로
+
+    raw = plan_at(now, "putaway", to: "receiving") # priority 30, 유효 30 인 pick 보다 급하지 않다(같으면 FIFO)
+    assert_equal 30, raw.priority
+    assert_operator raw.planned_at, :>=, pick.reload.expected_finish_at
+  end
+
+  test "에이징: 480초 이상이면 유효 우선순위 10 - 새 feed 도 pick 뒤에 붙는다" do
+    block_b
+    pick = make(@a, status: "planned", from_s: 0, secs: 40, priority: 50, kind: "pick")
+
+    feed = plan_at(T0 + 480, "feed")
+
+    assert_operator feed.planned_at, :>=, pick.reload.expected_finish_at
+    assert_equal T0, pick.planned_at
+  end
+
+  test "에이징: 60초마다 feed 가 들어와도 pick 은 유한 시간 안에 자리를 굳힌다" do
+    block_b
+    pick = make(@a, status: "planned", from_s: 0, secs: 40, priority: 50, kind: "pick")
+
+    (1..20).each { |i| plan_at(T0 + 60 * i, "feed") }
+
+    pick.reload
+    assert_operator pick.planned_at, :<=, T0 + 15 * 60
+    settled = pick.planned_at
+    plan_at(T0 + 1300, "feed")
+    assert_equal settled, pick.reload.planned_at
+  end
+
+  test "Plan.call 은 벽시계가 아니라 넘긴 now 로 계획한다" do
+    travel_to T0
+    block_b
+    queued = make(@a, status: "planned", from_s: 0, secs: 45, priority: 40)
+    travel_to T0 + 7200 # 벽시계는 두 시간 뒤
+
+    feed = Ops::Plan.call(kind: "feed", product: @steel, lot: nil, qty: 1, from: "supplier", to: "production", ref: nil,
+                          earliest_at: T0, now: T0)
+
+    assert_equal T0, feed.planned_at
+    queued.reload
+    assert_in_delta feed.expected_finish_at, queued.planned_at, 0.001
+    assert_in_delta T0, queued.updated_at, 0.001 # 밀린 작업의 updated_at 도 now 기준
+  end
+
   test "queue_seconds 는 우선순위와 상관없이 마지막 작업 끝까지다" do
     make(@a, status: "planned", from_s: 0, secs: 200, priority: 40)
     make(@b, status: "planned", from_s: 0, secs: 300, priority: 40)

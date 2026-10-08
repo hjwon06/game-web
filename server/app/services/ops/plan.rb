@@ -17,6 +17,7 @@ module Ops
     # 작을수록 먼저. feed 가 막히면 기계가 선다(공급망 맨 앞). 완제품 적치는 원자재 적치보다 급하지 않다.
     PRIORITY = { "feed" => 10, "putaway_raw" => 30, "putaway_fg" => 40 }.freeze
     DEFAULT_PRIORITY = 50
+    AGING_FLOOR = 10
     JITTER = (0.8..1.2)
     DEFAULT_SEED = 20261008
 
@@ -25,7 +26,7 @@ module Ops
       def rng = (@rng ||= Random.new(DEFAULT_SEED))
       def reseed!(seed = DEFAULT_SEED) = (@rng = Random.new(seed))
 
-      def call(**args) = new(**args).call
+      def call(now: Time.current, **args) = new(now: now, **args).call
 
       # 그 종류 자원 중 가장 빨리 비는 자원까지 남은 초(= next_free - now, 최소 0). kind 는 자원 종류("forklift") 또는 작업 종류("pick")다.
       # 읽기만 한다: 작업 스트림(planned_at·expected_finish_at)은 그대로이고, 진입 제한은 부르는 쪽이 이 값으로 건다.
@@ -52,7 +53,8 @@ module Ops
       end
     end
 
-    def initialize(kind:, product:, lot:, qty:, from:, to:, ref:, earliest_at:)
+    def initialize(kind:, product:, lot:, qty:, from:, to:, ref:, earliest_at:, now: Time.current)
+      @now = now
       @kind = kind.to_s
       @product = product
       @lot = lot
@@ -73,13 +75,13 @@ module Ops
 
         verify!
 
-        now = Time.current
+        now = @now
         duration = duration_seconds
         priority = default_priority
         open_by_resource = Task.where(resource_id: resources.map(&:id), status: OPEN).order(:planned_at, :id).group_by(&:resource_id)
         slots = resources.map { |r| slot_for(r, open_by_resource.fetch(r.id, []), now, priority) }
         slot = slots.min_by { |s| [s[:start], s[:resource].id] }
-        shift_followers!(slot[:followers], slot[:start] + duration)
+        shift_followers!(slot[:followers], slot[:start] + duration, now)
 
         task = Task.create!(
           kind: @kind, status: "planned", resource: slot[:resource], product: @product, lot: @lot, qty: @qty,
@@ -147,12 +149,20 @@ module Ops
       DEFAULT_PRIORITY
     end
 
-    # 그 자원에 새 작업을 넣을 자리. started 는 건드리지 않는다(끝난 뒤부터). planned 중 priority 가 자기보다 큰(덜 급한) 첫 작업부터
+    # 끼어들기 판단용 유효 우선순위 = priority - floor(대기 초 / PRIORITY_AGING_SECONDS) x 10, 하한 10. 대기 초 = now - created_at(처음 계획된 시각).
+    # 계속 끼어드는 feed 에 planned pick 이 무기한 밀리지 않게 한다. DB 의 priority 는 바꾸지 않는다.
+    def effective_priority(task, now)
+      waited = [now - task.created_at, 0].max
+      steps = (waited / Simulation::Config::PRIORITY_AGING_SECONDS).floor
+      [task.priority - steps * 10, AGING_FLOOR].max
+    end
+
+    # 그 자원에 새 작업을 넣을 자리. started 는 건드리지 않는다(끝난 뒤부터). planned 중 유효 우선순위가 자기보다 큰(덜 급한) 첫 작업부터
     # followers 로 뒤로 밀리고, 같거나 급한 작업 뒤에 붙는다(같은 priority 끼리 FIFO). 밀 작업이 없으면 예전처럼 마지막 작업 뒤다.
     def slot_for(resource, open_tasks, now, priority)
       started, planned = open_tasks.partition { |t| t.status == "started" }
       base = started.filter_map(&:expected_finish_at).max || now
-      cut = planned.index { |t| t.priority > priority } || planned.size
+      cut = planned.index { |t| effective_priority(t, now) > priority } || planned.size
       prev = cut.positive? ? planned[cut - 1] : nil
       prev_end = prev ? (prev.expected_finish_at || prev.planned_at) : base
       { resource: resource, start: [@earliest_at, prev_end].max, followers: planned.drop(cut) }
@@ -161,13 +171,13 @@ module Ops
     # 새 작업 끝(cursor) 뒤로 겹치는 planned 작업을 순서대로 미룬다. 빈틈이 있으면 그만큼만 밀린다.
     # update_all 도 tasks_seq 트리거가 seq 를 새로 배정한다 -> 화면 증분 스트림(seq > after_seq)에 밀린 작업이 다시 실린다.
     # 응답 계약(필드·정렬)은 그대로라 화면은 같은 id 의 시각 갱신으로 받는다. 응답에 updated 를 따로 두는 쪽은 계약이 바뀌어 택하지 않았다.
-    def shift_followers!(followers, cursor)
+    def shift_followers!(followers, cursor, now)
       followers.each do |t|
         shifted = [t.planned_at, cursor].max
         delta = shifted - t.planned_at
         finish = t.expected_finish_at && t.expected_finish_at + delta
         if delta.positive?
-          attrs = { planned_at: shifted, updated_at: Time.current }
+          attrs = { planned_at: shifted, updated_at: now }
           attrs[:expected_finish_at] = finish if finish
           Task.where(id: t.id, status: "planned").update_all(attrs)
         end

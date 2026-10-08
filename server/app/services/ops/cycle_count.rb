@@ -75,7 +75,7 @@ module Ops
           stocked = Quant.where(location_id: bin.id).where("qty > 0").group(:product_id).sum(:qty)
           top = stocked.max_by { |product_id, qty| [qty, -product_id] }.first
           Ops::Plan.call(kind: "count", product: Product.find(top), lot: nil, qty: stocked.values.sum, from: bin, to: "inventory_loss",
-                         ref: nil, earliest_at: @now)
+                         ref: nil, earliest_at: @now, now: @now)
           @logger.info("sim cycle_count #{@now.iso8601} #{bin.code}")
           planned = 1
         end

@@ -71,7 +71,7 @@ module Simulation
         end
 
         Ops::Plan.call(kind: "feed", product: products.fetch(product_id), lot: source.lot, qty: qty,
-                       from: source.location, to: line_side, ref: nil, earliest_at: @now)
+                       from: source.location, to: line_side, ref: nil, earliest_at: @now, now: @now)
         @room -= qty
         @counts[:feed] += 1
       end

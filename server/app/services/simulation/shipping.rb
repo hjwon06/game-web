@@ -92,7 +92,7 @@ module Simulation
           end
 
           Ops::Plan.call(kind: "load", product: line.product, lot: lots.fetch(lot_id), qty: qty_to_load, from: "shipping", to: "customer",
-                         ref: line, earliest_at: @now)
+                         ref: line, earliest_at: @now, now: @now)
           free[[line.product_id, lot_id]] = available - qty_to_load
           open_loads[line.id] = open_loads.fetch(line.id, 0) + qty_to_load
           @counts[:load] += 1
@@ -147,7 +147,7 @@ module Simulation
 
           qty = [want, source.available].min
           Ops::Plan.call(kind: "pick", product: line.product, lot: source.lot, qty: qty, from: source.location, to: "shipping",
-                         ref: line, earliest_at: @now)
+                         ref: line, earliest_at: @now, now: @now)
           remaining -= qty
           @counts[:pick] += 1
         end
