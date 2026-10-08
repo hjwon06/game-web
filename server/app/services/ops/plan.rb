@@ -1,5 +1,6 @@
 module Ops
-  # 작업 하나를 계획한다: 종류에 맞는 자원 중 가장 일찍 비는 자원에 붙이고 시작·예상 완료 시각을 정한다.
+  # 작업 하나를 계획한다: 종류에 맞는 자원 중 (우선순위 삽입 후) 시작이 가장 이른 자원에 붙이고 시작·예상 완료 시각을 정한다.
+  # priority(작을수록 먼저)가 더 큰 planned 작업이 있으면 그 앞에 끼어들고, 그 작업들은 새 작업 소요만큼 뒤로 밀린다. started·done 은 그대로다.
   # 재고는 여기서 움직이지 않는다. 움직임은 Ops::Tick 이 완료 순간 stock_move 1건으로 만든다.
   # from 이 물리 위치면 그 칸의 재고를 예약(Reservation, active)으로 잡는다. 꺼낼 칸을 고르는 쪽(Ops::Removal)이 가용에서 뺀다.
   # 예약은 작업이 done 이 되면 consumed, cancelled 가 되면 released 로 Task 가 닫는다.
@@ -13,6 +14,9 @@ module Ops
     }.freeze
     BASE_SECONDS = { "unload" => 90, "putaway" => 45, "pick" => 40, "feed" => 35, "inspect" => 60, "load" => 120, "count" => 60 }.freeze
     OPEN = %w[planned started].freeze
+    # 작을수록 먼저. feed 가 막히면 기계가 선다(공급망 맨 앞). 완제품 적치는 원자재 적치보다 급하지 않다.
+    PRIORITY = { "feed" => 10, "putaway_raw" => 30, "putaway_fg" => 40 }.freeze
+    DEFAULT_PRIORITY = 50
     JITTER = (0.8..1.2)
     DEFAULT_SEED = 20261008
 
@@ -70,15 +74,17 @@ module Ops
         verify!
 
         now = Time.current
-        free = next_free_by_resource(resources.map(&:id), now)
-        resource = resources.min_by { |r| [free.fetch(r.id), r.id] }
-        planned_at = [@earliest_at, free.fetch(resource.id)].max
+        duration = duration_seconds
+        priority = default_priority
+        open_by_resource = Task.where(resource_id: resources.map(&:id), status: OPEN).order(:planned_at, :id).group_by(&:resource_id)
+        slots = resources.map { |r| slot_for(r, open_by_resource.fetch(r.id, []), now, priority) }
+        slot = slots.min_by { |s| [s[:start], s[:resource].id] }
+        shift_followers!(slot[:followers], slot[:start] + duration)
 
         task = Task.create!(
-          kind: @kind, status: "planned", resource: resource, product: @product, lot: @lot, qty: @qty,
-          from_location: @from, to_location: @to, planned_at: planned_at,
-          expected_finish_at: planned_at + duration_seconds,
-          ref_type: @ref&.class&.name, ref_id: @ref&.id
+          kind: @kind, status: "planned", resource: slot[:resource], product: @product, lot: @lot, qty: @qty,
+          from_location: @from, to_location: @to, planned_at: slot[:start], expected_finish_at: slot[:start] + duration,
+          priority: priority, ref_type: @ref&.class&.name, ref_id: @ref&.id
         )
         reserve(task)
         task
@@ -134,10 +140,39 @@ module Ops
       loc.is_a?(Location) ? loc : Location.find_by!(code: loc.to_s)
     end
 
-    # 자원별 마지막 planned/started 작업의 예상 완료. 일이 없으면 now.
-    def next_free_by_resource(ids, now)
-      last = Task.where(resource_id: ids, status: %w[planned started]).group(:resource_id).maximum(:expected_finish_at)
-      ids.to_h { |id| [id, last[id] || now] }
+    def default_priority
+      return PRIORITY.fetch("feed") if @kind == "feed"
+      return PRIORITY.fetch(@product.kind == "fg" ? "putaway_fg" : "putaway_raw") if @kind == "putaway"
+
+      DEFAULT_PRIORITY
+    end
+
+    # 그 자원에 새 작업을 넣을 자리. started 는 건드리지 않는다(끝난 뒤부터). planned 중 priority 가 자기보다 큰(덜 급한) 첫 작업부터
+    # followers 로 뒤로 밀리고, 같거나 급한 작업 뒤에 붙는다(같은 priority 끼리 FIFO). 밀 작업이 없으면 예전처럼 마지막 작업 뒤다.
+    def slot_for(resource, open_tasks, now, priority)
+      started, planned = open_tasks.partition { |t| t.status == "started" }
+      base = started.filter_map(&:expected_finish_at).max || now
+      cut = planned.index { |t| t.priority > priority } || planned.size
+      prev = cut.positive? ? planned[cut - 1] : nil
+      prev_end = prev ? (prev.expected_finish_at || prev.planned_at) : base
+      { resource: resource, start: [@earliest_at, prev_end].max, followers: planned.drop(cut) }
+    end
+
+    # 새 작업 끝(cursor) 뒤로 겹치는 planned 작업을 순서대로 미룬다. 빈틈이 있으면 그만큼만 밀린다.
+    # update_all 도 tasks_seq 트리거가 seq 를 새로 배정한다 -> 화면 증분 스트림(seq > after_seq)에 밀린 작업이 다시 실린다.
+    # 응답 계약(필드·정렬)은 그대로라 화면은 같은 id 의 시각 갱신으로 받는다. 응답에 updated 를 따로 두는 쪽은 계약이 바뀌어 택하지 않았다.
+    def shift_followers!(followers, cursor)
+      followers.each do |t|
+        shifted = [t.planned_at, cursor].max
+        delta = shifted - t.planned_at
+        finish = t.expected_finish_at && t.expected_finish_at + delta
+        if delta.positive?
+          attrs = { planned_at: shifted, updated_at: Time.current }
+          attrs[:expected_finish_at] = finish if finish
+          Task.where(id: t.id, status: "planned").update_all(attrs)
+        end
+        cursor = finish || shifted
+      end
     end
 
     # 밀리초 단위 Rational. Float 를 Time 에 더하면 마이크로초 아래 찌꺼기가 남아 DB 에서 읽은 값과 어긋난다.

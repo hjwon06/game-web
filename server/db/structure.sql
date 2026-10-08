@@ -748,6 +748,7 @@ CREATE TABLE public.tasks (
     updated_at timestamp(6) without time zone NOT NULL,
     expected_finish_at timestamp(6) without time zone,
     cancel_reason text,
+    priority integer DEFAULT 50 NOT NULL,
     CONSTRAINT tasks_finished_at_check CHECK ((((status)::text <> 'done'::text) OR (finished_at IS NOT NULL))),
     CONSTRAINT tasks_kind_check CHECK (((kind)::text = ANY (ARRAY[('unload'::character varying)::text, ('putaway'::character varying)::text, ('pick'::character varying)::text, ('feed'::character varying)::text, ('inspect'::character varying)::text, ('load'::character varying)::text, ('count'::character varying)::text]))),
     CONSTRAINT tasks_locations_differ_check CHECK ((from_location_id <> to_location_id)),
@@ -2086,6 +2087,7 @@ CREATE INDEX index_sim_epochs_on_started_at ON public.sim_epochs USING btree (st
 SET search_path TO "$user", public;
 
 INSERT INTO "schema_migrations" (version) VALUES
+('20261008131000'),
 ('20261008160001'),
 ('20261008080003'),
 ('20261008080002'),
