@@ -43,8 +43,8 @@ class Inventory::ReservationHardeningTest < ActiveSupport::TestCase
   def qty_at(code, product: @steel) = Quant.joins(:location).where(product_id: product.id, locations: { code: code }).sum(:qty).to_i
 
   def tick_all
-    10.times do
-      result = Ops::Tick.call(now: Time.current + 1.day)
+    10.times do |i|
+      result = Ops::Tick.call(now: Time.current + (i + 1).days) # 매번 앞으로: 완료 때 계획된 다음 작업이 다음 tick 에 끝난다(⑥k)
       break if result.done.empty? && result.cancelled.empty?
     end
   end

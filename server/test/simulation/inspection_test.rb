@@ -28,7 +28,9 @@ class InspectionTest < ActiveSupport::TestCase
 
   def plan(now = M0) = Simulation::Inspection.call(now: now, logger: Logger.new(@log))
 
-  def tick = Ops::Tick.call(now: Time.current + 1.day)
+  # 부를 때마다 하루씩 앞으로 간다. ⑥k 이후 검사 완료 때 계획되는 적치는 그 tick 의 now 기준이라,
+  # 같은 시각으로 다시 tick 하면 아직 끝나지 않는다(이전엔 Plan 이 벽시계를 써서 우연히 통과했다).
+  def tick = Ops::Tick.call(now: Time.current + (@tick_n = (@tick_n || 0) + 1).days)
 
   def events(good, defect)
     ProductionEvent.create!(machine: @machine, work_order: @order, bucket_start: M0 - 600, bucket_end: M0 - 590,
