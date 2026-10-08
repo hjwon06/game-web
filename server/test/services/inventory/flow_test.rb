@@ -23,7 +23,7 @@ class Inventory::FlowTest < ActiveSupport::TestCase
                          idempotency_key: key)
   end
 
-  test "수주 1건이 receive→putaway→issue→produce→qc_pass→ship 까지 흐르고 단계마다 위치별 재고가 맞다" do
+  test "수주 1건이 receive→putaway→feed→issue→produce→qc_pass→pick→ship 까지 흐르고 단계마다 위치별 재고가 맞다" do
     assert_equal @fg.id, @work_order.product_id
 
     # receive: 공급처는 가상이라 마이너스, 입고대 +100
@@ -34,10 +34,14 @@ class Inventory::FlowTest < ActiveSupport::TestCase
     raw_move("receiving", "raw_store", 100, "putaway", "flow-putaway")
     assert_equal [0, 100], [qty(@steel, "receiving"), qty(@steel, "raw_store")].map(&:to_i)
 
-    # issue + produce: 완제품 10개 = 강판 20개
+    # feed: 자재창고 → 라인 공급대
+    raw_move("raw_store", "line_side", 100, "feed", "flow-feed")
+    assert_equal [0, 100], [qty(@steel, "raw_store"), qty(@steel, "line_side")].map(&:to_i)
+
+    # issue + produce: 완제품 10개 = 강판 20개. 자재는 line_side 에서 나간다
     moves = Inventory::Backflush.call(work_order: @work_order, produced_delta: 10, bucket_at: Time.utc(2026, 10, 8, 9, 0, 0))
     assert_equal %w[issue produce], moves.map(&:move_type)
-    assert_equal [80, 20], [qty(@steel, "raw_store"), qty(@steel, "production")].map(&:to_i)
+    assert_equal [80, 20], [qty(@steel, "line_side"), qty(@steel, "production")].map(&:to_i)
     assert_equal [-10, 10], [qty(@fg, "production"), qty(@fg, "qc")].map(&:to_i)
 
     # qc_pass(9) + qc_fail(1)
@@ -46,13 +50,18 @@ class Inventory::FlowTest < ActiveSupport::TestCase
     assert_equal [0, 9, 1], %w[qc fg_store scrap].map { |c| qty(@fg, c).to_i }
     assert_equal 2, Inspection.where(lot_id: lot.id).count
 
-    # ship 9 = 주문량 전부
+    # pick 9: 완제품창고 → 출하대
+    Inventory::Move.call(product: @fg, lot: lot, from: "fg_store", to: "shipping", qty: 9, move_type: "pick", ref: nil,
+                         idempotency_key: "flow-pick")
+    assert_equal [0, 9], [qty(@fg, "fg_store"), qty(@fg, "shipping")].map(&:to_i)
+
+    # ship 9 = 주문량 전부: 출하대 → 고객
     Inventory::Ship.call(sales_order_line: @line, lot: lot, qty: 9, idempotency_key: "flow-ship")
-    assert_equal [0, 9], [qty(@fg, "fg_store"), qty(@fg, "customer")].map(&:to_i)
+    assert_equal [0, 9], [qty(@fg, "shipping"), qty(@fg, "customer")].map(&:to_i)
     assert_equal "done", @order.reload.status
 
-    # 이동 유형은 7종 중 흐름에 쓰인 6종이 한 번 이상 나왔다
-    assert_equal %w[issue produce putaway qc_fail qc_pass receive ship], StockMove.distinct.pluck(:move_type).sort
+    # 이동 유형 9종이 모두 한 번 이상 나왔다
+    assert_equal StockMove::MOVE_TYPES.sort, StockMove.distinct.pluck(:move_type).sort
     assert_equal [], Inventory::Reconcile.call
   end
 end

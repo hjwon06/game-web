@@ -31,9 +31,19 @@ module Simulation
     PUTAWAY_LOOKBACK_SECONDS = 21_600        # 하차가 끝난 뒤 이만큼까지만 적치 대기분을 다시 찾는다(tasks 스캔 상한)
     MAX_PUTAWAY_CANCELS = 3                  # 한 팔레트의 적치가 이만큼 취소되면 더 계획하지 않는다
 
-    # 검사·출하·신규 수주 숫자.
-    QC_DWELL_SECONDS = 120        # qc 에 이만큼 넘게 머문 재고만 검사한다
-    SHIP_ORDERS_PER_MINUTE = 3
+    # 라인 공급(feed): line_side 자재 재고가 이만큼의 예상 소비량에 못 미치면 팔레트 1개(PALLET_QTY)를 공급한다.
+    LINE_FEED_FORECAST_SECONDS = 600
+
+    # 검사: 작업지시별로 qc 에 쌓인 미검사 수량이 이만큼이거나 가장 오래된 도착분이 이만큼 지나면 inspect 작업 1건.
+    INSPECT_BATCH_QTY = 100
+    INSPECT_WAIT_SECONDS = 180
+    INSPECT_LOOKBACK_SECONDS = 21_600 # 검사 끝난 뒤 이만큼까지만 합격분 적치 대기를 다시 찾는다(tasks 스캔 상한)
+
+    # 출하: pick 은 100개 단위, 한 번에 라인당 최대 PICKS_PER_LINE 건. 한 번 훑는 수주 라인 수 상한은 SHIP_LINES_LIMIT.
+    PICK_QTY = 100
+    PICKS_PER_LINE = 5
+    SHIP_LINES_LIMIT = 50
+
     NEW_ORDER_INTERVAL_SECONDS = 600
     CUSTOMERS = %w[한빛정공 대성기계 서진산업 미래오토].freeze # 시드 수주의 고객명. 순환해서 쓴다
 

@@ -1,5 +1,6 @@
 module Inventory
-  # 완제품창고 → 고객 출하(ship 1건) 후 수주 상태를 다시 계산한다. 주문량 초과 출하는 막는다.
+  # 출하대(shipping) → 고객 출하(ship 1건) 후 수주 상태를 다시 계산한다. 주문량 초과 출하는 막는다.
+  # 완제품이 출하대에 먼저 있어야 한다(fg 칸 → shipping 은 pick 이동).
   # 수주 행을 먼저 잠가 같은 수주에 대한 동시 출하·상태 계산을 직렬화한다(잠금 순서: 수주 → quants).
   class Ship
     class OverShipment < StandardError; end
@@ -29,7 +30,7 @@ module Inventory
           raise OverShipment, "주문량 초과: 주문 #{@line.ordered_qty.to_s('F')} / 기출하 #{shipped.to_s('F')} / 요청 #{@qty.to_s('F')}"
         end
 
-        move = Move.call(product: @line.product, lot: @lot, from: Location.find_by!(code: "fg_store"),
+        move = Move.call(product: @line.product, lot: @lot, from: Location.find_by!(code: "shipping"),
                          to: Location.find_by!(code: "customer"), qty: @qty, move_type: "ship",
                          ref: @line, idempotency_key: @key)
         order.update!(status: status_for(order))
@@ -40,7 +41,7 @@ module Inventory
     private
 
     def same_as_request!(existing)
-      Move.ensure_same!(existing, product_id: @line.product_id, lot_id: @lot.id, from_id: location_id("fg_store"),
+      Move.ensure_same!(existing, product_id: @line.product_id, lot_id: @lot.id, from_id: location_id("shipping"),
                                   to_id: location_id("customer"), qty: @qty, move_type: "ship",
                                   ref_type: "SalesOrderLine", ref_id: @line.id)
     end

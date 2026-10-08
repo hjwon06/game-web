@@ -57,8 +57,9 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
 
   test "kind 마다 맞는 자원 종류를 고른다" do
     {
-      "unload" => ["dock_in", "supplier", "receiving"], "load" => ["dock_out", "fg_store", "customer"],
-      "inspect" => ["worker", "qc", "fg_store"], "pick" => ["forklift", "fg_store", "shipping"]
+      "unload" => ["dock_in", "supplier", "receiving"], "load" => ["dock_out", "shipping", "customer"],
+      "inspect" => ["worker", "qc", "fg_store"], "pick" => ["forklift", "fg_store", "shipping"],
+      "feed" => ["forklift", "raw_store", "line_side"]
     }.each do |kind, (res_kind, from, to)|
       t = Ops::Plan.call(kind: kind, product: @product, lot: nil, qty: 1, from: from, to: to, ref: nil, earliest_at: @t0)
       assert_equal res_kind, t.resource.kind, kind
@@ -185,13 +186,113 @@ class Ops::EventQueueTest < ActiveSupport::TestCase
     assert_equal count, StockMove.count
   end
 
-  test "pick·inspect 의 재고 이동은 아직 정해지지 않았다고 명시적으로 알린다" do
-    pick = Task.create!(kind: "pick", resource: @fork1, product: @product, qty: 1, planned_at: @t0,
-                        expected_finish_at: @t0 + 40.seconds, from_location: Location.find_by!(code: "fg_store"),
-                        to_location: Location.find_by!(code: "shipping"))
+  # 종류별 완료 이동. 작업은 손으로 만들고(자원 @fork1) 한 번의 Tick 으로 끝낸다.
+  def finish_one(kind, from:, to:, qty: 10, lot: nil, ref: nil, resource: @fork1)
+    task = Task.create!(kind: kind, resource: resource, product: @product, lot: lot, qty: qty, planned_at: @t0,
+                        expected_finish_at: @t0 + 40.seconds, from_location: Location.find_by!(code: from),
+                        to_location: Location.find_by!(code: to), ref_type: ref&.class&.name, ref_id: ref&.id)
+    Ops::Tick.call(now: @t0 + 1.minute)
+    task.reload
+  end
+
+  def stock_at(code, qty, lot: nil, key: "ops-stock")
+    Inventory::Move.call(product: @product, lot: lot, from: "supplier", to: "receiving", qty: qty, move_type: "receive",
+                         ref: nil, idempotency_key: "#{key}-r")
+    Inventory::Move.call(product: @product, lot: lot, from: "receiving", to: "RAW-A-01-01", qty: qty, move_type: "putaway",
+                         ref: nil, idempotency_key: "#{key}-p")
+    return if code == "RAW-A-01-01"
+
+    Inventory::Move.call(product: @product, lot: lot, from: "RAW-A-01-01", to: code, qty: qty, move_type: "feed",
+                         ref: nil, idempotency_key: "#{key}-f")
+  end
+
+  test "feed 완료는 raw 칸 → line_side 의 feed 이동 1건이다" do
+    stock_at("RAW-A-01-01", 50)
+
+    task = finish_one("feed", from: "RAW-A-01-01", to: "line_side", qty: 30)
+
+    assert_equal "done", task.status
+    assert_equal ["feed", "task:#{task.id}"], [task.stock_move.move_type, task.stock_move.idempotency_key]
+    assert_equal [20, 30], [Quant.where(location: @bin, product: @product).sum(:qty), Quant.where(location: Location.find_by!(code: "line_side")).sum(:qty)]
+  end
+
+  test "raw 칸 → production 직접 issue 는 경로 오류다(line_side 를 거쳐야 한다)" do
+    stock_at("RAW-A-01-01", 50)
+    assert_raises(Inventory::Move::InvalidPath) do
+      Inventory::Move.call(product: @product, lot: nil, from: @bin, to: "production", qty: 1, move_type: "issue", ref: nil,
+                           idempotency_key: "ops-direct-issue")
+    end
+  end
+
+  test "pick 완료는 fg 칸 → shipping 의 pick 이동 1건이다" do
+    lot = Lot.create!(product: @product, lot_no: "LOT-OPS-PICK")
+    Inventory::Move.call(product: @product, lot: lot, from: "production", to: "qc", qty: 40, move_type: "produce", ref: nil, idempotency_key: "ops-pk-1")
+    Inventory::Move.call(product: @product, lot: lot, from: "qc", to: "FG-A-01-01", qty: 40, move_type: "qc_pass", ref: nil, idempotency_key: "ops-pk-2")
+
+    task = finish_one("pick", from: "FG-A-01-01", to: "shipping", qty: 25, lot: lot)
+
+    assert_equal "done", task.status
+    assert_equal ["pick", "FG-A-01-01", "shipping"], [task.stock_move.move_type, task.stock_move.from_location.code, task.stock_move.to_location.code]
+    assert_equal 25, Quant.where(location: Location.find_by!(code: "shipping"), product: @product).sum(:qty)
+    assert_equal [], Inventory::Reconcile.call
+  end
+
+  test "putaway 가 qc 에서 나가면 qc_pass 이동이고, 입고대에서 나가면 putaway 이동이다" do
+    lot = Lot.create!(product: @product, lot_no: "LOT-OPS-QP")
+    Inventory::Move.call(product: @product, lot: lot, from: "production", to: "qc", qty: 40, move_type: "produce", ref: nil, idempotency_key: "ops-qp-1")
+    stock_receiving(10, key: "ops-qp-recv")
+
+    pass = finish_one("putaway", from: "qc", to: "FG-A-01-02", qty: 40, lot: lot)
+    put = finish_one("putaway", from: "receiving", to: "RAW-A-01-01", qty: 10, resource: @fork2)
+
+    assert_equal %w[qc_pass putaway], [pass.stock_move.move_type, put.stock_move.move_type]
+    assert_equal [], Inventory::Reconcile.call
+  end
+
+  test "load 완료는 수주 라인이 있으면 Inventory::Ship 으로 출하량과 수주 상태까지 갱신한다" do
+    fg = Product.create!(sku: "FG-OPS", name: "큐 완제품", uom: "ea", kind: "fg")
+    lot = Lot.create!(product: fg, lot_no: "LOT-OPS-LD")
+    [["production", "qc", "produce"], ["qc", "FG-A-01-01", "qc_pass"], ["FG-A-01-01", "shipping", "pick"]].each_with_index do |(from, to, type), i|
+      Inventory::Move.call(product: fg, lot: lot, from: from, to: to, qty: 10, move_type: type, ref: nil, idempotency_key: "ops-ld-#{i}")
+    end
+    line = SalesOrder.create!(so_no: "SO-OPS", customer: "큐고객").lines.create!(product: fg, ordered_qty: 10)
+    task = Task.create!(kind: "load", resource: Resource.find_by!(code: "DOCK-OUT-01"), product: fg, lot: lot, qty: 10, planned_at: @t0,
+                        expected_finish_at: @t0 + 40.seconds, from_location: Location.find_by!(code: "shipping"),
+                        to_location: Location.find_by!(code: "customer"), ref_type: "SalesOrderLine", ref_id: line.id)
+
+    Ops::Tick.call(now: @t0 + 1.minute)
+
+    assert_equal "done", task.reload.status
+    assert_equal ["ship", "SalesOrderLine", line.id], [task.stock_move.move_type, task.stock_move.ref_type, task.stock_move.ref_id]
+    assert_equal "done", line.sales_order.reload.status
+    assert_equal [], Inventory::Reconcile.call
+  end
+
+  test "주문량을 넘기는 load 는 OverShipment 로 그 작업만 취소된다" do
+    fg = Product.create!(sku: "FG-OPS2", name: "큐 완제품2", uom: "ea", kind: "fg")
+    lot = Lot.create!(product: fg, lot_no: "LOT-OPS-OV")
+    [["production", "qc", "produce"], ["qc", "FG-A-01-01", "qc_pass"], ["FG-A-01-01", "shipping", "pick"]].each_with_index do |(from, to, type), i|
+      Inventory::Move.call(product: fg, lot: lot, from: from, to: to, qty: 20, move_type: type, ref: nil, idempotency_key: "ops-ov-#{i}")
+    end
+    line = SalesOrder.create!(so_no: "SO-OPS2", customer: "큐고객").lines.create!(product: fg, ordered_qty: 10)
+    task = Task.create!(kind: "load", resource: Resource.find_by!(code: "DOCK-OUT-01"), product: fg, lot: lot, qty: 20, planned_at: @t0,
+                        expected_finish_at: @t0 + 40.seconds, from_location: Location.find_by!(code: "shipping"),
+                        to_location: Location.find_by!(code: "customer"), ref_type: "SalesOrderLine", ref_id: line.id)
+
+    Ops::Tick.call(now: @t0 + 1.minute)
+
+    assert_equal "cancelled", task.reload.status
+    assert_match(/OverShipment/, task.cancel_reason)
+    assert_equal 0, StockMove.where(move_type: "ship").count
+  end
+
+  test "inspect 는 작업지시가 없으면 이동 없이 done 이다" do
     base = StockMove.count
-    assert_raises(Ops::Tick::NotImplemented) { Ops::Tick.call(now: @t0 + 1.minute) }
+
+    task = finish_one("inspect", from: "qc", to: "fg_store", resource: Resource.find_by!(code: "WORKER-01"))
+
+    assert_equal "done", task.status
+    assert_nil task.stock_move
     assert_equal base, StockMove.count
-    assert_not_equal "done", pick.reload.status
   end
 end

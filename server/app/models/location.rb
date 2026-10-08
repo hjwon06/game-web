@@ -4,10 +4,11 @@ class Location < ApplicationRecord
   PARENT_LEVEL = { "zone" => "warehouse", "rack" => "zone", "bin" => "rack" }.freeze
 
   # 이동 경로를 가르는 물리 구역 5개. 칸·랙·구역은 조상 중 이 코드를 가진 위치의 구역으로 본다.
-  ZONE_ROOTS = %w[receiving raw_store qc fg_store shipping].freeze
+  ZONE_ROOTS = %w[receiving raw_store line_side qc fg_store shipping].freeze
   MAX_DEPTH = 8 # 순환 데이터가 들어와도 재귀 조회가 멈추게 하는 상한
+  LINE_SIDE_CAPACITY = 800 # 라인 공급대 하나의 용량(품목 무관 qty 합). 칸(BIN_CAPACITY)이 아니라 루트에 직접 걸린다
 
-  # 위치 9개는 스키마가 아니라 데이터다. 마이그레이션 20261008000002 의 INSERT 와 같은 값.
+  # 위치 10개는 스키마가 아니라 데이터다. line_side 는 ③b 에서 늘었다(마이그레이션 20261008050000 도 같은 값을 넣는다).
   # [code, name, kind, role]
   DEFAULTS = [
     ["supplier",   "공급처",     "virtual",  "supplier"],
@@ -16,7 +17,8 @@ class Location < ApplicationRecord
     ["scrap",      "폐기",       "virtual",  "scrap"],
     ["receiving",  "입고대",     "physical", "receiving"],
     ["raw_store",  "자재창고",   "physical", "storage"],
-    ["qc",         "검사대",     "physical", "qc"],
+    ["line_side",  "라인 공급대", "physical", "line_side"],
+    ["qc",       "검사대",     "physical", "qc"],
     ["fg_store",   "완제품창고", "physical", "storage"],
     ["shipping",   "출하대",     "physical", "shipping"]
   ].freeze
@@ -31,10 +33,11 @@ class Location < ApplicationRecord
   ].freeze
 
   # 재실행 안전. 이미 있는 code 는 건드리지 않는다. 쿼리는 레벨마다 2회(조회 + insert_all)라 테스트 setup 에서 매번 불러도 싸다.
-  # 반환값은 기존과 같이 기본 위치 9개.
+  # 반환값은 기본 위치 10개.
   def self.ensure_defaults!
     roots = DEFAULTS.map do |code, name, kind, role|
-      { code: code, name: name, kind: kind, role: role, level: (ZONE_ROOTS.include?(code) ? "warehouse" : nil) }
+      { code: code, name: name, kind: kind, role: role, level: (ZONE_ROOTS.include?(code) ? "warehouse" : nil),
+        capacity_units: (code == "line_side" ? LINE_SIDE_CAPACITY : nil) }
     end
     seed_tree(insert_missing(roots))
     where(code: DEFAULTS.map(&:first)).order(:id).to_a

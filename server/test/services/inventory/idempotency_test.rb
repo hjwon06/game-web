@@ -59,6 +59,8 @@ class Inventory::IdempotencyTest < ActiveSupport::TestCase
                          idempotency_key: "idem-ship-prod")
     Inventory::Move.call(product: fg, lot: lot, from: "qc", to: "fg_store", qty: 10, move_type: "qc_pass", ref: nil,
                          idempotency_key: "idem-ship-pass")
+    Inventory::Move.call(product: fg, lot: lot, from: "fg_store", to: "shipping", qty: 10, move_type: "pick", ref: nil,
+                         idempotency_key: "idem-ship-pick")
     order = SalesOrder.create!(so_no: "SO-IDEM", customer: "멱등고객")
     line = SalesOrderLine.create!(sales_order: order, product: fg, ordered_qty: 10)
     other_order = SalesOrder.create!(so_no: "SO-IDEM-2", customer: "멱등고객2")
@@ -92,6 +94,8 @@ class Inventory::IdempotencyTest < ActiveSupport::TestCase
                          ref: nil, idempotency_key: "idem-bf-recv")
     Inventory::Move.call(product: steel, lot: nil, from: "receiving", to: "raw_store", qty: 50, move_type: "putaway",
                          ref: nil, idempotency_key: "idem-bf-put")
+    Inventory::Move.call(product: steel, lot: nil, from: "raw_store", to: "line_side", qty: 50, move_type: "feed",
+                         ref: nil, idempotency_key: "idem-bf-feed")
     work_order = WorkOrder.create!(code: "WO-IDEM", machine: Machine.create!(code: "ID1", name: "멱등기"),
                                    product: "멱등품", target_qty: 10)
     bucket = Time.utc(2026, 10, 8, 10, 0, 0)
@@ -102,7 +106,7 @@ class Inventory::IdempotencyTest < ActiveSupport::TestCase
 
     assert_equal first.map(&:id), second.map(&:id)
     assert_equal count, StockMove.count
-    assert_equal 45, Quant.where(product_id: steel.id, location_id: Location.find_by!(code: "raw_store").id).sum(:qty)
+    assert_equal 45, Quant.where(product_id: steel.id, location_id: Location.find_by!(code: "line_side").id).sum(:qty)
   end
 
   test "멱등키가 비어 있으면 거부한다" do

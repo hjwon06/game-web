@@ -231,6 +231,35 @@ class RunnerTest < ActiveSupport::TestCase
                   [:tick, T0 + 30, 3], [:inbound, T0 + 30, 3]], order
   end
 
+  def build_full_runner(order, errors: {})
+    steps = %i[tick inbound line_feed inspection shipping].to_h { |name| [name, RecordingStep.new(name, order, error: errors[name])] }
+    Simulation::Runner.new(logger: Logger.new(@log), logistics: RecordingLogistics.new, ops_tick: steps[:tick], inbound: steps[:inbound],
+                           line_feed: steps[:line_feed], inspection: steps[:inspection], shipping: steps[:shipping])
+  end
+
+  test "10초 경계마다 Tick → Inbound → 라인 공급 → 검사 → 출하 순서로 부른다" do
+    order = []
+    runner = build_full_runner(order)
+
+    2.times { |window| run_window(runner, window) }
+
+    assert_equal %i[tick inbound line_feed inspection shipping] * 2, order.map(&:first)
+    assert_equal [T0 + 10] * 5 + [T0 + 20] * 5, order.map { |_, at, _| at }
+  end
+
+  test "라인 공급·검사·출하 중 하나가 예외를 던져도 나머지와 Flusher 는 계속된다" do
+    order = []
+    runner = build_full_runner(order, errors: { line_feed: RuntimeError.new("feed boom"), shipping: RuntimeError.new("ship boom") })
+
+    2.times { |window| run_window(runner, window) }
+
+    assert_equal 2, order.count { |name, _, _| name == :inspection }
+    assert_equal 2, order.count { |name, _, _| name == :shipping }, "앞 단계가 터져도 뒤 단계는 돈다"
+    assert_equal 2, ProductionEvent.count
+    assert_equal 2, @log.string.scan(/sim line feed failed .*RuntimeError feed boom/).size
+    assert_equal 2, @log.string.scan(/sim shipping failed .*RuntimeError ship boom/).size
+  end
+
   test "Tick 과 Inbound 가 예외를 던져도 서로와 Logistics 와 Flusher 는 계속된다" do
     order = []
     logistics = RecordingLogistics.new

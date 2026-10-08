@@ -1,16 +1,20 @@
 module Simulation
-  # 1초마다 스냅샷을 읽어 tick 하고, 10초 경계에서 flush → Ops::Tick → Inbound 를 돌리고 60초 경계에서 Logistics 를 부른다.
-  # SIGTERM 에서는 마지막 flush 없이 끝난다.
+  # 1초마다 스냅샷을 읽어 tick 하고, 10초 경계에서 flush → Ops::Tick → Inbound → LineFeed → Inspection → Shipping 을 돌리고
+  # 60초 경계에서 Logistics 를 부른다. SIGTERM 에서는 마지막 flush 없이 끝난다.
   class Runner
     MAX_FAILURES = 3
     MAX_PENDING = 6 # 10초 구간 6개 = 1분
 
-    def initialize(logger: Rails.logger, flusher: Flusher, logistics: Logistics, inbound: Inbound, ops_tick: Ops::Tick)
+    def initialize(logger: Rails.logger, flusher: Flusher, logistics: Logistics, inbound: Inbound, ops_tick: Ops::Tick,
+                   line_feed: LineFeed, inspection: Inspection, shipping: Shipping)
       @logger = logger
       @flusher = flusher
       @logistics = logistics
       @inbound = inbound
       @ops_tick = ops_tick
+      @line_feed = line_feed
+      @inspection = inspection
+      @shipping = shipping
       @pending = []
       @accumulator = Accumulator.new
       @rng = Random.new(Config::SEED)
@@ -53,9 +57,12 @@ module Simulation
       drop_overflow
       @pending.shift while @pending.any? && settled?(@pending.first)
       boundary = bucket + Config::BUCKET_SECONDS
-      # 순서: 작업 진행(Tick) → 입고(Inbound). 방금 끝난 하차의 적치가 같은 경계에서 계획된다.
+      # 순서: 작업 진행(Tick) → 입고(Inbound) → 라인 공급 → 검사 → 출하. 방금 끝난 하차·검사·pick 의 다음 작업이 같은 경계에서 계획된다.
       isolated("ops tick", boundary) { @ops_tick.call(now: boundary) }
       isolated("inbound", boundary) { @inbound.call(now: boundary, logger: @logger) }
+      isolated("line feed", boundary) { @line_feed.call(now: boundary, logger: @logger) }
+      isolated("inspection", boundary) { @inspection.call(now: boundary, logger: @logger) }
+      isolated("shipping", boundary) { @shipping.call(now: boundary, logger: @logger) }
       logistics(boundary) if (boundary.to_i % Config::LOGISTICS_SECONDS).zero?
     end
 

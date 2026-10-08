@@ -6,13 +6,16 @@ class Inventory::ShipTest < ActiveSupport::TestCase
     @lot = Lot.create!(product: @bracket, lot_no: "WO-SHIP")
     @order = SalesOrder.create!(so_no: "SO-1", customer: "테스트고객")
     @line = SalesOrderLine.create!(sales_order: @order, product: @bracket, ordered_qty: 10)
-    # 완제품창고에 20개: 생산 → 검사대 → 합격
+    # 출하대에 20개: 생산 → 검사대 → 합격 → 출하대로 pick
     Inventory::Move.call(product: @bracket, lot: @lot, from: Location.find_by!(code: "production"),
                          to: Location.find_by!(code: "qc"), qty: 20, move_type: "produce", ref: nil,
                          idempotency_key: "seed-produce")
     Inventory::Move.call(product: @bracket, lot: @lot, from: Location.find_by!(code: "qc"),
                          to: Location.find_by!(code: "fg_store"), qty: 20, move_type: "qc_pass", ref: nil,
                          idempotency_key: "seed-pass")
+    Inventory::Move.call(product: @bracket, lot: @lot, from: Location.find_by!(code: "fg_store"),
+                         to: Location.find_by!(code: "shipping"), qty: 20, move_type: "pick", ref: nil,
+                         idempotency_key: "seed-pick")
   end
 
   def ship(qty, key)
@@ -41,5 +44,25 @@ class Inventory::ShipTest < ActiveSupport::TestCase
 
     assert_equal first.id, again.id
     assert_equal 1, StockMove.where(move_type: "ship").count
+  end
+
+  test "출하는 출하대에서 고객으로 나가고 완제품창고 재고는 건드리지 않는다" do
+    move = ship(4, "ship-path")
+
+    assert_equal %w[shipping customer], [move.from_location.code, move.to_location.code]
+    assert_equal 16, Quant.where(product_id: @bracket.id, location: Location.find_by!(code: "shipping")).sum(:qty)
+  end
+
+  test "pick 하지 않은 완제품창고 재고는 바로 출하할 수 없다" do
+    other = Lot.create!(product: @bracket, lot_no: "WO-SHIP-2")
+    Inventory::Move.call(product: @bracket, lot: other, from: "production", to: "qc", qty: 5, move_type: "produce", ref: nil,
+                         idempotency_key: "seed-produce-2")
+    Inventory::Move.call(product: @bracket, lot: other, from: "qc", to: "fg_store", qty: 5, move_type: "qc_pass", ref: nil,
+                         idempotency_key: "seed-pass-2")
+
+    assert_raises(Inventory::InsufficientStock) do
+      Inventory::Ship.call(sales_order_line: @line, lot: other, qty: 5, idempotency_key: "ship-unpicked")
+    end
+    assert_equal 0, StockMove.where(move_type: "ship").count
   end
 end

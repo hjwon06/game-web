@@ -1,5 +1,6 @@
 module Inventory
-  # 생산 증분만큼 BOM 자재를 일괄 출고(issue)하고 완제품 입고(produce) 1건을 만든다.
+  # 생산 증분만큼 BOM 자재를 라인 공급대(line_side)에서 일괄 출고(issue)하고 완제품 입고(produce) 1건을 만든다.
+  # 자재는 lot nil 재고만 쓴다(로트 있는 재고는 시뮬레이터의 Logistics 가 로트별로 뺀다).
   # 전체가 한 트랜잭션이라 자재가 하나라도 모자라면 InsufficientStock 과 함께 전부 롤백된다.
   # 같은 (작업지시, bucket_at) 재호출은 멱등키가 같아 이동을 새로 만들지 않는다.
   class Backflush
@@ -18,11 +19,11 @@ module Inventory
 
       product = @work_order.item
       production = Location.find_by!(code: "production")
-      raw_store = Location.find_by!(code: "raw_store")
+      line_side = Location.find_by!(code: "line_side")
 
       StockMove.transaction do
         issues = BomLine.where(product_id: product.id).order(:component_id).includes(:component).map do |bom|
-          Move.call(product: bom.component, lot: nil, from: raw_store, to: production,
+          Move.call(product: bom.component, lot: nil, from: line_side, to: production,
                     qty: bom.qty_per * @delta, move_type: "issue", ref: @work_order,
                     idempotency_key: "issue:#{@work_order.id}:#{bom.component_id}:#{@bucket}")
         end

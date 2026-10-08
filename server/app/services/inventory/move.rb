@@ -4,17 +4,20 @@ module Inventory
   class Move
     class InvalidPath < StandardError; end
 
-    # move_type => [from 위치 code, to 위치 code]. 8번째 유형 추가 금지(StockMove::MOVE_TYPES 도 7개 동결).
-    # 경로는 위치의 구역 code 로 가른다(Location#zone_code): 자기 자신이나 조상 중 raw_store/fg_store/receiving/qc/shipping,
+    # move_type => [from 위치 code, to 위치 code]. 10번째 유형 추가 금지(StockMove::MOVE_TYPES 도 9개 동결).
+    # 경로는 위치의 구역 code 로 가른다(Location#zone_code): 자기 자신이나 조상 중 raw_store/line_side/fg_store/receiving/qc/shipping,
     # 가상 위치는 자기 code. 그래서 raw_store 아래 칸(bin)도 raw_store 로 취급한다. kind 는 구역 루트(Location::DEFAULTS)의 kind 와 같아야 한다.
+    # raw 칸 → production 직접 issue 는 없다: raw 칸 → (feed) → line_side → (issue) → production.
     ALLOWED_PATHS = {
       "receive" => %w[supplier receiving],
       "putaway" => %w[receiving raw_store],
-      "issue"   => %w[raw_store production],
+      "feed"    => %w[raw_store line_side],
+      "issue"   => %w[line_side production],
       "produce" => %w[production qc],
       "qc_pass" => %w[qc fg_store],
       "qc_fail" => %w[qc scrap],
-      "ship"    => %w[fg_store customer]
+      "pick"    => %w[fg_store shipping],
+      "ship"    => %w[shipping customer]
     }.freeze
     KIND_BY_CODE = Location::DEFAULTS.to_h { |code, _name, kind, _role| [code, kind] }.freeze
 

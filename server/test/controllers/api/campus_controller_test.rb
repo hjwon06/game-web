@@ -21,10 +21,11 @@ class CampusControllerTest < ActionDispatch::IntegrationTest
                          idempotency_key: "cmp-#{type}-#{@seq += 1}")
   end
 
-  # 생산 10 -> 검사 합격 8 / 불합격 2 -> 출하 5
+  # 생산 10 -> 검사 합격 8 / 불합격 2 -> pick 5 (fg_store → shipping) -> 출하 5 (shipping → customer)
   def run_flow
     move("produce", product: @fg, lot: @lot, qty: 10, ref: @wo)
     Inventory::Inspect.call(lot: @lot, work_order: @wo, pass_qty: 8, fail_qty: 2, idempotency_key: "cmp-insp")
+    move("pick", product: @fg, lot: @lot, qty: 5)
     Inventory::Ship.call(sales_order_line: @line, lot: @lot, qty: 5, idempotency_key: "cmp-ship")
   end
 
@@ -116,7 +117,7 @@ class CampusControllerTest < ActionDispatch::IntegrationTest
     assert_equal %w[at from_code id lot qty ref to_code type product].sort, produce.keys.sort
     assert_equal ["production", "qc", "WO-CMP", "LOT-CMP", 10, "캠퍼스완제품"],
                  produce.values_at("from_code", "to_code", "ref", "lot", "qty", "product")
-    assert_equal ["fg_store", "customer", "SO-CMP", 5], ship.values_at("from_code", "to_code", "ref", "qty")
+    assert_equal ["shipping", "customer", "SO-CMP", 5], ship.values_at("from_code", "to_code", "ref", "qty")
     assert_equal "WO-CMP", pass["ref"]
     assert_nil moves.find { |m| m["type"] == "receive" }
   end

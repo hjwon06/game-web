@@ -1,0 +1,236 @@
+require "test_helper"
+require "stringio"
+
+# 출하: 열린 수주 라인마다 fg 칸 재고가 있으면 pick(지게차, 100개 단위, FIFO 칸 → shipping),
+# 라인의 pick 이 끝나 shipping 에 모이면 load(출하 도크, shipping → customer). 부분 출하 허용.
+class ShippingTest < ActiveSupport::TestCase
+  M0 = Time.utc(2026, 10, 8, 12, 0, 0)
+
+  setup do
+    Resource.ensure_defaults!
+    Ops::Plan.reseed!(3)
+    @fg = Product.create!(sku: "FG-BR", name: "브래킷", uom: "ea", kind: "fg")
+    @log = StringIO.new
+    @seq = 0
+  end
+
+  def plan(now = M0) = Simulation::Shipping.call(now: now, logger: Logger.new(@log))
+
+  def tick = Ops::Tick.call(now: Time.current + 1.day)
+
+  # fg 칸에 재고를 만든다(생산 → 검사대 → 합격 적치 완료 상태).
+  def fg_stock(qty, bin: "FG-A-01-01", lot: nil, created_at: nil)
+    lot ||= Lot.create!(product: @fg, lot_no: "LOT-#{@seq += 1}", **(created_at ? { created_at: created_at, updated_at: created_at } : {}))
+    Inventory::Move.call(product: @fg, lot: lot, from: "production", to: "qc", qty: qty, move_type: "produce", ref: nil,
+                         idempotency_key: "sh-prod-#{@seq += 1}")
+    Inventory::Move.call(product: @fg, lot: lot, from: "qc", to: bin, qty: qty, move_type: "qc_pass", ref: nil,
+                         idempotency_key: "sh-pass-#{@seq += 1}")
+    lot
+  end
+
+  def line_for(so_no, qty, due: Date.new(2026, 10, 10))
+    so = SalesOrder.create!(so_no: so_no, customer: "한빛정공", due_date: due, status: "open")
+    so.lines.create!(product: @fg, ordered_qty: qty)
+  end
+
+  def picks = Task.where(kind: "pick").order(:id)
+
+  def loads = Task.where(kind: "load").order(:id)
+
+  def qty_at(code, lot = nil)
+    Quant.joins(:location).where(product_id: @fg.id, locations: { code: code }).then { |q| lot ? q.where(lot_id: lot.id) : q }.sum(:qty)
+  end
+
+  def shipped(line) = StockMove.where(move_type: "ship", ref_type: "SalesOrderLine", ref_id: line.id).sum(:qty).to_i
+
+  test "열린 수주 라인에 fg 칸 재고가 있으면 100개 단위 pick 이 지게차에 계획된다. 재고는 아직 안 움직인다" do
+    lot = fg_stock(300)
+    line = line_for("SO-T-1", 250)
+    base = StockMove.count
+
+    result = plan
+
+    assert_equal [3, 0], [result[:pick], result[:load]]
+    assert_equal [100, 100, 50], picks.map { |t| t.qty.to_i }
+    picks.each do |t|
+      assert_equal ["forklift", "FG-A-01-01", "shipping", lot.id, "SalesOrderLine", line.id, "planned"],
+                   [t.resource.kind, t.from_location.code, t.to_location.code, t.lot_id, t.ref_type, t.ref_id, t.status]
+    end
+    assert_equal base, StockMove.count
+  end
+
+  test "FIFO: 로트가 오래된 칸에서 먼저 나간다. 로트 시각이 같으면 칸 코드 순" do
+    old_lot = fg_stock(100, bin: "FG-A-01-02", created_at: M0 - 7200)
+    fg_stock(100, bin: "FG-A-01-01", created_at: M0 - 3600)
+    line_for("SO-T-1", 100)
+
+    plan
+
+    task = picks.sole
+    assert_equal ["FG-A-01-02", old_lot.id], [task.from_location.code, task.lot_id]
+  end
+
+  test "로트 시각이 같으면 칸 코드가 앞선 칸에서 나간다" do
+    same = M0 - 3600
+    fg_stock(100, bin: "FG-A-01-02", created_at: same)
+    first = fg_stock(100, bin: "FG-A-01-01", created_at: same)
+    line_for("SO-T-1", 100)
+
+    plan
+
+    assert_equal ["FG-A-01-01", first.id], picks.sole.then { |t| [t.from_location.code, t.lot_id] }
+  end
+
+  test "재고가 모자라면 있는 만큼만 pick 한다(부분 출하)" do
+    fg_stock(120)
+    line_for("SO-T-1", 300)
+
+    plan
+
+    assert_equal [100, 20], picks.map { |t| t.qty.to_i }
+  end
+
+  test "같은 품목 재고를 두 라인이 나눠 쓸 때 이미 계획된 pick 분은 다시 계획하지 않는다" do
+    fg_stock(150)
+    a = line_for("SO-T-A", 100, due: Date.new(2026, 10, 9))
+    b = line_for("SO-T-B", 100, due: Date.new(2026, 10, 11))
+
+    plan
+
+    assert_equal [[a.id, 100], [b.id, 50]], picks.map { |t| [t.ref_id, t.qty.to_i] }
+  end
+
+  test "납기가 빠른 수주 라인이 재고를 먼저 받는다" do
+    fg_stock(100)
+    late = line_for("SO-T-LATE", 100, due: Date.new(2026, 10, 12))
+    early = line_for("SO-T-EARLY", 100, due: Date.new(2026, 10, 9))
+
+    plan
+
+    assert_equal [early.id], picks.map(&:ref_id)
+    assert_not_includes picks.map(&:ref_id), late.id
+  end
+
+  test "재고가 없으면 아무것도 계획하지 않는다. 다 출하된 수주(done)도 건드리지 않는다" do
+    line_for("SO-T-1", 100)
+    assert_equal [0, 0], plan.values_at(:pick, :load)
+
+    fg_stock(100)
+    SalesOrder.update_all(status: "done")
+    assert_equal [0, 0], plan.values_at(:pick, :load)
+    assert_equal 0, Task.count
+  end
+
+  test "같은 시각에 다시 불러도 작업·이동이 늘지 않는다" do
+    fg_stock(300)
+    line_for("SO-T-1", 250)
+    plan
+    tasks = Task.count
+    moves = StockMove.count
+
+    again = plan
+
+    assert_equal [0, 0], again.values_at(:pick, :load)
+    assert_equal tasks, Task.count
+    assert_equal moves, StockMove.count
+  end
+
+  test "pick 이 진행 중인 라인은 load 하지 않고, 모두 끝나 shipping 에 모이면 load 1건을 계획한다" do
+    lot = fg_stock(300)
+    line = line_for("SO-T-1", 300)
+    plan
+
+    assert_equal 0, plan[:load], "pick 이 아직 planned"
+    assert_equal 0, loads.count
+
+    tick
+    assert_equal %w[done done done], picks.map(&:status)
+    assert_equal [0, 300], [qty_at("FG-A-01-01"), qty_at("shipping")]
+    assert_equal 3, StockMove.where(move_type: "pick").count
+
+    result = plan
+    assert_equal [1, 0], result.values_at(:load, :pick)
+    load_task = loads.sole
+    assert_equal ["dock_out", "shipping", "customer", 300, lot.id, "SalesOrderLine", line.id],
+                 [load_task.resource.kind, load_task.from_location.code, load_task.to_location.code, load_task.qty.to_i,
+                  load_task.lot_id, load_task.ref_type, load_task.ref_id]
+    assert_equal 0, plan[:load], "같은 시각 재실행은 load 를 또 만들지 않는다"
+  end
+
+  test "pick 여러 건 → load 1건 → ship 1건이고 수주가 done 이 된다" do
+    fg_stock(300)
+    line = line_for("SO-T-1", 300)
+    plan
+    tick
+    plan
+
+    tick
+
+    assert_equal "done", loads.sole.status
+    ship = StockMove.where(move_type: "ship").sole
+    assert_equal ["shipping", "customer", 300, "SalesOrderLine", line.id, "task:#{loads.sole.id}"],
+                 [ship.from_location.code, ship.to_location.code, ship.qty.to_i, ship.ref_type, ship.ref_id, ship.idempotency_key]
+    assert_equal "done", line.sales_order.reload.status
+    assert_equal [0, 0, 300], [qty_at("FG-A-01-01"), qty_at("shipping"), qty_at("customer")]
+    assert_equal [], Inventory::Reconcile.call
+  end
+
+  test "로트가 둘이면 load 도 로트마다 1건이다" do
+    a = fg_stock(100, bin: "FG-A-01-01", created_at: M0 - 7200)
+    b = fg_stock(100, bin: "FG-A-01-02", created_at: M0 - 3600)
+    line_for("SO-T-1", 200)
+    plan
+    tick
+
+    plan
+
+    assert_equal [[a.id, 100], [b.id, 100]], loads.map { |t| [t.lot_id, t.qty.to_i] }.sort
+  end
+
+  test "부분 출하: 재고만큼만 pick·load 해 partial 이 되고, 재고가 들어오면 이어서 done 이 된다" do
+    fg_stock(120)
+    line = line_for("SO-T-1", 300)
+    plan
+    tick
+    plan
+    tick
+    assert_equal [120, "partial"], [shipped(line), line.sales_order.reload.status]
+    assert_equal 0, plan[:pick], "재고가 없으면 새 pick 이 없다"
+
+    fg_stock(180)
+    assert_equal 2, plan[:pick], "남은 180 = 100 + 80"
+    assert_equal [100, 20, 100, 80], picks.map { |t| t.qty.to_i }
+    tick
+    plan
+    tick
+
+    assert_equal [300, "done"], [shipped(line), line.sales_order.reload.status]
+    assert_equal [], Inventory::Reconcile.call
+    assert_equal 0, plan.values_at(:pick, :load).sum, "다 끝난 라인은 더 계획하지 않는다"
+  end
+
+  test "pick 이 취소되면 그만큼 다시 계획한다" do
+    fg_stock(100)
+    line_for("SO-T-1", 100)
+    plan
+    picks.sole.update!(status: "cancelled", cancel_reason: "test")
+
+    assert_equal 1, plan[:pick]
+    assert_equal %w[cancelled planned], picks.map(&:status)
+  end
+
+  test "한 단계가 실패해도 다른 단계는 계속되고 실패는 로그에 남는다" do
+    fg_stock(100)
+    line_for("SO-T-1", 100)
+    original = Simulation::Shipping.instance_method(:plan_loads)
+    Simulation::Shipping.send(:define_method, :plan_loads) { raise "load 계획 실패" }
+    begin
+      result = plan
+    ensure
+      Simulation::Shipping.send(:define_method, :plan_loads, original)
+    end
+
+    assert_equal 1, result[:pick]
+    assert_equal 1, @log.string.lines.grep(/sim shipping load .*load 계획 실패/).size
+  end
+end

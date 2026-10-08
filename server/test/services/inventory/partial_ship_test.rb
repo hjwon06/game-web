@@ -11,6 +11,8 @@ class Inventory::PartialShipTest < ActiveSupport::TestCase
                            ref: nil, idempotency_key: "part-prod-#{lot.lot_no}")
       Inventory::Move.call(product: @fg, lot: lot, from: "qc", to: "fg_store", qty: amount, move_type: "qc_pass",
                            ref: nil, idempotency_key: "part-pass-#{lot.lot_no}")
+      Inventory::Move.call(product: @fg, lot: lot, from: "fg_store", to: "shipping", qty: amount, move_type: "pick",
+                           ref: nil, idempotency_key: "part-pick-#{lot.lot_no}")
     end
     @order = SalesOrder.create!(so_no: "SO-PART", customer: "부분고객")
     @line = SalesOrderLine.create!(sales_order: @order, product: @fg, ordered_qty: 100)
@@ -43,7 +45,7 @@ class Inventory::PartialShipTest < ActiveSupport::TestCase
     ship(@lot_a, 60, "part-1")
     ship(@lot_b, 10, "part-2")
 
-    assert_equal [0, 50], [stock(@lot_a, "fg_store"), stock(@lot_b, "fg_store")]
+    assert_equal [0, 50], [stock(@lot_a, "shipping"), stock(@lot_b, "shipping")]
     assert_equal [60, 10], [stock(@lot_a, "customer"), stock(@lot_b, "customer")]
   end
 
@@ -54,7 +56,7 @@ class Inventory::PartialShipTest < ActiveSupport::TestCase
     assert_raises(Inventory::Ship::OverShipment) { ship(@lot_b, 31, "part-over") }
 
     assert_equal [70, "partial"], [shipped.to_i, @order.reload.status]
-    assert_equal 50, stock(@lot_b, "fg_store")
+    assert_equal 50, stock(@lot_b, "shipping")
   end
 
   test "partial 출하를 같은 키로 다시 불러도 출하량이 늘지 않는다" do
