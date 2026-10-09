@@ -1,6 +1,8 @@
 // 3D-⑦ 폰 동작. 폰이면 아래 카드 셋(상세·출하 추적·탭)을 접어서 시작하고, 하나만 펼쳐 둔다.
 // 판정은 campus3d.html 의 폰 배치 조건(max-width:640px)을 그대로 포함한다(어긋나면 폰 배치인데 펼친 채로 시작한다).
 // 가로 폰(터치 + 높이 500px 이하)은 배치는 PC 와 같고 접힘 동작만 폰과 같다. ui.js·main.js 는 건드리지 않고 클래스(.collapsed)만 다룬다.
+// 시작하자마자 표시를 남긴다. 이 속성이 없으면 campus3d.html 의 폰 CSS 가 카드 본문을 숨겨 둔다(JS 실패 안전망).
+document.getElementById('ui')?.setAttribute('data-phone', '');
 const IDS = ['g-detail', 'g-ship', 'g-tabs'];
 const mq = matchMedia('(max-width:640px), (pointer:coarse) and (max-height:500px)');
 const cards = IDS.map(id => document.getElementById(id)).filter(Boolean);
@@ -13,7 +15,7 @@ function syncText(g) {
   if (!b) return;
   const t = isOpen(g) ? '접기' : '펼치기';
   if (b.textContent !== t) b.textContent = t;
-  if (b.hasAttribute('aria-label') && b.getAttribute('aria-label') !== t) b.setAttribute('aria-label', t);
+  if (b.getAttribute('aria-label') !== t) b.setAttribute('aria-label', t);
 }
 
 function setOpen(g, open) { g.classList.toggle('collapsed', !open); prev.set(g, open); syncText(g); }
