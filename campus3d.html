@@ -132,7 +132,7 @@ canvas#c3d:active{cursor:grabbing}
   .kpi{padding:6px 8px;min-width:0}
   .kpi+.kpi{border-top:0;border-left:1px solid var(--line)}
   .kpi .v{font-size:20px}
-  .kpi .l{font-size:11px;line-height:1.3}
+  .kpi .l{font-size:11px;line-height:1.3;height:2.6em;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow-wrap:anywhere} /* 라벨 길이와 상관없이 두 줄 높이 고정 → #zoom 과 안 겹친다 */
   #zoom{top:128px;right:8px;transform:none;flex-direction:row}
   #zoom button{width:48px;height:48px}
   #zoom button+button{border-top:0;border-left:1px solid var(--line)}
@@ -142,7 +142,9 @@ canvas#c3d:active{cursor:grabbing}
   .fold{width:48px;height:48px}
   .grp .bd,#tab-list{max-height:30vh;overflow:auto}
   .tabs button{min-height:48px}
-  #tab-list li{grid-template-columns:88px 1fr auto 48px;min-height:48px;padding:0 10px}
+  #tab-list li{grid-template-columns:104px 1fr auto 40px;min-height:48px;padding:0 10px} /* 코드 칸은 PC 와 같은 104px, 남는 폭은 마지막 막대 칸이 줄인다 */
+  /* 안전망: phone.js 가 #ui 에 data-phone 을 붙이기 전(또는 실패 시)에는 카드 본문을 숨겨 화면 밖으로 넘치지 않게 한다. */
+  #ui:not([data-phone]) #g-detail .bd,#ui:not([data-phone]) #g-ship .bd,#ui:not([data-phone]) #tab-list{display:none}
 }
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
