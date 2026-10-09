@@ -131,18 +131,21 @@ canvas#c3d:active{cursor:grabbing}
   #kpi{display:grid;grid-template-columns:repeat(3,1fr)}
   .kpi{padding:6px 8px;min-width:0}
   .kpi+.kpi{border-top:0;border-left:1px solid var(--line)}
-  .kpi .v{font-size:20px}
-  .kpi .l{font-size:11px;line-height:1.3;height:2.6em;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow-wrap:anywhere} /* 라벨 길이와 상관없이 두 줄 높이 고정 → #zoom 과 안 겹친다 */
-  #zoom{top:128px;right:8px;transform:none;flex-direction:row}
+  .kpi .v{font-size:20px;white-space:nowrap}
+  .kpi .v small{font-size:11px;margin-left:2px}
+  .kpi .l{font-size:11px;line-height:1.3;overflow-wrap:anywhere} /* 라벨은 다 보인다. #zoom 이 흐름 안에 있어 KPI 높이와 상관없다 */
+  /* 줌은 위쪽 고정을 빼고 카드 묶음 바로 위 오른쪽 한 칸으로. 남는 세로 공간(auto)은 줌 위에 둔다. DOM 순서는 맨 끝이라 order 로 올린다. */
+  #zoom{position:static;transform:none;flex-direction:row;order:1;align-self:flex-end;margin-top:auto;flex:none}
+  #g-detail,#g-ship,#g-tabs{order:2}
   #zoom button{width:48px;height:48px}
   #zoom button+button{border-top:0;border-left:1px solid var(--line)}
   #g-detail,#g-ship,#g-tabs{position:relative;left:auto;right:auto;top:auto;bottom:auto;width:auto;max-height:none;flex:none}
-  #g-detail{margin-top:auto}
   .grp>.hd{min-height:48px}
   .fold{width:48px;height:48px}
   .grp .bd,#tab-list{max-height:30vh;overflow:auto}
   .tabs button{min-height:48px}
-  #tab-list li{grid-template-columns:104px 1fr auto 40px;min-height:48px;padding:0 10px} /* 코드 칸은 PC 와 같은 104px, 남는 폭은 마지막 막대 칸이 줄인다 */
+  #tab-list li{grid-template-columns:112px 1fr auto 40px;min-height:48px;padding:0 10px} /* 코드 칸 112px(여유 포함), 남는 폭은 마지막 막대 칸이 줄인다 */
+  #tab-list .bar{min-width:0}
   /* 안전망: phone.js 가 #ui 에 data-phone 을 붙이기 전(또는 실패 시)에는 카드 본문을 숨겨 화면 밖으로 넘치지 않게 한다. */
   #ui:not([data-phone]) #g-detail .bd,#ui:not([data-phone]) #g-ship .bd,#ui:not([data-phone]) #tab-list{display:none}
 }
