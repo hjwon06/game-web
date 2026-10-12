@@ -2,7 +2,8 @@ require "test_helper"
 
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
-# ledger_entries 는 append-only 다. 방어선은 DB 트리거(ledger_entries_append_only)이고 모델에는 막는 코드가 없다.
+# ledger_entries 는 append-only 다. 방어선은 두 겹이다: DB 트리거(ledger_entries_append_only)가 SQL 수정·삭제·TRUNCATE 를 막고,
+# 모델 readonly? 가 저장된 행의 update!/destroy 를 SQL 전에 막는다. 트리거 테스트는 update_all/delete_all 로 모델을 우회한다.
 class Securities::LedgerImmutableTest < ActiveSupport::TestCase
   setup do
     asset = Securities::Asset.create!(code: "VT-A", name: "가상종목", kind: "equity", base_price: 1000)

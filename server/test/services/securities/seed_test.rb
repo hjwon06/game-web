@@ -6,8 +6,15 @@ Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 
 class Securities::SeedTest < ActiveSupport::TestCase
   TABLES = %w[assets accounts positions holds orders executions settlements ledger_entries market_days].freeze
 
+  # 쿼리 캐시가 켜져 있으면 전후 비교가 같은 캐시 결과끼리의 비교가 되어 빈 단언이 되므로 uncached 로 읽는다.
   def snapshot
-    TABLES.to_h { |t| [t, Securities::Record.lease_connection.select_value("SELECT count(*) FROM #{t}").to_i] }
+    Securities::Record.uncached do
+      TABLES.to_h { |t| [t, Securities::Record.lease_connection.select_value("SELECT count(*) FROM #{t}").to_i] }
+    end
+  end
+
+  def position_rows
+    Securities::Record.uncached { Securities::Position.order(:id).pluck(:account_id, :asset_id, :qty) }
   end
 
   test "계좌 203 · 자산 6, 이름과 코드는 가상이다" do
@@ -90,12 +97,12 @@ class Securities::SeedTest < ActiveSupport::TestCase
   test "다른 seed 로 채운 DB 에 run! 하면 예외이고 아무것도 쓰지 않는다" do
     Securities::Seed.run!(seed: 42)
     before = snapshot
-    positions = Securities::Position.order(:id).pluck(:account_id, :asset_id, :qty)
+    positions = position_rows
 
     assert_raises(Securities::Seed::Mismatch) { Securities::Seed.run!(seed: 43) }
 
     assert_equal before, snapshot
-    assert_equal positions, Securities::Position.order(:id).pluck(:account_id, :asset_id, :qty)
+    assert_equal positions, position_rows
   end
 
   test "비어 있지 않은데 positions 가 plan 과 다르면(일부만 있는 DB) 예외다" do
