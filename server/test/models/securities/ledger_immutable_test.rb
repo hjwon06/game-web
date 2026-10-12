@@ -43,6 +43,14 @@ class Securities::LedgerImmutableTest < ActiveSupport::TestCase
     assert Securities::LedgerEntry.exists?(@entry.id)
   end
 
+  test "저장된 행은 모델에서도 읽기 전용이다(update! · destroy 가 SQL 전에 막힌다)" do
+    assert @entry.readonly?
+    assert_raises(ActiveRecord::ReadOnlyRecord) { @entry.update!(qty: 99) }
+    assert_raises(ActiveRecord::ReadOnlyRecord) { @entry.destroy }
+    assert_equal 4, Securities::LedgerEntry.find(@entry.id).qty
+    refute Securities::LedgerEntry.new.readonly?
+  end
+
   test "INSERT 는 된다(막는 건 수정·삭제뿐이다)" do
     second = Securities::LedgerEntry.create!(settlement: @entry.settlement, from_account: @entry.from_account,
                                              to_account: @entry.to_account, asset: @entry.asset,

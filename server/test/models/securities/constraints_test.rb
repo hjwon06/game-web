@@ -46,6 +46,11 @@ class Securities::ConstraintsTest < ActiveSupport::TestCase
 
     ["holds.order_id 중복", UNIQUE, "holds_order_uidx", -> { insert(:holds, hold) }],
     ["holds.qty 음수", CHECK, "holds_qty_check", -> { insert(:holds, hold(order_id: @sell_order_id, qty: -1)) }],
+    ["holds.order_id 가 없는 주문", FK, "Key (order_id)=", -> { insert(:holds, hold(order_id: 0)) }],
+    ["holds.account_id 가 없는 계좌", FK, "Key (account_id)=",
+     -> { insert(:holds, hold(order_id: @sell_order_id, account_id: 0)) }],
+    ["holds.asset_id 가 없는 자산", FK, "Key (asset_id)=",
+     -> { insert(:holds, hold(order_id: @sell_order_id, asset_id: 0)) }],
 
     ["orders.client_key 중복", UNIQUE, "orders_client_key_uidx", -> { insert(:orders, order(client_key: row(:orders)["client_key"])) }],
     ["orders.seq 중복", UNIQUE, "orders_seq_uidx", -> { insert(:orders, order(seq: row(:orders)["seq"])) }],
@@ -93,6 +98,19 @@ class Securities::ConstraintsTest < ActiveSupport::TestCase
     end
   end
 
+  test "도우미 자체 검사: 쿼리 캐시를 켜도 같은 INSERT 두 번째는 DB 가 거부한다" do
+    cols = asset(code: "VX-DUP")
+    Securities::Record.cache do
+      assert_kind_of Integer, insert(:assets, cols)
+
+      error = assert_raises(UNIQUE) do
+        Securities::Record.transaction(requires_new: true) { insert(:assets, cols) }
+      end
+      assert_includes error.message, "assets_code_uidx"
+      assert_equal 1, conn.uncached { conn.select_value("SELECT count(*) FROM assets WHERE code = 'VX-DUP'") }.to_i
+    end
+  end
+
   VIOLATIONS.each do |label, error_class, needle, body|
     test "DB 가 거부한다: #{label}" do
       error = assert_raises(error_class) do
@@ -108,19 +126,23 @@ class Securities::ConstraintsTest < ActiveSupport::TestCase
     Securities::Record.lease_connection
   end
 
+  # 도우미는 전부 쿼리 캐시를 건너뛴다. 캐시를 타면 글자까지 같은 INSERT 가 DB 에 가지 않고
+  # 이전 결과(같은 id)가 돌아와 UNIQUE 위반이 일어나지 않은 것처럼 보인다.
   def count(table)
-    conn.select_value("SELECT count(*) FROM #{conn.quote_table_name(table)}").to_i
+    conn.uncached { conn.select_value("SELECT count(*) FROM #{conn.quote_table_name(table)}") }.to_i
   end
 
   # 이 테스트가 넣은 첫 행(위반이 겹쳐야 할 대상)을 읽는다.
   def row(table)
-    conn.select_one("SELECT * FROM #{conn.quote_table_name(table)} ORDER BY 1 LIMIT 1")
+    conn.uncached { conn.select_one("SELECT * FROM #{conn.quote_table_name(table)} ORDER BY 1 LIMIT 1") }
   end
 
   def insert(table, cols, returning: "id")
     names = cols.keys.map { |k| conn.quote_column_name(k) }.join(", ")
     values = cols.values.map { |v| conn.quote(v) }.join(", ")
-    conn.select_value("INSERT INTO #{conn.quote_table_name(table)} (#{names}) VALUES (#{values}) RETURNING #{returning}")
+    conn.uncached do
+      conn.select_value("INSERT INTO #{conn.quote_table_name(table)} (#{names}) VALUES (#{values}) RETURNING #{returning}")
+    end
   end
 
   def token(prefix)

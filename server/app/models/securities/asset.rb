@@ -8,6 +8,8 @@ module Securities
 
     has_many :positions, class_name: "Securities::Position", dependent: :restrict_with_exception
     has_many :orders, class_name: "Securities::Order", dependent: :restrict_with_exception
+    has_many :holds, class_name: "Securities::Hold", dependent: :restrict_with_exception
+    has_many :executions, class_name: "Securities::Execution", dependent: :restrict_with_exception
     has_many :ledger_entries, class_name: "Securities::LedgerEntry", dependent: :restrict_with_exception
   end
 end

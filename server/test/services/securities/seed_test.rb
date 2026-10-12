@@ -1,4 +1,5 @@
 require "test_helper"
+require "rake"
 
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
@@ -86,14 +87,50 @@ class Securities::SeedTest < ActiveSupport::TestCase
     assert_equal once, snapshot
   end
 
-  test "securities:seed rake 가 Seed.run! 을 부른다" do
+  test "다른 seed 로 채운 DB 에 run! 하면 예외이고 아무것도 쓰지 않는다" do
+    Securities::Seed.run!(seed: 42)
+    before = snapshot
+    positions = Securities::Position.order(:id).pluck(:account_id, :asset_id, :qty)
+
+    assert_raises(Securities::Seed::Mismatch) { Securities::Seed.run!(seed: 43) }
+
+    assert_equal before, snapshot
+    assert_equal positions, Securities::Position.order(:id).pluck(:account_id, :asset_id, :qty)
+  end
+
+  test "비어 있지 않은데 positions 가 plan 과 다르면(일부만 있는 DB) 예외다" do
+    Securities::Seed.run!(seed: 42)
+    Securities::Position.where(id: Securities::Position.minimum(:id)).delete_all
+    before = snapshot
+
+    assert_raises(Securities::Seed::Mismatch) { Securities::Seed.run!(seed: 42) }
+    assert_equal before, snapshot
+  end
+
+  # rake 를 직접 불러온다 — 증권 테스트만 돌려도 태스크가 있어야 한다.
+  def invoke_seed_task(seed: nil)
     Rails.application.load_tasks unless Rake::Task.task_defined?("securities:seed")
     task = Rake::Task["securities:seed"]
     task.reenable
+    old = ENV["SEED"]
+    seed.nil? ? ENV.delete("SEED") : ENV["SEED"] = seed
+    capture_io { task.invoke }.first
+  ensure
+    old.nil? ? ENV.delete("SEED") : ENV["SEED"] = old
+  end
 
-    out, = capture_io { task.invoke }
+  test "securities:seed rake 가 Seed.run! 을 부른다" do
+    out = invoke_seed_task
 
     assert_equal 203, Securities::Account.count
     assert_match(/securities:seed .*accounts 203/, out)
+  end
+
+  test "securities:seed 의 SEED 가 숫자가 아니면 예외이고 아무것도 쓰지 않는다" do
+    before = snapshot
+
+    assert_raises(ArgumentError) { invoke_seed_task(seed: "abc") }
+    assert_raises(ArgumentError) { invoke_seed_task(seed: "42abc") }
+    assert_equal before, snapshot
   end
 end

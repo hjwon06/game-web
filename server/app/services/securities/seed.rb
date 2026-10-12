@@ -1,12 +1,15 @@
 # 증권 가상 시드. plan 은 DB 를 안 만지는 행 목록이고, run! 은 그 목록을 저장한다.
 # 같은 seed = 같은 계획. 저장은 ON CONFLICT DO NOTHING 이라 두 번 돌려도 행이 늘지 않는다.
-# 한계: 이미 다른 seed 로 채운 DB 에 run!(seed: 다른값) 을 하면 같은 코드·멱등키가 충돌해 아무것도 바뀌지 않는다(처음 값이 남는다).
+# DB 가 비어 있지 않으면 plan 의 positions(계좌코드 · 자산코드 · 수량)와 DB 가 같을 때만 진행한다.
+# 다르면(다른 seed 로 채운 DB 등) 아무것도 쓰지 않고 Seed::Mismatch 를 올린다 — 두 seed 가 섞이지 않게.
 #
 # 개시 잔고는 원장으로 만든다: 예탁 → 투자자 항목이 개시 settlement(2026-10-30, settled)에 묶이고
 # positions 는 그 합이다. 예탁은 출처라 positions 행이 없다.
 module Securities
   module Seed
     DEFAULT_SEED = 42
+
+    class Mismatch < StandardError; end
 
     OPEN_DATE = Date.new(2026, 10, 30)
     OPEN_SETTLED_AT = Time.utc(2026, 10, 30, 7, 0, 0) # 16:00 KST
@@ -55,6 +58,10 @@ module Securities
       rows = plan(seed: seed)
 
       Record.transaction do
+        # 확인과 쓰기 사이에 다른 run! 이 끼어들지 못하게 트랜잭션 단위 잠금을 건다.
+        Record.lease_connection.execute("SELECT pg_advisory_xact_lock(hashtext('securities:seed'))")
+        ensure_same_plan!(rows)
+
         Asset.insert_all(rows[:assets])
         Account.insert_all(rows[:accounts])
         Settlement.insert_all([rows[:settlement]])
@@ -76,6 +83,18 @@ module Securities
       end
 
       rows
+    end
+
+    # 비어 있는 DB 는 통과. 비어 있지 않으면 positions 가 plan 과 정확히 같아야 한다.
+    def ensure_same_plan!(rows)
+      return unless [Asset, Account, Position, LedgerEntry].any?(&:exists?)
+
+      expected = rows[:positions].to_h { |p| [[p[:account_code], p[:asset_code]], p[:qty]] }
+      actual = Position.joins(:account, :asset).pluck("accounts.code", "assets.code", "positions.qty")
+                       .to_h { |account, asset, qty| [[account, asset], qty] }
+      return if actual == expected
+
+      raise Mismatch, "DB 의 positions(#{actual.size}행)가 이 seed 의 plan(#{expected.size}행)과 다르다. 아무것도 쓰지 않았다"
     end
 
     def counts
