@@ -3,7 +3,7 @@ require "test_helper"
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
 # 기준가 갱신(BasePrice.roll!). 체결은 실제 경로(PlaceOrder → Auction.open!/close!)로 만든다. 기준가 50,000.
-# 변이 검사: 종가 세션 대신 그날 마지막 체결을 보면 T2 · T3, 종목 조건을 빼면 T4 가 실패해야 한다.
+# 변이 검사: roll! 을 종가 세션 체결만으로 바꾸면 T3, 종목 조건을 빼면 T4 가 실패해야 한다.
 class Securities::BasePriceTest < ActiveSupport::TestCase
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
   DAY = Date.new(2026, 11, 2)
@@ -69,12 +69,28 @@ class Securities::BasePriceTest < ActiveSupport::TestCase
     assert_equal at_close.last.price, @equity.reload.base_price
   end
 
-  test "T3 종가 세션에 체결이 없으면 nil 이고 장중 체결이 있어도 기준가는 그대로다" do
+  test "T3 종가 세션에 체결이 없으면 장중 마지막 체결(executed_at, id 최대)의 가격이 기준가가 된다" do
     intraday_trade
+    eleven = KST.local(2026, 11, 2, 11, 0, 0)
+    place("sell", qty: 1, price: 52_000, at: eleven)
+    place("buy", qty: 1, price: 52_000, at: eleven)
     close!
 
-    assert_nil roll!
-    assert_equal 50_000, @equity.reload.base_price
+    assert_equal [51_000, 52_000], Securities::Execution.order(:id).pluck(:price)
+    assert_empty Securities::Execution.where(executed_at: @close_at), "종가 세션에는 체결이 없다"
+
+    assert_equal 52_000, roll!
+    assert_equal 52_000, @equity.reload.base_price
+    assert_equal 52_000, roll!, "두 번 불러도 같다"
+  end
+
+  test "T3 그날 체결이 하나도 없으면 nil 이고 기준가는 그대로다" do
+    Securities::Auction.open!(asset: @other, trade_date: DAY, at: @nine)
+    close!(@other)
+    assert_equal 0, Securities::Execution.count
+
+    assert_nil roll!(@other)
+    assert_equal 50_000, @other.reload.base_price
   end
 
   test "T4 멱등이고 다른 종목의 같은 시각 체결을 보지 않는다" do

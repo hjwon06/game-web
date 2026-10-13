@@ -4,7 +4,7 @@ Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 
 
 # 빨리 감기 진행기(Sim::Runner). 시드 데이터 위에서 실제 경로(Schedule → PlaceOrder → Auction · Match)로 돌린다.
 # 변이 검사(AC): 일정을 의도 뒤에 돌리기 → T6, client_key 순번 대신 무작위 → T5,
-# asset 을 처음 한 번 읽어 재사용 → T7.
+# asset 을 처음 한 번 읽어 재사용 → T7, 매도 상한을 시드 보유로 → T4(여러 날), Book 을 창 시작에 한 번만 읽기 → T4 따라잡기.
 class Securities::Sim::RunnerTest < ActiveSupport::TestCase
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
   SEED = Securities::Sim::Config::SEED
@@ -79,10 +79,67 @@ class Securities::Sim::RunnerTest < ActiveSupport::TestCase
     @runner.advance(from: from, to: to)
 
     changed = Intent.new(**intent.to_h, qty: intent.qty + 1)
-    runner = Securities::Sim::Runner.new(seed: SEED, intents: ->(date:, seed:) { date == MON ? [changed] : [] })
+    runner = Securities::Sim::Runner.new(seed: SEED, intents: ->(date:, seed:, book:) { date == MON ? [changed] : [] })
 
     assert_raises(Securities::PlaceOrder::Conflict) { runner.advance(from: from, to: to) }
     assert_equal 1, fresh { Securities::Order.count }
+  end
+
+  test "D5 같은 날 창을 이어 돌려도 공급자는 그날 한 번만 불리고 Sim::Book 을 받는다" do
+    calls = []
+    runner = Securities::Sim::Runner.new(seed: SEED, intents: ->(date:, seed:, book:) { (calls << [date, book]) && [] })
+
+    runner.advance(from: t(8, 30), to: t(9, 0))
+    runner.advance(from: t(9, 0), to: t(10, 0))
+
+    assert_equal [MON], calls.map(&:first)
+    assert_kind_of Securities::Sim::Book, calls.first.last
+  end
+
+  # 창 하나가 월 · 화를 다 덮어도 화 장부는 월 체결이 DB 에 들어간 뒤 읽는다(날짜 순 지연 계산).
+  test "T4 따라잡기: 월 · 화를 한 창으로 돌려도 화 장부가 월 체결을 반영하고 날마다 insufficient 0 이다" do
+    books = {}
+    sliced = lambda do |date:, seed:, book:|
+      books[date] = book
+      Securities::Sim::Intents.for_day(date: date, seed: seed, book: book).each_slice(5).map(&:first)
+    end
+    runner = Securities::Sim::Runner.new(seed: SEED, single_price: true, intents: sliced)
+
+    result = runner.advance(from: t(0, 0), to: KST.local(2026, 11, 4, 0, 0, 0))
+
+    tue = Date.new(2026, 11, 3)
+    assert_operator fresh { Securities::Execution.where(trade_date: MON).count }, :>=, 1
+    assert_equal 0, result.by_reject_reason["insufficient"]
+    assert_equal fresh { Securities::Sim::Book.as_of(date: tue, seed: SEED).cash }, books.fetch(tue).cash
+    opening = Securities::Sim::Book.opening(plan: Securities::Seed.plan(seed: SEED))
+    assert_not_equal opening.cash, books.fetch(tue).cash, "화 장부가 월 체결을 못 봤다"
+  end
+
+  # 시간 때문에 공급자는 하루 의도의 5개당 1개만 낸다. 날마다 Runner 가 Book.as_of 를 읽어 그날 의도를 짠다.
+  test "T4 여러 날 · 재생: 5영업일 날마다 insufficient 0, 마지막 날 창을 새 Runner 로 다시 돌려도 Conflict 없음 · 주문 수 그대로" do
+    provider = lambda do |date:, seed:, book:|
+      Securities::Sim::Intents.for_day(date: date, seed: seed, book: book).each_slice(5).map(&:first)
+    end
+    runner = Securities::Sim::Runner.new(seed: SEED, single_price: true, intents: provider)
+    days = (2..6).map { |d| Date.new(2026, 11, d) }
+
+    results = days.map do |date|
+      runner.advance(from: Securities::Clock.at_minute(date, 0), to: Securities::Clock.at_minute(date + 1, 0))
+    end
+
+    results.each_with_index do |result, n|
+      assert_operator result.placed, :>=, 100, "#{days[n]} 의도"
+      assert_equal 0, result.by_reject_reason["insufficient"], "#{days[n]} 가능 수량 거절"
+    end
+    assert_operator fresh { Securities::Execution.count }, :>=, 1
+    before = counts
+    last = days.last
+    replay = Securities::Sim::Runner.new(seed: SEED, single_price: true, intents: provider)
+
+    again = replay.advance(from: Securities::Clock.at_minute(last, 0), to: Securities::Clock.at_minute(last + 1, 0))
+
+    assert_equal results.last.placed, again.placed
+    assert_equal before, counts
   end
 
   # 월 종가 단일가가 기준가를 바꾸면, 같은 advance 안의 화 지정가는 새 기준가 띠로 검사된다.
@@ -107,7 +164,7 @@ class Securities::Sim::RunnerTest < ActiveSupport::TestCase
               mk.call(1, t(15, 20, 20), buyers[0], "buy", new_base, "t7-buy")],
       tue => [mk.call(0, KST.local(2026, 11, 3, 9, 30, 0), buyers[1], "buy", probe, "t7-probe")]
     }
-    runner = Securities::Sim::Runner.new(seed: SEED, single_price: true, intents: ->(date:, seed:) { by_date[date] || [] })
+    runner = Securities::Sim::Runner.new(seed: SEED, single_price: true, intents: ->(date:, seed:, book:) { by_date[date] || [] })
 
     result = runner.advance(from: t(8, 30), to: KST.local(2026, 11, 3, 10, 0, 0))
 
@@ -137,7 +194,7 @@ class Securities::Sim::RunnerTest < ActiveSupport::TestCase
       Intent.new(seq: n, at: ended + shift, account_code: buyers[n].code, asset_code: asset.code, side: "buy",
                  order_type: "limit", price: price, qty: 1, client_key: key)
     end
-    runner = Securities::Sim::Runner.new(seed: SEED, intents: ->(date:, seed:) { date == MON ? intents : [] })
+    runner = Securities::Sim::Runner.new(seed: SEED, intents: ->(date:, seed:, book:) { date == MON ? intents : [] })
 
     result = runner.advance(from: t(8, 30), to: ended + 5)
 

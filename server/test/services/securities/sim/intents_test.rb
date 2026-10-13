@@ -4,7 +4,8 @@ Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 
 
 # 투자자 봇 의도(Sim::Intents · FairValue). 의도는 seed · 날짜 · Seed.plan 만 보므로 for_day 는 DB 를 읽지 않는다.
 # 변이 검사(AC): 날 시드에서 날짜 빼기 → T1 날 시드, 한쪽 정하기 빼기(의도마다 무작위) → T2,
-# 매도 누적 상한 빼기 → T2 누적 상한, 장전 시장가 허용 → T3.
+# 매도 누적 상한 빼기 → T2 누적 상한, 장전 시장가 허용 → T3 장전,
+# 매도 상한을 book 대신 시드 보유로 → T3 book, 매수 누적 상한 빼기 → T3 book.
 class Securities::Sim::IntentsTest < ActiveSupport::TestCase
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
   SEED = Securities::Sim::Config::SEED
@@ -157,6 +158,64 @@ class Securities::Sim::IntentsTest < ActiveSupport::TestCase
         assert_operator total, :<=, held.fetch(key, 0), "#{date} #{key.join('/')} 매도 합이 개시 보유를 넘는다"
       end
     end
+  end
+
+  # 보유는 절반(1주는 0 이 된다) · 현금은 1/20(주문 한 건 금액 0.5M~5M 보다 작아지는 계좌가 생긴다)로 줄인 아침 장부.
+  def shrunk_book
+    opening = Securities::Sim::Book.opening(plan: Securities::Seed.plan(seed: SEED))
+    Securities::Sim::Book.new(holdings: opening.holdings.transform_values { |q| q / 2 },
+                              cash: opening.cash.transform_values { |c| c / 20 }, base: opening.base)
+  end
+
+  test "T3 의도가 book 을 따른다: 매도 합 ≤ 보유, 매수 홀드 합 ≤ 현금, 보유 0 이면 매도 쪽에 없다" do
+    book = shrunk_book
+    assert(book.holdings.values.any?(&:zero?) && book.holdings.values.any?(&:positive?))
+
+    [MON, TUE].each do |date|
+      list = Intents.for_day(date: date, seed: SEED, book: book)
+      sells = list.select { |i| i.side == "sell" }
+      buys = list.select { |i| i.side == "buy" }
+      assert_not_empty sells
+      assert_not_empty buys
+
+      sold = sells.group_by { |i| [i.account_code, i.asset_code] }.transform_values { |v| v.sum(&:qty) }
+      sold.each do |key, total|
+        assert_operator book.holdings.fetch(key), :>, 0, "#{date} #{key.join('/')} 보유 0 인데 매도 쪽이다"
+        assert_operator total, :<=, book.holdings.fetch(key), "#{date} #{key.join('/')} 매도 합이 보유를 넘는다"
+      end
+
+      held = buys.group_by(&:account_code).transform_values do |v|
+        v.sum { |i| (i.order_type == "limit" ? i.price : Securities::Tick.limits(book.base.fetch(i.asset_code)).last) * i.qty }
+      end
+      held.each do |account, total|
+        assert_operator total, :<=, book.cash.fetch(account), "#{date} #{account} 매수 홀드 합이 현금을 넘는다"
+      end
+      assert_not_equal shape(list), shape(day(date)), "줄인 장부는 시드 장부와 다른 의도를 낸다"
+      assert_equal list, Intents.for_day(date: date, seed: SEED, book: book), "같은 book 이면 같다"
+    end
+  end
+
+  test "T3 book 이 있어도 의도를 만드는 동안 SQL 이 한 번도 나가지 않는다" do
+    book = shrunk_book
+    queries = []
+    callback = ->(*, payload) { queries << payload[:sql] unless payload[:name] == "SCHEMA" }
+    list = ActiveSupport::Notifications.subscribed(callback, "sql.active_record") do
+      Intents.for_day(date: MON, seed: SEED, book: book)
+    end
+
+    assert_not_empty list
+    assert_empty queries, "의도 생성이 DB 를 읽었다: #{queries.first}"
+  end
+
+  test "T3 현금이 0 인 book: 매수 의도가 하나도 나오지 않고 매도는 보유 안에서 그대로다" do
+    opening = Securities::Sim::Book.opening(plan: Securities::Seed.plan(seed: SEED))
+    book = Securities::Sim::Book.new(holdings: opening.holdings, cash: opening.cash.transform_values { 0 }, base: opening.base)
+
+    list = Intents.for_day(date: MON, seed: SEED, book: book)
+
+    assert_empty list.select { |i| i.side == "buy" }
+    assert_not_empty list
+    assert_operator list.size, :<, Securities::Sim::Config::ORDERS_PER_DAY
   end
 
   test "T3 장전 300개는 전부 지정가이고 장중 시장가는 10% ± 3%p 다" do
