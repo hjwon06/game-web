@@ -81,6 +81,9 @@ module SecuritiesRace
     end
 
     results = threads.map { |t| t.join(15) ? t.value : flunk("스레드가 15초 안에 끝나지 않았다") }
+    # 다른 커넥션(A · B)의 쓰기는 메인 커넥션의 쿼리 캐시를 지우지 않는다. 테스트는 executor 로 감싸여 메인 커넥션에
+    # 캐시가 켜져 있으므로, 경합 전에 읽은 같은 SQL 이 경합 뒤에도 경합 전 값을 돌려준다. 돌려주기 직전에 비운다.
+    Securities::Record.connection_pool.clear_query_cache
     [waiting, b_alive, *results]
   end
 
