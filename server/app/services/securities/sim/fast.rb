@@ -1,14 +1,12 @@
 # 빨리 감기 실측 진입점. 시뮬레이터 규칙이다. 빈 증권 DB 에 Seed.run! 한 뒤 첫 장 00:00 부터 영업일 days 개를 sleep 없이 돌린다.
 #   - 빈 DB 가 아니면 NotEmpty 로 멈춘다. 실측은 판마다 새 DB 라서, 이어 돌리면 이전 판 주문이 섞여 숫자가 거짓이 된다.
 #   - 하루씩 [그날 00:00, 다음 날 00:00) 창으로 돈다(주말도 창이 있지만 일정 · 의도가 없다). 창끼리 이어지고 하루 의도만 메모리에 둔다.
-#   - 결제(T+2)가 달력을 읽으므로 마지막 영업일 뒤 SETTLE_PAD 일까지 달력 행을 채운다.
+#   - 결제(T+2)가 달력을 읽으므로 마지막 영업일 뒤 Config::SETTLE_PAD 일까지 달력 행을 채운다.
 #   - 결과는 해시다. 지표(p95 · 시가와 적정가 차이)는 여기서 계산하지 않는다 — 원자료(시가 행)만 낸다.
 module Securities
   module Sim
     class Fast
       class NotEmpty < StandardError; end
-
-      SETTLE_PAD = 14
 
       def self.call(**args)
         new(**args).call
@@ -29,7 +27,7 @@ module Securities
 
         Seed.run!(seed: @seed)
         last = last_business_day
-        Calendar.extend!(through: last + SETTLE_PAD)
+        Calendar.extend!(through: last + Config::SETTLE_PAD)
         totals = (Seed::FIRST_MARKET_DAY..last).each_with_object(empty_totals) do |date, sum|
           add(sum, @runner.advance(from: Clock.at_minute(date, 0), to: Clock.at_minute(date + 1, 0)))
         end

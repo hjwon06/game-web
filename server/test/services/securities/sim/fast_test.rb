@@ -9,13 +9,24 @@ class Securities::Sim::FastTest < ActiveSupport::TestCase
   MON = Date.new(2026, 11, 2)
   EQUITIES = Securities::Seed::EQUITIES.map(&:first)
 
+  # 하루 의도 1,000개를 다 돌리면 느리다. 날마다 5개 중 1개만 쓰는 공급자를 Runner 에 주입한다(seq · client_key 는 그대로).
+  SPARSE = lambda { |date:, seed:, book: nil|
+    Securities::Sim::Intents.for_day(date: date, seed: seed, book: book).each_slice(5).map(&:first)
+  }
+
   def parsed(report)
     JSON.parse(JSON.generate(report)) # bin 이 내는 JSON 한 줄과 같은 모양
   end
 
+  def fast(single_price: nil)
+    runner = Securities::Sim::Runner.new(seed: SEED, single_price: single_price, intents: SPARSE)
+    Securities::Sim::Fast.call(days: 1, seed: SEED, single_price: single_price, runner: runner)
+  end
+
   test "T3 하루(단일가 켬): 다섯 종목 시가 행이 있고 placed = 그날 의도 수" do
-    report = parsed(Securities::Sim::Fast.call(days: 1, seed: SEED, single_price: true))
-    expected = Securities::Sim::Intents.for_day(date: MON, seed: SEED).size
+    report = parsed(fast(single_price: true))
+    expected = SPARSE.call(date: MON, seed: SEED).size
+    assert_operator expected, :<, Securities::Sim::Config::ORDERS_PER_DAY, "솎은 공급자가 아니다"
 
     assert_equal expected, report["placed"]
     assert_equal expected, report["by_status"].values.sum
@@ -35,9 +46,9 @@ class Securities::Sim::FastTest < ActiveSupport::TestCase
   end
 
   test "T3 하루(단일가 끔): 같은 의도가 접수되고 시가 행은 접속매매(sequential · 가격 없음)다" do
-    report = parsed(Securities::Sim::Fast.call(days: 1, seed: SEED, single_price: false))
+    report = parsed(fast(single_price: false))
 
-    assert_equal Securities::Sim::Intents.for_day(date: MON, seed: SEED).size, report["placed"]
+    assert_equal SPARSE.call(date: MON, seed: SEED).size, report["placed"]
     rows = report["opens"].values.flatten
     assert_equal 5, rows.size
     assert(rows.all? { |r| r["mode"] == "sequential" && r["price"].nil? })
@@ -63,7 +74,7 @@ class Securities::Sim::FastTest < ActiveSupport::TestCase
     callback = ->(*, payload) { pools << payload[:connection]&.pool }
 
     ActiveSupport::Notifications.subscribed(callback, "sql.active_record") do
-      Securities::Sim::Fast.call(days: 1, seed: SEED, single_price: true)
+      fast(single_price: true)
     end
 
     assert_operator pools.size, :>=, 100, "쿼리를 못 잡았으면 이 단언은 아무것도 못 본다"

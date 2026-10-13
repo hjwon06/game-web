@@ -1,11 +1,13 @@
 require "test_helper"
 require "tmpdir"
+require "minitest/mock"
 
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
 # 실시간 데몬(Sim::Daemon). 실시간은 tick 인자로 주입한다. Runner 는 창만 기록하는 가짜를 쓰고,
 # T4 만 진짜 Runner 로 돌려 SQL 이 전부 증권 풀로 갔는지 본다.
-# 변이 검사(AC): 상태 파일 대신 매번 Time.current → T2 상태 파일, tick 예외 때 지난 시각을 앞으로 옮기기 → T2 재시도.
+# 변이 검사(AC): 상태 파일 대신 매번 Time.current → T2 상태 파일, tick 예외 때 지난 시각을 앞으로 옮기기 → T2 재시도,
+# cursor 를 안 읽기 → T1, 앞으로만 검사 빼기 → T2 역행, run 끝의 log_day 빼기 → T3 멈춤, 재시도 상한 빼기 → T4 재시도 상한.
 class Securities::Sim::DaemonTest < ActiveSupport::TestCase
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
   Result = Securities::Sim::Runner::Result
@@ -40,8 +42,8 @@ class Securities::Sim::DaemonTest < ActiveSupport::TestCase
 
   teardown { FileUtils.remove_entry(@dir) }
 
-  def daemon(runner, started_at: STARTED)
-    Securities::Sim::Daemon.new(state_path: @path, runner: runner, logger: @logger, started_at: started_at)
+  def daemon(runner, started_at: STARTED, **options)
+    Securities::Sim::Daemon.new(state_path: @path, runner: runner, logger: @logger, started_at: started_at, **options)
   end
 
   def speed
@@ -117,6 +119,71 @@ class Securities::Sim::DaemonTest < ActiveSupport::TestCase
 
     assert_includes @log.string, "sec_sim day=2026-11-02 placed=14"
     assert_match(/status=\{"filled"\s*=>\s*14\}/, @log.string)
+  end
+
+  test "T1 재시작: 새 Daemon(같은 상태 파일)의 첫 창 from = 앞 Daemon 의 마지막 to" do
+    before = RecordingRunner.new
+    first = daemon(before)
+    first.tick(STARTED + 10)
+    first.tick(STARTED + 20)
+    last_to = before.windows.last.last
+
+    after = RecordingRunner.new
+    again = daemon(after, started_at: STARTED + 3600)
+    assert_instance_of Result, again.tick(STARTED + 30)
+
+    assert_equal last_to.to_r, after.windows.first.first.to_r, "다시 켠 뒤 첫 창이 cursor 에서 이어지지 않는다"
+    assert_equal STARTED.to_r, again.started_at.to_r
+    assert_operator after.windows.first.first, :>, KST.local(2026, 11, 2, 0, 0), "첫 장 00:00 부터 다시 돌았다"
+    assert_equal after.windows.first.last.to_r, JSON.parse(File.read(@path)).fetch("cursor_r").to_r
+  end
+
+  test "T2 역행: 실시간이 뒤로 간 tick 은 advance 를 부르지 않고 다음 창은 앞 cursor 에서 이어진다" do
+    runner = RecordingRunner.new
+    sim = daemon(runner)
+
+    assert_instance_of Result, sim.tick(STARTED + 20)
+    t1_to = runner.windows.last.last
+    assert_nil sim.tick(STARTED + 10)
+    assert_equal 1, runner.windows.size, "역행 tick 이 advance 를 불렀다"
+    assert_equal t1_to.to_r, JSON.parse(File.read(@path)).fetch("cursor_r").to_r, "역행 tick 이 cursor 를 옮겼다"
+    assert_instance_of Result, sim.tick(STARTED + 30)
+
+    assert_equal 2, runner.windows.size
+    assert_equal t1_to.to_r, runner.windows.last.first.to_r
+    assert_includes @log.string, "tick skipped"
+  end
+
+  test "T3 멈춤: stop! 뒤 run 이 끝나면 진행 중인 날의 로그가 한 줄 남는다" do
+    sim = daemon(RecordingRunner.new(placed: 7))
+    sim.tick(STARTED + 10)
+    assert_not_includes @log.string, "sec_sim day="
+
+    sim.stop!
+    sim.run
+
+    assert_equal 1, @log.string.scan("sec_sim day=2026-11-02 placed=7").size
+    assert_operator @log.string.index("sec_sim day="), :<, @log.string.index("sec_sim stop")
+  end
+
+  test "T4 재시도 상한: market_time 이 늘 Missing 이면 tick 은 nil · 로그 · 달력 행은 상한까지만" do
+    runner = RecordingRunner.new
+    sim = daemon(runner, max_retries: 3)
+    calls = 0
+    always_missing = lambda { |*, **|
+      calls += 1
+      raise Securities::Calendar::Missing, "없다"
+    }
+
+    result = Securities::Clock.stub(:market_time, always_missing) { sim.tick(STARTED + 10) }
+
+    first = Securities::Seed::FIRST_MARKET_DAY
+    assert_nil result
+    assert_equal 4, calls, "처음 한 번 + 재시도 3번"
+    assert_includes @log.string, "tick failed"
+    assert_includes @log.string, "Securities::Calendar::Missing"
+    assert_empty runner.windows
+    assert_operator Securities::MarketDay.maximum(:trade_date), :<=, first + (Securities::Sim::Config::CALENDAR_AHEAD_DAYS * 8)
   end
 
   test "T4 primary 를 안 쓴다: tick 동안 나간 SQL 의 연결이 전부 Securities::Record 풀이다" do
