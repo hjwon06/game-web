@@ -3,7 +3,8 @@ require "test_helper"
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
 # 투자자 봇 의도(Sim::Intents · FairValue). 의도는 seed · 날짜 · Seed.plan 만 보므로 for_day 는 DB 를 읽지 않는다.
-# 변이 검사(AC): 날 시드에서 날짜 빼기 → T1, 한쪽 정하기 빼기(의도마다 무작위) → T2, 장전 시장가 허용 → T3.
+# 변이 검사(AC): 날 시드에서 날짜 빼기 → T1 날 시드, 한쪽 정하기 빼기(의도마다 무작위) → T2,
+# 매도 누적 상한 빼기 → T2 누적 상한, 장전 시장가 허용 → T3.
 class Securities::Sim::IntentsTest < ActiveSupport::TestCase
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
   SEED = Securities::Sim::Config::SEED
@@ -21,6 +22,10 @@ class Securities::Sim::IntentsTest < ActiveSupport::TestCase
     list.map { |i| [i.at.seconds_since_midnight, i.account_code, i.asset_code, i.side, i.order_type, i.price, i.qty] }
   end
 
+  def pure_shape(list)
+    list.map { |i| [i.at.seconds_since_midnight, i.account_code, i.asset_code, i.side, i.order_type] }
+  end
+
   def pre_open?(intent)
     intent.at < KST.local(2026, 11, intent.at.day, 9, 0, 0)
   end
@@ -35,6 +40,18 @@ class Securities::Sim::IntentsTest < ActiveSupport::TestCase
     assert_equal "sim:#{SEED}:2026-11-02:0", first.first.client_key
     assert_not_equal shape(first), shape(day(seed: SEED + 1))
     assert_not_equal shape(first), shape(day(TUE))
+  end
+
+  # 가격 · 수량은 날마다 다른 적정가로 달라지므로 빼고, 무작위만으로 정해지는 모양만 비교한다.
+  test "T1 날 시드: 시드나 날짜가 다르면 [초, 계좌, 종목, 매수/매도, 지정가/시장가] 가 다르다" do
+    first = day
+
+    assert_not_equal pure_shape(first), pure_shape(day(seed: SEED + 1))
+    assert_not_equal pure_shape(first), pure_shape(day(TUE))
+    # 매도 보유가 소진되면 계좌 · 쪽이 바뀔 수 있으니, 시각 · 종목 순서만으로도 날 시드가 날짜를 담는지 따로 본다.
+    timeline = ->(list) { list.map { |i| [i.at.seconds_since_midnight, i.asset_code] } }
+    assert_not_equal timeline.call(first), timeline.call(day(TUE))
+    assert_not_equal timeline.call(first), timeline.call(day(seed: SEED + 1))
   end
 
   test "T1 주문 몇 개로 DB 를 바꾼 뒤에도 같고, 의도를 만드는 동안 SQL 이 한 번도 나가지 않는다" do
@@ -94,6 +111,21 @@ class Securities::Sim::IntentsTest < ActiveSupport::TestCase
       assert_includes list.map(&:side), "sell", "매도 의도가 하나도 없으면 이 테스트는 한쪽만을 못 본다"
       list.select { |i| i.side == "sell" }.each do |i|
         assert_operator held.fetch([i.account_code, i.asset_code], 0), :>=, i.qty, "매도 수량이 개시 보유를 넘는다"
+      end
+    end
+  end
+
+  test "T2 누적 상한: 하루 (계좌, 종목)별 매도 수량 합이 개시 보유를 넘지 않는다" do
+    plan = Securities::Seed.plan(seed: SEED)
+    held = plan[:positions].to_h { |p| [[p[:account_code], p[:asset_code]], p[:qty]] }
+
+    [MON, TUE].each do |date|
+      sold = day(date).select { |i| i.side == "sell" }.group_by { |i| [i.account_code, i.asset_code] }
+                      .transform_values { |v| v.sum(&:qty) }
+
+      assert_not_empty sold, "매도 의도가 없으면 누적 상한을 못 본다"
+      sold.each do |key, total|
+        assert_operator total, :<=, held.fetch(key, 0), "#{date} #{key.join('/')} 매도 합이 개시 보유를 넘는다"
       end
     end
   end

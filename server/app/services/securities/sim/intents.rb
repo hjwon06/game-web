@@ -5,6 +5,8 @@
 #   1. (계좌, 종목)마다 한쪽을 정한다. 개시 보유가 있는 종목만 매도 후보(50/50)이고 나머지는 매수다.
 #   2. 시각 ORDERS_PER_DAY 개를 뽑아 정렬한다. PRE_OPEN_SHARE 만큼은 08:30~09:00, 나머지는 09:00~15:30(초 단위 균등).
 #   3. 의도마다 종목 → 매수/매도 50/50 → 그쪽 계좌(비면 반대쪽) → 금액 → 노이즈. 장중 MARKET_SHARE 만큼은 시장가다.
+#   매도 수량은 그날 (계좌, 종목)별 합이 개시 보유를 넘지 않게 의도 순번 순으로 남은 보유를 깎는다. 남은 보유가 0 이면
+#   다른 매도 계좌 → 없으면 매수로 바꾼다(plan 의 개시 보유만 쓰므로 DB 를 읽지 않는다).
 # 지정가 = 그 분 적정가 × (1 ± NOISE)를 호가 단위로(매수 내림 · 매도 올림). 가격제한으로 자르지 않는다(엔진이 price_limit 로 거절한다).
 module Securities
   module Sim
@@ -45,6 +47,7 @@ module Securities
           @investors = plan[:accounts].select { |a| a[:kind] == "investor" }.map { |a| a[:code] }
           @holdings = plan[:positions].select { |p| @codes.include?(p[:asset_code]) && p[:qty].positive? }
                                       .to_h { |p| [[p[:account_code], p[:asset_code]], p[:qty]] }
+          @remaining = @holdings.dup # 그날 (계좌, 종목)별 남은 보유. 매도 의도가 나올 때마다 깎는다(의도 시각 순).
           @random = Random.new(Digest::SHA256.hexdigest(["sim:intents", seed, date.iso8601].join("|")).to_i(16))
         end
 
@@ -95,15 +98,41 @@ module Securities
           noise = (@random.rand * 2 * Config::NOISE) - Config::NOISE
           return nil unless account
 
+          side, account = sellable(seq, code, account) if side == "sell"
+          return nil unless account
+
           fair = @fair.at(asset_code: code, date: @date, minute: (sec - MARKET_OPEN_SECOND).div(60))
           price = limit_price(fair * (1 + noise), side)
           ref = market ? [Tick.floor_to_unit(fair.round), 1].max : price
           qty = [value / ref, 1].max
-          qty = [qty, @holdings.fetch([account, code])].min if side == "sell"
+          qty = take_holding(account, code, qty) if side == "sell"
 
           Intent.new(seq: seq, at: Clock.at_minute(@date, 0) + sec, account_code: account, asset_code: code, side: side,
                      order_type: market ? "market" : "limit", price: market ? nil : price, qty: qty,
                      client_key: "sim:#{@seed}:#{@date.iso8601}:#{seq}")
+        end
+
+        # 고른 매도 계좌의 남은 보유가 0 이면 같은 종목의 남은 보유가 있는 다른 매도 계좌로, 없으면 매수 계좌로 바꾼다.
+        # 바꿀 때의 추첨은 주 스트림을 건드리지 않는 순번별 Random 이라, 보유가 소진돼도 뒤 의도의 시각 · 종목은 그대로다.
+        # 매수 계좌가 하나도 없으면 [매수, nil] 이고 그 의도는 건너뛴다(한쪽만 규칙을 깨느니 의도 하나를 버린다).
+        def sellable(seq, code, account)
+          return ["sell", account] if @remaining.fetch([account, code]).positive?
+
+          others = @sides[code]["sell"].select { |a| @remaining.fetch([a, code]).positive? }
+          return ["sell", others[swap_random(seq).rand(others.size)]] unless others.empty?
+
+          buyers = @sides[code]["buy"]
+          ["buy", (buyers[swap_random(seq).rand(buyers.size)] unless buyers.empty?)]
+        end
+
+        def take_holding(account, code, qty)
+          taken = [qty, @remaining.fetch([account, code])].min
+          @remaining[[account, code]] -= taken
+          taken
+        end
+
+        def swap_random(seq)
+          Random.new(Digest::SHA256.hexdigest(["sim:intents:swap", @seed, @date.iso8601, seq].join("|")).to_i(16))
         end
 
         def limit_price(raw, side)

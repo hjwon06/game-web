@@ -3,7 +3,8 @@ require "test_helper"
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
 # 빨리 감기 진행기(Sim::Runner). 시드 데이터 위에서 실제 경로(Schedule → PlaceOrder → Auction · Match)로 돌린다.
-# 변이 검사(AC): 일정을 의도 뒤에 돌리기 → T6, client_key 순번 대신 무작위 → T5.
+# 변이 검사(AC): 일정을 의도 뒤에 돌리기 → T6, client_key 순번 대신 무작위 → T5,
+# asset 을 처음 한 번 읽어 재사용 → T7.
 class Securities::Sim::RunnerTest < ActiveSupport::TestCase
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
   SEED = Securities::Sim::Config::SEED
@@ -82,6 +83,42 @@ class Securities::Sim::RunnerTest < ActiveSupport::TestCase
 
     assert_raises(Securities::PlaceOrder::Conflict) { runner.advance(from: from, to: to) }
     assert_equal 1, fresh { Securities::Order.count }
+  end
+
+  # 월 종가 단일가가 기준가를 바꾸면, 같은 advance 안의 화 지정가는 새 기준가 띠로 검사된다.
+  # 옛 띠 위 · 새 띠 안인 가격이라 주문마다 asset 을 다시 읽지 않으면 price_limit 으로 거절된다.
+  test "T7 다음 날 기준가: 월 종가로 바뀐 기준가가 같은 advance 의 화 주문에 쓰인다" do
+    tue = Date.new(2026, 11, 3)
+    asset = Securities::Asset.find_by!(code: "VELEC")
+    old_base = asset.base_price
+    new_base = Securities::Tick.limits(old_base).last
+    probe = Securities::Tick.floor_to_unit(new_base * 11 / 10)
+    assert_operator probe, :>, Securities::Tick.limits(old_base).last, "옛 띠 밖이어야 한다"
+    assert_operator probe, :<=, Securities::Tick.limits(new_base).last, "새 띠 안이어야 한다"
+
+    seller = Securities::Position.where(asset_id: asset.id).where("qty >= 1").order(:id).first.account
+    buyers = Securities::Account.where(kind: "investor").where.not(id: seller.id).order(:id).limit(2).to_a
+    mk = ->(seq, at, account, side, price, key) do
+      Intent.new(seq: seq, at: at, account_code: account.code, asset_code: asset.code, side: side, order_type: "limit",
+                 price: price, qty: 1, client_key: key)
+    end
+    by_date = {
+      MON => [mk.call(0, t(15, 20, 10), seller, "sell", new_base, "t7-sell"),
+              mk.call(1, t(15, 20, 20), buyers[0], "buy", new_base, "t7-buy")],
+      tue => [mk.call(0, KST.local(2026, 11, 3, 9, 30, 0), buyers[1], "buy", probe, "t7-probe")]
+    }
+    runner = Securities::Sim::Runner.new(seed: SEED, single_price: true, intents: ->(date:, seed:) { by_date[date] || [] })
+
+    result = runner.advance(from: t(8, 30), to: KST.local(2026, 11, 3, 10, 0, 0))
+
+    assert_equal 3, result.placed
+    assert_equal 0, result.by_reject_reason["price_limit"], "새 기준가 대신 옛 기준가로 검사했다"
+    fresh do
+      assert_equal new_base, Securities::Asset.find(asset.id).base_price, "월 종가가 기준가를 바꿨다"
+      order = Securities::Order.find_by!(client_key: "t7-probe")
+      assert_nil order.reject_reason
+      assert_not_equal "rejected", order.status
+    end
   end
 
   # 시가 랜덤엔드 1초 전 · 1초 뒤 의도. 앞은 시가 단일가에, 뒤는 접속매매에 들어간다.
