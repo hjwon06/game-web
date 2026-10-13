@@ -53,6 +53,9 @@ module Securities
         ids = fills.flat_map { |f| [f.buyer_id, f.seller_id] }.uniq.sort
         return fills if (ids - locked).empty?
 
+        # 순액이 0 이라 원장 행이 안 생기는 계좌도 잠근다(ids 는 체결에서 뽑으므로 순액과 무관하다). 원장 행이 없으면
+        # INSERT 의 FK 잠금(KEY SHARE)도 없고, Available.for 는 여러 문장이라 그 사이에 결제가 커밋되면 미결제 들어올
+        # 것은 결제 전, 나갈 것은 결제 뒤로 읽혀 과다 판정 → 초과 매도가 된다. 이 명시 잠금만이 그 계좌를 막는다.
         Account.lock.where(id: ids).order(:id).pluck(:id) # FOR UPDATE ... ORDER BY id
         locked |= ids
       end
@@ -69,7 +72,7 @@ module Securities
 
     # 그날 행이 없으면 pending 으로 만들고(동시 INSERT 는 UNIQUE 에서 대기 후 DO NOTHING) FOR UPDATE 로 읽는다.
     def lock_settlement
-      Settlement.insert_all([{ settle_date: @date, status: "pending" }])
+      Settlement.insert_all([{ settle_date: @date, status: "pending" }], unique_by: :settle_date)
       Settlement.lock.find_by!(settle_date: @date)
     end
 
