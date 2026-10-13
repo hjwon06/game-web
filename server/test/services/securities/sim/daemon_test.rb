@@ -1,6 +1,5 @@
 require "test_helper"
 require "tmpdir"
-require "minitest/mock"
 
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
@@ -30,6 +29,23 @@ class Securities::Sim::DaemonTest < ActiveSupport::TestCase
         raise "boom"
       end
       Result.new(placed: @placed, by_status: Hash.new(0).merge("filled" => @placed), by_reject_reason: Hash.new(0))
+    end
+  end
+
+  # market_time 이 늘 Missing 이다. 부른 횟수를 센다. 10번째부터는 RuntimeError 라서,
+  # 재시도 상한이 빠져도 무한 루프가 아니라 호출 횟수 단언 실패로 끝난다.
+  class AlwaysMissingClock
+    attr_reader :calls
+
+    def initialize
+      @calls = 0
+    end
+
+    def market_time(*, **)
+      @calls += 1
+      raise "상한 없이 계속 불렸다" if @calls >= 10
+
+      raise Securities::Calendar::Missing, "없다"
     end
   end
 
@@ -168,18 +184,14 @@ class Securities::Sim::DaemonTest < ActiveSupport::TestCase
 
   test "T4 재시도 상한: market_time 이 늘 Missing 이면 tick 은 nil · 로그 · 달력 행은 상한까지만" do
     runner = RecordingRunner.new
-    sim = daemon(runner, max_retries: 3)
-    calls = 0
-    always_missing = lambda { |*, **|
-      calls += 1
-      raise Securities::Calendar::Missing, "없다"
-    }
+    clock = AlwaysMissingClock.new
+    sim = daemon(runner, max_retries: 3, clock: clock)
 
-    result = Securities::Clock.stub(:market_time, always_missing) { sim.tick(STARTED + 10) }
+    result = sim.tick(STARTED + 10)
 
     first = Securities::Seed::FIRST_MARKET_DAY
     assert_nil result
-    assert_equal 4, calls, "처음 한 번 + 재시도 3번"
+    assert_equal 4, clock.calls, "처음 한 번 + 재시도 3번"
     assert_includes @log.string, "tick failed"
     assert_includes @log.string, "Securities::Calendar::Missing"
     assert_empty runner.windows

@@ -16,10 +16,11 @@ module Securities
       attr_reader :started_at
 
       def initialize(state_path: Config::STATE_PATH, runner: Runner.new(seed: Config::SEED), logger: Rails.logger,
-                     started_at: nil, max_retries: Config::CALENDAR_MAX_RETRIES)
+                     started_at: nil, max_retries: Config::CALENDAR_MAX_RETRIES, clock: Clock)
         @state_path = Pathname(state_path)
         @runner = runner
         @logger = logger
+        @clock = clock
         @max_retries = max_retries
         @from = nil # cursor
         @started_at = load_or_create_state(started_at)
@@ -71,7 +72,7 @@ module Securities
         retries = 0
         begin
           Calendar.extend!(through: through)
-          Clock.market_time(real_now, started_at: @started_at, first_day: Seed::FIRST_MARKET_DAY)
+          @clock.market_time(real_now, started_at: @started_at, first_day: Seed::FIRST_MARKET_DAY)
         rescue Calendar::Missing
           raise if retries >= @max_retries
 
