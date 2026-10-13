@@ -16,14 +16,17 @@ module RollFailure
 end
 Securities::BasePrice.singleton_class.prepend(RollFailure)
 
-# random_end_at 을 한 시각으로 모으는 prepend. at 이 nil 이면(기본) 그대로 통과한다. 같은 시각 순서 테스트만 켠다.
+# random_end_at 을 그 거래일 08:30(settle 과 같은 시각)으로 모으는 prepend. armed 가 꺼져 있으면(기본) 그대로 통과한다.
+# 같은 시각 순서 테스트만 켠다. 시각은 받은 trade_date 기준이라 날짜가 바뀌면 같이 바뀐다.
 module PinnedRandomEnd
   class << self
-    attr_accessor :at
+    attr_accessor :armed
   end
 
   def random_end_at(**opts)
-    PinnedRandomEnd.at || super
+    return super unless PinnedRandomEnd.armed
+
+    Securities::Clock.at_minute(opts.fetch(:trade_date), Securities::Phase::SCHEDULE.first[1])
   end
 end
 Securities::Auction.singleton_class.prepend(PinnedRandomEnd)
@@ -55,7 +58,7 @@ class Securities::ScheduleTest < ActiveSupport::TestCase
 
   teardown do
     RollFailure.on_date = nil
-    PinnedRandomEnd.at = nil
+    PinnedRandomEnd.armed = false
   end
 
   def t(day, hour, min, sec = 0)
@@ -129,7 +132,7 @@ class Securities::ScheduleTest < ActiveSupport::TestCase
   test "T1 같은 시각이면 settle → open → close, 그 안은 종목 id 순" do
     4.times { |i| Securities::Asset.create!(code: "VT-X#{i}", name: "가상종목#{i}", kind: "equity", base_price: 50_000) }
     ids = Securities::Asset.where(kind: "equity").order(:id).ids
-    PinnedRandomEnd.at = t(2, 8, 30)
+    PinnedRandomEnd.armed = true
 
     day = events(t(2, 0, 0), t(3, 0, 0))
 
@@ -137,6 +140,23 @@ class Securities::ScheduleTest < ActiveSupport::TestCase
     assert_equal [t(2, 8, 30)], day.map(&:at).uniq, "모든 일정이 같은 시각이다"
     assert_equal ids, day[1, 5].map { |e| e.asset.id }
     assert_equal ids, day[6, 5].map { |e| e.asset.id }
+  end
+
+  test "T1 같은 시각은 거래일마다 따로: 이틀 창은 날마다 settle → open × 5 → close × 5 가 날짜 순" do
+    4.times { |i| Securities::Asset.create!(code: "VT-X#{i}", name: "가상종목#{i}", kind: "equity", base_price: 50_000) }
+    ids = Securities::Asset.where(kind: "equity").order(:id).ids
+    PinnedRandomEnd.armed = true
+
+    two = events(t(2, 0, 0), t(4, 0, 0))
+
+    assert_equal 22, two.size
+    assert_equal ([:settle] + [:open] * 5 + [:close] * 5) * 2, two.map(&:kind)
+    assert_equal [MON] * 11 + [TUE] * 11, two.map(&:trade_date)
+    assert_equal [t(2, 8, 30)] * 11 + [t(3, 8, 30)] * 11, two.map(&:at)
+    [two[0, 11], two[11, 11]].each do |day|
+      assert_equal ids, day[1, 5].map { |e| e.asset.id }
+      assert_equal ids, day[6, 5].map { |e| e.asset.id }
+    end
   end
 
   test "T1 반열림: to 가 월 08:30 이면 월 settle 이 빠지고 from 이 월 08:30 인 다음 창에 들어간다" do
