@@ -62,4 +62,11 @@ class Securities::ClockTest < ActiveSupport::TestCase
   test "달력이 모자라면 Calendar::Missing 이다" do
     assert_raises(Securities::Calendar::Missing) { at(200) } # 셋째 영업일 이후는 달력에 없다
   end
+
+  test "T1 달력의 마지막 영업일은 장중이면 시각이 나오고 그날 밤은 Calendar::Missing 이다" do
+    last_open = 80 # 하루 40분(장 35 + 밤 5). 셋째 영업일(FRI + 4)이 달력의 마지막이다
+    assert_equal kst(FRI + 4, 8, 30), at(last_open)
+    assert_equal kst(FRI + 4, 15, 29, 48), at(last_open + 34, 59)
+    assert_raises(Securities::Calendar::Missing) { at(last_open + 36) } # 다음 영업일이 없으므로 밤은 계산할 수 없다
+  end
 end

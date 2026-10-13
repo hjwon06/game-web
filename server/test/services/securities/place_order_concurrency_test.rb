@@ -1,4 +1,5 @@
 require "test_helper"
+require_relative "../../support/securities_race"
 
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
@@ -9,9 +10,10 @@ Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 
 # 정리는 이 테스트가 만든 행만 FK 순서로 DELETE 한다. TRUNCATE CASCADE 는 원장 TRUNCATE 트리거에 걸리므로 쓰지 않고,
 # 원장 행은 만들지 않는다(positions 를 직접 넣는다).
 class Securities::PlaceOrderConcurrencyTest < ActiveSupport::TestCase
+  include SecuritiesRace
+
   self.use_transactional_tests = false
 
-  WAIT_SECONDS = 5
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
   MONDAY = Date.new(2026, 11, 2)
 
@@ -46,77 +48,26 @@ class Securities::PlaceOrderConcurrencyTest < ActiveSupport::TestCase
                                 price: price, client_key: key, at: @at)
   end
 
-  def backend_pid
-    Securities::Record.connection_pool.with_connection { |c| c.select_value("SELECT pg_backend_pid()") }
-  end
+  ADVISORY_KEY = /pg_advisory_xact_lock\(\s*hashtext/i
+  ACCOUNT_ROW = /FOR UPDATE/i
+  ROW_WAIT = %w[transactionid tuple].freeze
 
-  # 해당 백엔드가 잠금 대기 중이면 그 시점에 실행 중인 SQL 을 돌려준다. 끝내 대기하지 않으면 nil.
-  def blocked_query(pid)
-    sql = Securities::Record.sanitize_sql(
-      ["SELECT query FROM pg_stat_activity WHERE pid = ? AND wait_event_type = 'Lock'", pid]
-    )
-    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + WAIT_SECONDS
-    while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
-      # 쿼리 캐시가 켜져 있으면 B 대기 전 결과를 계속 돌려주므로 캐시를 우회한다.
-      query = Securities::Record.uncached { Securities::Record.lease_connection.select_value(sql) }
-      return query if query
-
-      sleep 0.02
+  # A · B 를 겹쳐 실행한다. B 의 Conflict 는 값으로 받아 단언에서 본다.
+  def place_race(a:, b:, expect:)
+    b_call = lambda do
+      place(**b)
+    rescue Securities::PlaceOrder::Conflict => e
+      e
     end
-    nil
-  end
-
-  # A(바깥 트랜잭션, 커밋 전 대기)와 B 를 겹쳐 실행한다. [B 가 대기한 SQL, B 가 그 사이 살아 있었는지, A 결과, B 결과].
-  # 예외는 값으로 받아 단언에서 본다.
-  def race(a:, b:)
-    a_placed = Queue.new
-    release_a = Queue.new
-    pid_b = Queue.new
-
-    thread_a = Thread.new do
-      Securities::Record.connection_pool.with_connection do
-        Securities::Record.transaction do
-          result = place(**a)
-          a_placed << true
-          release_a.pop(timeout: 15)
-          result
-        end
-      end
-    end
-    thread_b = Thread.new do
-      a_placed.pop(timeout: WAIT_SECONDS) || raise("A 가 접수하지 못했다")
-      Securities::Record.connection_pool.with_connection do
-        pid_b << backend_pid
-        place(**b)
-      rescue Securities::PlaceOrder::Conflict => e
-        e
-      end
-    end
-    threads = [thread_a, thread_b]
-    threads.each { |t| t.report_on_exception = false }
-
-    begin
-      b_pid = pid_b.pop(timeout: WAIT_SECONDS) || flunk("B 가 시작하지 않았다")
-      waiting = blocked_query(b_pid)
-      b_alive = thread_b.alive?
-    ensure
-      release_a << true
-      threads.each do |t|
-        t.join(15)
-      rescue StandardError
-        nil # 본 단언 실패를 가리지 않는다
-      end
-    end
-
-    results = threads.map { |t| t.join(15) ? t.value : flunk("스레드가 15초 안에 끝나지 않았다") }
-    [waiting, b_alive, *results]
+    race(a: -> { place(**a) }, b: b_call, expect: expect)
   end
 
   test "T3 같은 키 · 같은 내용: B 는 advisory lock 에서 대기하고 A 커밋 뒤 같은 주문을 받는다" do
-    waiting, b_alive, a_order, b_order = race(a: { key: "same-#{@suffix}", qty: 2 }, b: { key: "same-#{@suffix}", qty: 2 })
+    waiting, b_alive, a_order, b_order = place_race(
+      a: { key: "same-#{@suffix}", qty: 2 }, b: { key: "same-#{@suffix}", qty: 2 }, expect: ADVISORY_KEY
+    )
 
-    assert_not_nil waiting, "B 가 같은 키 잠금에서 대기하지 않았다 — 직렬화 없음"
-    assert_match(/pg_advisory_xact_lock/i, waiting, "B 는 advisory lock 에서 대기해야 한다")
+    assert_blocked waiting, events: %w[advisory], message: "B 는 같은 키 advisory lock 에서 대기해야 한다 — 직렬화 없음"
     assert b_alive, "B 는 A 커밋 전에 끝나면 안 된다"
     assert_equal a_order.id, b_order.id
     assert_equal 1, Securities::Order.where(account_id: @account.id).count
@@ -124,9 +75,11 @@ class Securities::PlaceOrderConcurrencyTest < ActiveSupport::TestCase
   end
 
   test "T3 같은 키 · 다른 내용: B 는 대기했다가 Conflict 를 받고 주문 · 홀드는 1 이다" do
-    waiting, b_alive, _a_order, b_result = race(a: { key: "diff-#{@suffix}", qty: 2 }, b: { key: "diff-#{@suffix}", qty: 3 })
+    waiting, b_alive, _a_order, b_result = place_race(
+      a: { key: "diff-#{@suffix}", qty: 2 }, b: { key: "diff-#{@suffix}", qty: 3 }, expect: ADVISORY_KEY
+    )
 
-    assert_match(/pg_advisory_xact_lock/i, waiting.to_s, "B 는 advisory lock 에서 대기해야 한다")
+    assert_blocked waiting, events: %w[advisory], message: "B 는 같은 키 advisory lock 에서 대기해야 한다"
     assert b_alive
     assert_kind_of Securities::PlaceOrder::Conflict, b_result
     assert_equal 1, Securities::Order.where(account_id: @account.id).count
@@ -134,11 +87,12 @@ class Securities::PlaceOrderConcurrencyTest < ActiveSupport::TestCase
   end
 
   test "T4 현금 1,000,000 에 600,000 매수 2건: B 는 계좌 행에서 대기하고 A 커밋 뒤 insufficient 로 거절된다" do
-    waiting, b_alive, a_order, b_order = race(a: { key: "a-#{@suffix}", qty: 12 }, b: { key: "b-#{@suffix}", qty: 12 })
+    waiting, b_alive, a_order, b_order = place_race(
+      a: { key: "a-#{@suffix}", qty: 12 }, b: { key: "b-#{@suffix}", qty: 12 }, expect: ACCOUNT_ROW
+    )
 
-    assert_not_nil waiting, "B 가 계좌 행에서 대기하지 않았다 — 직렬화 없음"
-    assert_match(/FOR UPDATE/i, waiting, "B 는 계좌 행 FOR UPDATE 에서 대기해야 한다")
-    refute_match(/advisory/i, waiting, "키가 달라 advisory 에서는 대기하지 않는다")
+    assert_blocked waiting, events: ROW_WAIT, message: "B 는 계좌 행 FOR UPDATE 에서 대기해야 한다 — 직렬화 없음"
+    refute_match(/advisory/i, waiting.query, "키가 달라 advisory 에서는 대기하지 않는다")
     assert b_alive, "B 는 A 커밋 전에 끝나면 안 된다"
     assert_equal "accepted", a_order.status
     assert_equal ["rejected", "insufficient"], [b_order.status, b_order.reject_reason]

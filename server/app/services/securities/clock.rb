@@ -27,10 +27,13 @@ module Securities
       night_real = night_minutes * 60
 
       index, within = elapsed.divmod(market_real + night_real)
+      # 장 시간이면 그날 하나만 읽는다. 달력의 마지막 영업일 장중에 다음 날이 없다고 Missing 이 나면 안 된다.
+      if within < market_real
+        today = Calendar.days_from(first_day, offset: index, count: 1).first
+        return at_minute(today, open_minute) + within * speed
+      end
+
       today, next_day = Calendar.days_from(first_day, offset: index, count: 2)
-
-      return at_minute(today, open_minute) + within * speed if within < market_real
-
       closes = at_minute(today, close_minute)
       night_span = at_minute(next_day, open_minute).to_r - closes.to_r
       closes + night_span * (within - market_real) / night_real

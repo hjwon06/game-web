@@ -1,4 +1,5 @@
 require "test_helper"
+require_relative "../../support/securities_race"
 
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
@@ -10,9 +11,10 @@ Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 
 #     "책 잠금에서 대기" 단언과 filled 단언이 실패한다.
 # 정리는 이 테스트가 만든 행만 FK 순서로 DELETE 한다(체결 행 먼저). 원장 행은 만들지 않는다.
 class Securities::CancelOrderConcurrencyTest < ActiveSupport::TestCase
+  include SecuritiesRace
+
   self.use_transactional_tests = false
 
-  WAIT_SECONDS = 5
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
   DAYS = [Date.new(2026, 11, 2), Date.new(2026, 11, 3), Date.new(2026, 11, 4)].freeze # 체결일 + 결제일 계산에 3일이 필요하다
 
@@ -47,67 +49,8 @@ class Securities::CancelOrderConcurrencyTest < ActiveSupport::TestCase
     Securities::Asset.find_by(code: code) || Securities::Asset.create!(code: code, **attrs).tap { |a| @created_assets << a.id }
   end
 
-  def backend_pid
-    Securities::Record.connection_pool.with_connection { |c| c.select_value("SELECT pg_backend_pid()") }
-  end
-
-  # 해당 백엔드가 잠금 대기 중이면 그 시점에 실행 중인 SQL 을 돌려준다. 끝내 대기하지 않으면 nil.
-  def blocked_query(pid)
-    sql = Securities::Record.sanitize_sql(
-      ["SELECT query FROM pg_stat_activity WHERE pid = ? AND wait_event_type = 'Lock'", pid]
-    )
-    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + WAIT_SECONDS
-    while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
-      query = Securities::Record.uncached { Securities::Record.lease_connection.select_value(sql) }
-      return query if query
-
-      sleep 0.02
-    end
-    nil
-  end
-
-  # a(바깥 트랜잭션, 끝난 뒤 커밋 전 대기)와 b 를 겹쳐 실행한다. [b 가 대기한 SQL, b 가 그 사이 살아 있었는지, a 결과, b 결과].
-  def race(a:, b:)
-    a_done = Queue.new
-    release_a = Queue.new
-    pid_b = Queue.new
-
-    thread_a = Thread.new do
-      Securities::Record.connection_pool.with_connection do
-        Securities::Record.transaction do
-          result = a.call
-          a_done << true
-          release_a.pop(timeout: 15)
-          result
-        end
-      end
-    end
-    thread_b = Thread.new do
-      a_done.pop(timeout: WAIT_SECONDS) || raise("A 가 체결하지 못했다")
-      Securities::Record.connection_pool.with_connection do
-        pid_b << backend_pid
-        b.call
-      end
-    end
-    threads = [thread_a, thread_b]
-    threads.each { |t| t.report_on_exception = false }
-
-    begin
-      b_pid = pid_b.pop(timeout: WAIT_SECONDS) || flunk("B 가 시작하지 않았다")
-      waiting = blocked_query(b_pid)
-      b_alive = thread_b.alive?
-    ensure
-      release_a << true
-      threads.each do |t|
-        t.join(15)
-      rescue StandardError
-        nil # 본 단언 실패를 가리지 않는다
-      end
-    end
-
-    results = threads.map { |t| t.join(15) ? t.value : flunk("스레드가 15초 안에 끝나지 않았다") }
-    [waiting, b_alive, *results]
-  end
+  # CancelOrder 가 잡는 책 잠금: pg_advisory_xact_lock(Match::BOOK_NS, asset_id). 값은 SQL 에 인라인된다.
+  BOOK_LOCK = /pg_advisory_xact_lock\(\s*#{Securities::Match::BOOK_NS}\b/i
 
   test "T3 A 가 메이커를 전량 체결하고 커밋 전 대기하면 B 의 취소는 책 잠금에서 대기하고 결과는 filled 다" do
     maker_order = Securities::PlaceOrder.call(account: @maker, asset: @equity, side: "sell", order_type: "limit",
@@ -119,11 +62,11 @@ class Securities::CancelOrderConcurrencyTest < ActiveSupport::TestCase
         Securities::PlaceOrder.call(account: @taker, asset: @equity, side: "buy", order_type: "limit", qty: 2,
                                     price: 50_000, client_key: "t-#{@suffix}", at: @at)
       },
-      b: -> { Securities::CancelOrder.call(order: maker_order, at: @later) }
+      b: -> { Securities::CancelOrder.call(order: maker_order, at: @later) },
+      expect: BOOK_LOCK
     )
 
-    assert_not_nil waiting, "B 가 대기하지 않았다 — 체결과 취소가 직렬화되지 않는다"
-    assert_match(/pg_advisory_xact_lock/i, waiting, "B 는 책 잠금에서 대기해야 한다")
+    assert_blocked waiting, events: %w[advisory], message: "B 는 책 잠금에서 대기해야 한다 — 체결과 취소가 직렬화되지 않는다"
     assert b_alive, "B 는 A 커밋 전에 끝나면 안 된다"
     assert_equal "filled", a_order.status
     assert_equal "filled", b_order.status, "체결과 겹친 취소는 체결 뒤 상태(filled)를 봐야 한다"
