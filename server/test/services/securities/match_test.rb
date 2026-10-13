@@ -15,6 +15,12 @@ class Securities::MatchTest < ActiveSupport::TestCase
     @open = KST.local(2026, 11, 2, 10, 0, 0)
     @pre_open = KST.local(2026, 11, 2, 8, 40, 0)
     @n = 0
+    open_day(@equity) # 시작 문(D7): 그날 시가 행이 있어야 continuous 접수가 Match 를 부른다
+  end
+
+  def open_day(asset)
+    Securities::Auction.create!(asset: asset, trade_date: Date.new(2026, 11, 2), session: "open", mode: "sequential",
+                                qty: 0, ran_at: @pre_open)
   end
 
   def investor(cash: 0, equity: 0)
@@ -163,6 +169,7 @@ class Securities::MatchTest < ActiveSupport::TestCase
 
   test "다른 종목의 주문은 만나지 않는다" do
     other = Securities::Asset.create!(code: "VT-EQ2", name: "다른종목", kind: "equity", base_price: 50_000)
+    open_day(other)
     account = investor(equity: 10)
     Securities::Position.create!(account: account, asset: other, qty: 10)
     Securities::PlaceOrder.call(account: account, asset: other, side: "sell", order_type: "limit", qty: 1,

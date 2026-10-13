@@ -4,8 +4,8 @@
 #     수량 우선은 seq 가 유일해 여기서는 쓰이지 않는다(④ 몫).
 #   - 들어온 주문이 지정가면 가격이 맞는 것까지만. 시장가는 가격 조건이 없다.
 #   - 체결가 = 먼저 있던 주문 가격, 수량 = 양쪽 잔량 중 작은 값.
-#   - 홀드: 매도는 체결 수량만큼, 매수는 "홀드 단가 × 체결 수량"만큼 줄어든다. 홀드 단가는 체결 전
-#     hold.qty ÷ 남은 수량이라 싸게 체결된 차액이 체결 즉시 풀린다. 0 이 되면 released_at 을 찍는다.
+#   - 체결 기록(Execution · filled_qty · status · 홀드 차감)은 Securities::Fill 이 한다. 단일가(AuctionRun)와 같이 쓴다.
+#     홀드: 매도는 체결 수량만큼, 매수는 "홀드 단가 × 체결 수량"만큼 줄어든다(자세한 규칙은 fill.rb).
 #   - 메이커 계좌는 잠그지 않는다: 메이커는 자기 가격에 체결되어 가능 수량이 변하지 않는다.
 #   - 들어온 시장가 주문의 잔량은 매칭 직후 cancelled + 홀드 해제다.
 # 잠금 순서(모든 경로 공통): 주문 키 advisory → 계좌 FOR UPDATE → 책 잠금 → 주문 행.
@@ -73,31 +73,14 @@ module Securities
     def execute(taker, taker_hold, maker, maker_hold)
       qty = [taker.qty - taker.filled_qty, maker.qty - maker.filled_qty].min
       buy, sell = taker.side == "buy" ? [taker, maker] : [maker, taker]
-      Execution.create!(asset_id: taker.asset_id, buy_order: buy, sell_order: sell, price: price_for(taker, maker),
-                        qty: qty, executed_at: @at, trade_date: trade_date, settle_date: settle_date)
-      apply_fill(taker, taker_hold, qty)
-      apply_fill(maker, maker_hold, qty)
+      buy_hold, sell_hold = taker.side == "buy" ? [taker_hold, maker_hold] : [maker_hold, taker_hold]
+      Fill.call(buy: buy, sell: sell, buy_hold: buy_hold, sell_hold: sell_hold, price: price_for(taker, maker),
+                qty: qty, at: @at, trade_date: trade_date, settle_date: settle_date)
     end
 
     # 먼저 있던(seq 가 작은) 주문의 가격. 시장가는 가격이 없으므로 항상 지정가 쪽이다.
     def price_for(taker, maker)
       taker.price && taker.seq < maker.seq ? taker.price : maker.price
-    end
-
-    def apply_fill(order, hold, qty)
-      spent = order.side == "sell" ? qty : hold_unit(hold, order.qty - order.filled_qty) * qty
-      filled = order.filled_qty + qty
-      order.update!(filled_qty: filled, status: filled == order.qty ? "filled" : "partially_filled")
-
-      left = hold.qty - spent
-      hold.update!(left.zero? ? { qty: left, released_at: @at } : { qty: left })
-    end
-
-    def hold_unit(hold, remaining)
-      unit, rest = hold.qty.divmod(remaining)
-      raise "홀드 #{hold.id} 의 qty #{hold.qty} 가 남은 수량 #{remaining} 으로 나누어떨어지지 않는다" unless rest.zero?
-
-      unit
     end
 
     def close_market_remainder(taker)

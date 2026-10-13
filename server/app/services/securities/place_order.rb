@@ -5,6 +5,7 @@
 #   - orders · holds INSERT 의 FK 검사는 계좌 행에 KEY SHARE 를 잡는다. FOR UPDATE 를 먼저 잡아 두면
 #     뒤 요청이 INSERT 이전에 줄을 서서 교착이 나지 않는다.
 #   - 접수 뒤 체결(Match)은 그 다음 잠금(책 잠금 → 주문 행)을 같은 트랜잭션에서 이어 잡는다. 순서 전체는 match.rb 머리말.
+#   - 시작 문: 그날 시가 행(Auction)이 없으면 continuous 여도 Match 를 부르지 않는다(opened? 참고).
 # 거절 순서: closed(장 단계) → tick(호가 단위) → price_limit(가격제한) → insufficient(가능 수량). 거절은 홀드가 없다.
 # 홀드: 매수 지정가 = 가격 × 수량(현금) · 매수 시장가 = 상한가 × 수량(현금) · 매도 = 종목 수량.
 module Securities
@@ -73,8 +74,17 @@ module Securities
 
       order = create_order("accepted")
       Hold.create!(order: order, account: @account, asset: hold_asset, qty: hold_qty)
-      # 접속매매(continuous)만 접수 즉시 체결한다. pre_open · closing 접수분은 체결 없이 남긴다(단일가는 ④ 몫).
-      phase == :continuous ? Match.call(order: order, at: @at) : order
+      # 접속매매(continuous)만 접수 즉시 체결한다. pre_open · closing 접수분은 체결 없이 남긴다(종가 단일가는 ④b 몫).
+      phase == :continuous && opened? ? Match.call(order: order, at: @at) : order
+    end
+
+    # 시작 문: 그 종목 그날 시가 단일가(Auction.open!)가 돌기 전에는 continuous 여도 체결하지 않는다.
+    # 랜덤엔드 동안 들어온 주문은 accepted 로 남았다가 단일가에 들어간다.
+    # 책 잠금을 쥔 채 읽는다. open! 이 책 잠금 안에서 행을 쓰므로 "행 없음"을 본 주문은 open! 이 커밋하기 전에
+    # 이미 커밋되어 단일가가 보고, "행 있음"을 본 주문은 Match 로 간다. 잠금 순서는 키 → 계좌 → 책 그대로다.
+    def opened?
+      Match.lock_book(@asset.id)
+      Auction.opened?(asset_id: @asset.id, trade_date: @at.in_time_zone(Phase::ZONE).to_date)
     end
 
     def phase

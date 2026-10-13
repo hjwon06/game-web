@@ -4,3 +4,6 @@
 # night_minutes: 그날 장 마감(15:30)부터 다음 영업일 장 시작(08:30)까지를 현실 몇 분에 흘리는지.
 speed: 12
 night_minutes: 5
+# 단일가 매매(시가). 시뮬레이터 규칙이다. Securities::AuctionRun 이 읽는다.
+# single_price: 시가를 단일가(동시호가)로 정할지. false 면 끄기 스위치로 장전 접수분을 접수 순서대로 접속매매 체결한다.
+single_price: true

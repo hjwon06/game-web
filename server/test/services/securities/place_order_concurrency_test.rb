@@ -27,9 +27,12 @@ class Securities::PlaceOrderConcurrencyTest < ActiveSupport::TestCase
     @market_day_created = !Securities::MarketDay.exists?(trade_date: MONDAY)
     Securities::MarketDay.create!(trade_date: MONDAY, business_day: true) if @market_day_created
     @at = KST.local(2026, 11, 2, 10, 0, 0)
+    # 시작 문(D7): 시가 행이 있어야 접수가 Match 까지 간다. 실제 접속매매 경로에서 잠금을 본다.
+    Securities::Auction.create!(asset: @equity, trade_date: MONDAY, session: "open", mode: "sequential", qty: 0, ran_at: @at)
   end
 
   teardown do
+    Securities::Auction.where(asset_id: @equity.id).delete_all
     order_ids = Securities::Order.where(account_id: @account.id).pluck(:id)
     Securities::Hold.where(order_id: order_ids).delete_all
     Securities::Order.where(id: order_ids).delete_all
@@ -49,7 +52,8 @@ class Securities::PlaceOrderConcurrencyTest < ActiveSupport::TestCase
   end
 
   ADVISORY_KEY = /pg_advisory_xact_lock\(\s*hashtext/i
-  ACCOUNT_ROW = /FOR UPDATE/i
+  # accounts 테이블의 FOR UPDATE 만 센다. 주문 행 FOR UPDATE(Match)에서 대기해도 통과하던 느슨한 판정을 좁힌 것이다.
+  ACCOUNT_ROW = /FROM "accounts"[^;]*FOR UPDATE/i
   ROW_WAIT = %w[transactionid tuple].freeze
 
   # A · B 를 겹쳐 실행한다. B 의 Conflict 는 값으로 받아 단언에서 본다.

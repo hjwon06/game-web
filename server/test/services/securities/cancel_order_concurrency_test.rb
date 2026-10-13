@@ -16,6 +16,7 @@ class Securities::CancelOrderConcurrencyTest < ActiveSupport::TestCase
   self.use_transactional_tests = false
 
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
+  MONDAY = Date.new(2026, 11, 2)
   DAYS = [Date.new(2026, 11, 2), Date.new(2026, 11, 3), Date.new(2026, 11, 4)].freeze # 체결일 + 결제일 계산에 3일이 필요하다
 
   setup do
@@ -31,11 +32,14 @@ class Securities::CancelOrderConcurrencyTest < ActiveSupport::TestCase
     @created_days.each { |d| Securities::MarketDay.create!(trade_date: d, business_day: true) }
     @at = KST.local(2026, 11, 2, 10, 0, 0)
     @later = KST.local(2026, 11, 2, 10, 30, 0)
+    # 시작 문(D7): 그날 시가 행이 있어야 접수가 Match 를 부른다.
+    Securities::Auction.create!(asset: @equity, trade_date: MONDAY, session: "open", mode: "sequential", qty: 0, ran_at: @at)
   end
 
   teardown do
     account_ids = [@maker.id, @taker.id]
     order_ids = Securities::Order.where(account_id: account_ids).pluck(:id)
+    Securities::Auction.where(asset_id: @equity.id).delete_all
     Securities::Execution.where(asset_id: @equity.id).delete_all
     Securities::Hold.where(order_id: order_ids).delete_all
     Securities::Order.where(id: order_ids).delete_all

@@ -16,6 +16,9 @@ class Securities::CancelOrderTest < ActiveSupport::TestCase
     # 사전(pre_open) 접수는 체결이 없다. 10:00 이면 같은 계좌의 매수 · 매도 50,000 이 서로 체결돼 이 테스트의 전제가 깨진다.
     @open = KST.local(2026, 11, 2, 8, 40, 0)
     @later = KST.local(2026, 11, 2, 11, 0, 0)
+    # 시작 문(D7): 그날 시가 행이 있어야 10:00 접수가 Match 를 부른다. 실제 체결 테스트의 전제다.
+    Securities::Auction.create!(asset: @equity, trade_date: Date.new(2026, 11, 2), session: "open", mode: "sequential",
+                                qty: 0, ran_at: @open)
   end
 
   def place(side: "buy", qty: 4, price: 50_000, key: SecureRandom.uuid)
