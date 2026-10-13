@@ -69,4 +69,9 @@ class Securities::ClockTest < ActiveSupport::TestCase
     assert_equal kst(FRI + 4, 15, 29, 48), at(last_open + 34, 59)
     assert_raises(Securities::Calendar::Missing) { at(last_open + 36) } # 다음 영업일이 없으므로 밤은 계산할 수 없다
   end
+
+  test "T4 달력의 마지막 영업일 정확히 15:30 은 Missing 이 아니라 15:30 이다" do
+    last_open = 80
+    assert_equal kst(FRI + 4, 15, 30), at(last_open + 35) # 장 길이와 정확히 같다 = 장 경로. 다음 날을 읽지 않는다
+  end
 end

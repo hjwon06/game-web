@@ -13,6 +13,14 @@ module Securities
       @defaults ||= YAML.safe_load_file(CONFIG_PATH).slice("speed", "night_minutes").freeze
     end
 
+    # 랜덤엔드 최대 초. 시가는 09:00, 종가는 15:30 에 0..이 값 초가 더해진다(Auction.random_end_at).
+    def random_end_seconds
+      value = YAML.safe_load_file(CONFIG_PATH).fetch("random_end_seconds")
+      raise "random_end_seconds 는 0 이상의 정수여야 한다: #{value.inspect}" unless value.is_a?(Integer) && value >= 0
+
+      value
+    end
+
     def market_time(real_at, started_at:, first_day:, speed: nil, night_minutes: nil)
       speed ||= defaults.fetch("speed")
       night_minutes ||= defaults.fetch("night_minutes")
@@ -27,8 +35,8 @@ module Securities
       night_real = night_minutes * 60
 
       index, within = elapsed.divmod(market_real + night_real)
-      # 장 시간이면 그날 하나만 읽는다. 달력의 마지막 영업일 장중에 다음 날이 없다고 Missing 이 나면 안 된다.
-      if within < market_real
+      # 장 시간이면 그날 하나만 읽는다. 달력의 마지막 영업일 장중 · 정확히 마감(15:30)에 다음 날이 없다고 Missing 이 나면 안 된다.
+      if within <= market_real
         today = Calendar.days_from(first_day, offset: index, count: 1).first
         return at_minute(today, open_minute) + within * speed
       end

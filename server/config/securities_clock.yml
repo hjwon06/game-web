@@ -7,3 +7,5 @@ night_minutes: 5
 # 단일가 매매(시가). 시뮬레이터 규칙이다. Securities::AuctionRun 이 읽는다.
 # single_price: 시가를 단일가(동시호가)로 정할지. false 면 끄기 스위치로 장전 접수분을 접수 순서대로 접속매매 체결한다.
 single_price: true
+# 랜덤엔드. 시뮬레이터 규칙이다. 시가는 09:00, 종가는 15:30 에 0~이 값(초)을 더한 시각에 단일가를 확정한다(Auction.random_end_at).
+random_end_seconds: 30

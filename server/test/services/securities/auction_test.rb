@@ -187,6 +187,7 @@ class Securities::AuctionTest < ActiveSupport::TestCase
     assert_equal ["sequential", 0], [auction.mode, auction.qty]
     assert_equal 0, Securities::Execution.count
     assert_equal ["cancelled", 0, @nine], [market.reload.status, market.filled_qty, market.hold.released_at]
+    assert_equal 65_000, market.hold.qty # 시장가 매수 홀드 = 상한가 65,000 × 1. 체결이 없어 줄지 않은 채 풀린다
     assert_equal "accepted", sell.reload.status
 
     other = Securities::Asset.create!(code: "VT-EQ2", name: "다른종목", kind: "equity", base_price: 50_000)
