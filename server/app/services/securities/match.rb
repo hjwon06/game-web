@@ -16,8 +16,10 @@ module Securities
     BOOK_NS = 7_301_003 # int4 범위. 책 잠금 전용 네임스페이스.
     BATCH = 50
 
-    def self.call(order:, at:)
-      new(order: order, at: at).call
+    # before_seq: 주어지면 반대편 후보를 seq 가 그보다 작은 주문으로 거른다(끄기 스위치의 "들어온 순서대로").
+    # 기본값 nil 은 거르지 않는다 — 접속매매(PlaceOrder)는 넘기지 않는다.
+    def self.call(order:, at:, before_seq: nil)
+      new(order: order, at: at, before_seq: before_seq).call
     end
 
     # 종목 1개의 호가 책 잠금. 트랜잭션이 끝나면 풀린다. CancelOrder 도 같은 잠금을 쓴다(순서 정의는 이 파일 머리말).
@@ -26,9 +28,10 @@ module Securities
       Record.lease_connection.execute(sql)
     end
 
-    def initialize(order:, at:)
+    def initialize(order:, at:, before_seq: nil)
       @order = order
       @at = at
+      @before_seq = before_seq
     end
 
     # 체결 반영 뒤 다시 읽은 주문을 돌려준다.
@@ -67,6 +70,7 @@ module Securities
       scope = Order.where(asset_id: taker.asset_id, side: buy ? "sell" : "buy", order_type: "limit",
                           status: Order::CANCELLABLE).where("qty > filled_qty")
       scope = scope.where(buy ? "price <= ?" : "price >= ?", taker.price) if taker.order_type == "limit"
+      scope = scope.where("seq < ?", @before_seq) if @before_seq
       scope.order(price: buy ? :asc : :desc, seq: :asc).lock
     end
 

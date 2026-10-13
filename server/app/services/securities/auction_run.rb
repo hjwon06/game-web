@@ -4,7 +4,7 @@
 #     매수(시장가 → 높은 값 → seq) · 매도(시장가 → 낮은 값 → seq) 순으로 체결량만큼 Fill 한다.
 #     같은 가격 안은 seq 순이다(수량 우선은 원문을 확인하지 못했다).
 #   - 시장가 잔량은 cancelled 가 되고 홀드가 풀린다.
-#   - 꺼져 있으면 장전 접수분을 seq 순으로 Match.call 한다. 행의 mode 는 sequential, price 는 NULL, qty 는 그때 난 체결량이다.
+#   - 꺼져 있으면 장전 접수분을 seq 순으로 Match.call(before_seq: 그 주문의 seq) 한다 — 먼저 들어온 상대하고만 만난다. 행의 mode 는 sequential, price 는 NULL, qty 는 그때 난 체결량이다.
 #   - 참가자 계좌는 잠그지 않는다. 매수는 자기 값 이하, 매도는 이상으로 체결돼 가능 수량이 줄지 않는다.
 # 잠금 순서는 키 → 계좌 → 책 → 주문 행 그대로고 여기서는 책 잠금부터 시작한다(계좌를 잡지 않는다).
 module Securities
@@ -55,8 +55,9 @@ module Securities
 
     def run_sequential
       before = Execution.where(asset_id: @asset.id).maximum(:id).to_i
-      ids = Order.where(asset_id: @asset.id, status: Order::CANCELLABLE).where("qty > filled_qty").order(:seq).pluck(:id)
-      ids.each { |id| Match.call(order: Order.find(id), at: @at) }
+      rows = Order.where(asset_id: @asset.id, status: Order::CANCELLABLE).where("qty > filled_qty").order(:seq).pluck(:id, :seq)
+      # 각 주문은 자기보다 먼저 들어온(seq 가 작은) 상대하고만 만난다 — 뒤에 올 주문의 더 좋은 값을 먼저 가져가지 않는다.
+      rows.each { |id, seq| Match.call(order: Order.find(id), at: @at, before_seq: seq) }
       traded = Execution.where(asset_id: @asset.id).where("id > ?", before).sum(:qty)
       Auction.create!(asset: @asset, trade_date: @trade_date, session: "open", mode: "sequential", price: nil,
                       qty: traded, ran_at: @at)

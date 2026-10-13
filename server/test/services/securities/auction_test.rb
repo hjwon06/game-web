@@ -20,13 +20,17 @@ class Securities::AuctionTest < ActiveSupport::TestCase
   end
 
   def place(side, qty:, price: nil, at: @pre_open, cash: 10_000_000)
+    place_on(@equity, side, qty: qty, price: price, at: at, cash: cash)
+  end
+
+  def place_on(asset, side, qty:, price: nil, at: @pre_open, cash: 10_000_000)
     account = Securities::Account.create!(code: "VT-#{@n += 1}", name: "가상투자자", kind: "investor")
     if side == "buy"
       Securities::Position.create!(account: account, asset: @cash, qty: cash)
     else
-      Securities::Position.create!(account: account, asset: @equity, qty: 100)
+      Securities::Position.create!(account: account, asset: asset, qty: 100)
     end
-    Securities::PlaceOrder.call(account: account, asset: @equity, side: side, order_type: price ? "limit" : "market",
+    Securities::PlaceOrder.call(account: account, asset: asset, side: side, order_type: price ? "limit" : "market",
                                 qty: qty, price: price, client_key: "k-#{@n}", at: at)
   end
 
@@ -134,16 +138,76 @@ class Securities::AuctionTest < ActiveSupport::TestCase
     assert_equal 7, executions.sum(&:qty)
   end
 
+  # minitest 6 에는 Object#stub 이 없다(minitest/mock 분리). single_price_default 를 armed 동안만 덮는다.
+  module SinglePriceOverride
+    def single_price_default
+      SinglePriceOverride.armed ? SinglePriceOverride.value : super
+    end
+
+    class << self
+      attr_accessor :armed, :value
+    end
+  end
+  Securities::AuctionRun.singleton_class.prepend(SinglePriceOverride)
+
   test "끄기 스위치는 config/securities_clock.yml 에서 읽힌다: 켜져 있으면 single, 설정을 false 로 돌리면 sequential" do
     place("buy", qty: 1, price: 50_000)
     place("sell", qty: 1, price: 50_000)
-    assert_equal true, Securities::AuctionRun.single_price_default
+    assert_equal true, Securities::AuctionRun.single_price_default # 덮기 전: 설정 파일 값
 
     assert_equal "single", open!.mode
 
     other = Securities::Asset.create!(code: "VT-EQ2", name: "다른종목", kind: "equity", base_price: 50_000)
-    Securities::AuctionRun.stub(:single_price_default, false) do
-      assert_equal "sequential", Securities::Auction.open!(asset: other, trade_date: DAY, at: @nine).mode
-    end
+    SinglePriceOverride.value = false
+    SinglePriceOverride.armed = true
+    assert_equal "sequential", Securities::Auction.open!(asset: other, trade_date: DAY, at: @nine).mode
+  ensure
+    SinglePriceOverride.armed = false
+  end
+
+  test "T1 충실도: 끄기면 들어온 순서대로 만난다 — 매수는 먼저 온 49,000 매도와 50,000 에 체결되고 뒤에 온 48,000 은 남는다" do
+    buy = place("buy", qty: 1, price: 50_000)
+    sell_a = place("sell", qty: 1, price: 49_000)
+    sell_b = place("sell", qty: 1, price: 48_000)
+
+    auction = open!(single_price: false)
+
+    assert_equal ["sequential", 1], [auction.mode, auction.qty]
+    execution = Securities::Execution.sole
+    assert_equal [buy.id, sell_a.id, 50_000, 1], [execution.buy_order_id, execution.sell_order_id, execution.price, execution.qty]
+    assert_equal %w[filled filled accepted], [buy, sell_a, sell_b].map { |o| o.reload.status }
+  end
+
+  test "T2 끄기 + 시장가: 먼저 들어온 상대가 없는 시장가는 체결 없이 cancelled · 홀드 해제, 켜기면 단일가 50,000 에 1주" do
+    market = place("buy", qty: 1)
+    sell = place("sell", qty: 1, price: 50_000)
+
+    auction = open!(single_price: false)
+
+    assert_equal ["sequential", 0], [auction.mode, auction.qty]
+    assert_equal 0, Securities::Execution.count
+    assert_equal ["cancelled", 0, @nine], [market.reload.status, market.filled_qty, market.hold.released_at]
+    assert_equal "accepted", sell.reload.status
+
+    other = Securities::Asset.create!(code: "VT-EQ2", name: "다른종목", kind: "equity", base_price: 50_000)
+    market2 = place_on(other, "buy", qty: 1)
+    place_on(other, "sell", qty: 1, price: 50_000)
+
+    on = Securities::Auction.open!(asset: other, trade_date: DAY, at: @nine, single_price: true)
+
+    assert_equal ["single", 50_000, 1], [on.mode, on.price, on.qty]
+    assert_equal ["filled", 1], [market2.reload.status, market2.filled_qty]
+    assert_equal 50_000, Securities::Execution.find_by!(asset_id: other.id).price
+  end
+
+  test "T3 단일가 같은 가격 안은 seq 순: 먼저 온 1주가 다 차고 뒤에 온 3주는 1주만 찬다" do
+    small = place("buy", qty: 1, price: 50_000)
+    large = place("buy", qty: 3, price: 50_000)
+    place("sell", qty: 2, price: 50_000)
+
+    auction = open!
+
+    assert_equal ["single", 50_000, 2], [auction.mode, auction.price, auction.qty]
+    assert_equal [[1, "filled"], [1, "partially_filled"]], [small, large].map { |o| o.reload.then { [_1.filled_qty, _1.status] } }
   end
 end
