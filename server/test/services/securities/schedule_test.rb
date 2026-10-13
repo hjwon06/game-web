@@ -33,7 +33,7 @@ Securities::Auction.singleton_class.prepend(PinnedRandomEnd)
 
 # 하루 일정(Schedule.events · run!). 체결은 실제 경로(PlaceOrder → Auction → Settle)로 만든다.
 # 달력: 11-02(월) ~ 11-06(금) 영업, 11-07 · 11-08 휴장 행, 11-09(월) 영업. 기준가 50,000.
-# 변이 검사(AC): roll! 빼기 → T2, 종가 세션 대신 그날 마지막 체결 → T3, settle 일정 빼기 → T5,
+# 변이 검사(AC): roll! 빼기 → T2, 종가 세션 체결만 보기 → T3, settle 일정 빼기 → T5,
 # 시각 대신 종류 순 정렬 → T1 · T6, 창을 닫힌 구간으로 → T1,
 # 같은 시각 순서(종류 · id) 빼기 → T1 같은 시각 테스트(F2).
 class Securities::ScheduleTest < ActiveSupport::TestCase
@@ -183,14 +183,14 @@ class Securities::ScheduleTest < ActiveSupport::TestCase
     assert_equal 49_000, @equity.reload.base_price
   end
 
-  test "T3 장중 체결은 있고 종가 세션 체결이 없으면 기준가 그대로" do
+  test "T3 장중 체결은 있고 종가 세션 체결이 없으면 기준가 = 그날 장중 마지막 체결가" do
     open_monday
     trade_intraday
 
     run!(t(2, 9, 1), t(2, 15, 31))
 
     assert_equal [51_000], Securities::Execution.pluck(:price)
-    assert_equal 50_000, @equity.reload.base_price
+    assert_equal 51_000, @equity.reload.base_price
     assert_equal 0, Securities::Auction.find_by!(session: "close").qty
   end
 

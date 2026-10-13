@@ -31,7 +31,7 @@ class Securities::Sim::BookTest < ActiveSupport::TestCase
     end
   end
 
-  def run(only, from, to)
+  def run_days(only, from, to)
     Securities::Sim::Runner.new(seed: SEED, single_price: true, intents: sliced(only)).advance(from: from, to: to)
   end
 
@@ -66,7 +66,7 @@ class Securities::Sim::BookTest < ActiveSupport::TestCase
 
   test "T2 아침 잔고: 다음 영업일 08:30 결제 직후 · 첫 주문 전 투자자 전부 × 종목이 Available.for · assets.base_price 와 같다" do
     from = KST.local(2026, 11, 2, 0, 0, 0)
-    run([MON], from, KST.local(2026, 11, 3, 8, 31, 0)) # 화 의도는 비운 공급자: 08:30 결제 뒤 · 첫 주문 전에서 멈춘다
+    run_days([MON], from, KST.local(2026, 11, 3, 8, 31, 0)) # 화 의도는 비운 공급자: 08:30 결제 뒤 · 첫 주문 전에서 멈춘다
     assert_operator Securities::Execution.count, :>=, 1, "체결이 없으면 시드 잔고와 같아 의미가 없다"
     assert_equal 1, Securities::Settlement.where(settle_date: TUE, status: "settled").count, "화 08:30 결제가 끝났다"
 
@@ -89,10 +89,10 @@ class Securities::Sim::BookTest < ActiveSupport::TestCase
   end
 
   test "T2 그날을 다 돌린 뒤 다시 불러도 같다(화 장부는 화 체결 · 주문에 영향받지 않는다)" do
-    run([MON], KST.local(2026, 11, 2, 0, 0, 0), KST.local(2026, 11, 3, 8, 31, 0))
+    run_days([MON], KST.local(2026, 11, 2, 0, 0, 0), KST.local(2026, 11, 3, 8, 31, 0))
     before = book(TUE)
 
-    run([TUE], KST.local(2026, 11, 3, 8, 31, 0), KST.local(2026, 11, 4, 0, 0, 0))
+    run_days([TUE], KST.local(2026, 11, 3, 8, 31, 0), KST.local(2026, 11, 4, 0, 0, 0))
     assert_operator Securities::Execution.where(trade_date: TUE).count, :>=, 1, "화 체결이 있어야 한다"
     after = book(TUE)
 
