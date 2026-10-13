@@ -13,7 +13,8 @@ class Securities::CancelOrderTest < ActiveSupport::TestCase
     Securities::Position.create!(account: @me, asset: @cash, qty: 1_000_000)
     Securities::Position.create!(account: @me, asset: @equity, qty: 10)
     Securities::MarketDay.create!(trade_date: Date.new(2026, 11, 2), business_day: true)
-    @open = KST.local(2026, 11, 2, 10, 0, 0)
+    # 사전(pre_open) 접수는 체결이 없다. 10:00 이면 같은 계좌의 매수 · 매도 50,000 이 서로 체결돼 이 테스트의 전제가 깨진다.
+    @open = KST.local(2026, 11, 2, 8, 40, 0)
     @later = KST.local(2026, 11, 2, 11, 0, 0)
   end
 
@@ -62,6 +63,23 @@ class Securities::CancelOrderTest < ActiveSupport::TestCase
     assert_equal "rejected", cancel(rejected).status
     assert_equal before, Securities::Hold.order(:id).pluck(:id, :qty, :released_at)
     assert_equal @later, done.hold.reload.released_at # 두 번째 취소가 시각을 덮어쓰지 않는다
+  end
+
+  test "실제 체결로 부분 체결된 메이커를 취소하면 남은 홀드만 풀리고 체결분은 그대로다" do
+    [Date.new(2026, 11, 3), Date.new(2026, 11, 4)].each { |d| Securities::MarketDay.create!(trade_date: d, business_day: true) }
+    buyer = Securities::Account.create!(code: "VT-BUY", name: "가상매수자", kind: "investor")
+    Securities::Position.create!(account: buyer, asset: @cash, qty: 1_000_000)
+    maker = place(side: "sell", qty: 4)
+    Securities::PlaceOrder.call(account: buyer, asset: @equity, side: "buy", order_type: "limit", qty: 1,
+                                price: 50_000, client_key: "t", at: KST.local(2026, 11, 2, 10, 0, 0))
+    assert_equal ["partially_filled", 1], maker.reload.then { |o| [o.status, o.filled_qty] }
+
+    cancelled = cancel(maker)
+
+    assert_equal ["cancelled", 1], [cancelled.status, cancelled.filled_qty]
+    assert_equal @later, maker.hold.reload.released_at
+    assert_equal 9, Securities::Available.for(@me, @equity) # 10 − 미결제 매도 체결 1
+    assert_equal 1, Securities::Execution.count
   end
 
   test "낡은 order 객체(status accepted)로 불러도 DB 의 현재 상태를 따른다" do

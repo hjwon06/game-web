@@ -4,6 +4,7 @@
 #   - 서로 다른 키라도 같은 계좌면 계좌 행에서 직렬화된다. 가능 수량은 이 잠금을 쥔 채 읽는다.
 #   - orders · holds INSERT 의 FK 검사는 계좌 행에 KEY SHARE 를 잡는다. FOR UPDATE 를 먼저 잡아 두면
 #     뒤 요청이 INSERT 이전에 줄을 서서 교착이 나지 않는다.
+#   - 접수 뒤 체결(Match)은 그 다음 잠금(책 잠금 → 주문 행)을 같은 트랜잭션에서 이어 잡는다. 순서 전체는 match.rb 머리말.
 # 거절 순서: closed(장 단계) → tick(호가 단위) → price_limit(가격제한) → insufficient(가능 수량). 거절은 홀드가 없다.
 # 홀드: 매수 지정가 = 가격 × 수량(현금) · 매수 시장가 = 상한가 × 수량(현금) · 매도 = 종목 수량.
 module Securities
@@ -72,11 +73,16 @@ module Securities
 
       order = create_order("accepted")
       Hold.create!(order: order, account: @account, asset: hold_asset, qty: hold_qty)
-      order
+      # 접속매매(continuous)만 접수 즉시 체결한다. pre_open · closing 접수분은 체결 없이 남긴다(단일가는 ④ 몫).
+      phase == :continuous ? Match.call(order: order, at: @at) : order
+    end
+
+    def phase
+      @phase ||= Phase.at(@at)
     end
 
     def reject_reason
-      return "closed" if Phase.at(@at) == :closed
+      return "closed" if phase == :closed
 
       if @order_type == "limit"
         return "tick" unless Tick.valid?(@price)
