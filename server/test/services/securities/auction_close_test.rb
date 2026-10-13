@@ -68,6 +68,10 @@ class Securities::AuctionCloseTest < ActiveSupport::TestCase
                  [available(stay_buy), available(stay_sell), available(limit_buy)]
     assert_equal 10_000_000, available(stay_buy)
     assert_equal 100, available(stay_sell)
+    # 체결된 시장가 매수 · 매도(전량 filled)도 홀드 잔량 0, 해제 시각은 종가 시각이다.
+    filled = [market, sell].map { |o| o.hold.reload }
+    assert_equal [0, 0], filled.map(&:qty)
+    assert_equal [@close_at] * 2, filled.map(&:released_at)
   end
 
   test "T2 멱등: close! 를 두 번 돌려도 close 행 1 · 체결 · 취소 시각 그대로" do

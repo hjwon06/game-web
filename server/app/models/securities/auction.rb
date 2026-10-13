@@ -28,7 +28,8 @@ module Securities
       raise ArgumentError, "session 은 #{SESSIONS.join('/')}" unless SESSIONS.include?(session)
       raise ArgumentError, "trade_date 는 Date" unless trade_date.is_a?(Date)
 
-      base_minute = session == "open" ? Phase::SCHEDULE.first[1] : Phase::SCHEDULE.last[2]
+      # 시가 기준은 pre_open 이 끝나는 분(first[2], 09:00)이다. first[1] 은 pre_open 시작(08:30)이다.
+      base_minute = session == "open" ? Phase::SCHEDULE.first[2] : Phase::SCHEDULE.last[2]
       digest = Digest::SHA256.hexdigest([trade_date.iso8601, asset_id, session, seed].join("|"))
       Clock.at_minute(trade_date, base_minute) + digest.to_i(16) % (Clock.random_end_seconds + 1)
     end
