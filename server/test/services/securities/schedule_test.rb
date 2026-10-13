@@ -16,10 +16,23 @@ module RollFailure
 end
 Securities::BasePrice.singleton_class.prepend(RollFailure)
 
+# random_end_at 을 한 시각으로 모으는 prepend. at 이 nil 이면(기본) 그대로 통과한다. 같은 시각 순서 테스트만 켠다.
+module PinnedRandomEnd
+  class << self
+    attr_accessor :at
+  end
+
+  def random_end_at(**opts)
+    PinnedRandomEnd.at || super
+  end
+end
+Securities::Auction.singleton_class.prepend(PinnedRandomEnd)
+
 # 하루 일정(Schedule.events · run!). 체결은 실제 경로(PlaceOrder → Auction → Settle)로 만든다.
 # 달력: 11-02(월) ~ 11-06(금) 영업, 11-07 · 11-08 휴장 행, 11-09(월) 영업. 기준가 50,000.
 # 변이 검사(AC): roll! 빼기 → T2, 종가 세션 대신 그날 마지막 체결 → T3, settle 일정 빼기 → T5,
-# 시각 대신 종류 순 정렬 → T1 · T6, 창을 닫힌 구간으로 → T1.
+# 시각 대신 종류 순 정렬 → T1 · T6, 창을 닫힌 구간으로 → T1,
+# 같은 시각 순서(종류 · id) 빼기 → T1 같은 시각 테스트(F2).
 class Securities::ScheduleTest < ActiveSupport::TestCase
   KST = ActiveSupport::TimeZone["Asia/Seoul"]
   SEED = 7
@@ -40,7 +53,10 @@ class Securities::ScheduleTest < ActiveSupport::TestCase
     @n = 0
   end
 
-  teardown { RollFailure.on_date = nil }
+  teardown do
+    RollFailure.on_date = nil
+    PinnedRandomEnd.at = nil
+  end
 
   def t(day, hour, min, sec = 0)
     KST.local(2026, 11, day, hour, min, sec)
@@ -91,17 +107,36 @@ class Securities::ScheduleTest < ActiveSupport::TestCase
 
     assert_equal [:settle] + [:open] * 5 + [:close] * 5, day.map(&:kind)
     assert_equal t(2, 8, 30), day.first.at
-    assert_equal ids, day[1, 5].map { |e| e.asset.id }, "같은 종류 안은 종목 id 순"
+    # 랜덤엔드는 종목마다 달라 종류 안의 순서는 [시각, 종목 id] 다. id 는 같은 시각일 때만 순서를 정한다.
+    %w[open close].each do |session|
+      group = day.select { |e| e.kind == session.to_sym }
+      by_time_then_id = ids.sort_by do |id|
+        [Securities::Auction.random_end_at(trade_date: MON, asset_id: id, session: session, seed: SEED).to_r, id]
+      end
+      assert_equal by_time_then_id, group.map { |e| e.asset.id }, "#{session}: 시각 순, 같은 시각이면 종목 id 순"
+      assert_equal group.map(&:at).sort, group.map(&:at)
+    end
     assert(day[1, 5].all? { |e| e.at >= t(2, 9, 0, 0) && e.at <= t(2, 9, 0, 30) })
     assert(day[6, 5].all? { |e| e.at >= t(2, 15, 30, 0) && e.at <= t(2, 15, 30, 30) })
-    expected = Securities::Auction.random_end_at(trade_date: MON, asset_id: ids.first, session: "open", seed: SEED)
-    assert_equal expected, day[1].at
     assert_equal day.map(&:at).sort, day.map(&:at)
 
     weekend = events(t(6, 15, 0), t(9, 9, 1))
     assert_equal [:close] * 5 + [:settle] + [:open] * 5, weekend.map(&:kind)
     assert_equal [Date.new(2026, 11, 6)] * 5 + [Date.new(2026, 11, 9)] * 6, weekend.map(&:trade_date)
     assert_empty events(t(7, 0, 0), t(9, 8, 30)), "휴장일에는 일정이 없다"
+  end
+
+  test "T1 같은 시각이면 settle → open → close, 그 안은 종목 id 순" do
+    4.times { |i| Securities::Asset.create!(code: "VT-X#{i}", name: "가상종목#{i}", kind: "equity", base_price: 50_000) }
+    ids = Securities::Asset.where(kind: "equity").order(:id).ids
+    PinnedRandomEnd.at = t(2, 8, 30)
+
+    day = events(t(2, 0, 0), t(3, 0, 0))
+
+    assert_equal [:settle] + [:open] * 5 + [:close] * 5, day.map(&:kind)
+    assert_equal [t(2, 8, 30)], day.map(&:at).uniq, "모든 일정이 같은 시각이다"
+    assert_equal ids, day[1, 5].map { |e| e.asset.id }
+    assert_equal ids, day[6, 5].map { |e| e.asset.id }
   end
 
   test "T1 반열림: to 가 월 08:30 이면 월 settle 이 빠지고 from 이 월 08:30 인 다음 창에 들어간다" do
