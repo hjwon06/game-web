@@ -1,0 +1,32 @@
+#!/usr/bin/env ruby
+# 증권 시뮬레이터.
+#   bin/sec_sim                                  실시간 데몬. 1초마다 tick, SIGTERM/SIGINT 에서 지금 tick 뒤 멈춘다.
+#   bin/sec_sim fast --days N [--single-price on|off] [--seed S]
+#                                                빈 증권 DB 에 시드 뒤 영업일 N 개를 sleep 없이 돌리고 JSON 한 줄을 낸다.
+require "optparse"
+require_relative "../config/environment"
+
+$stdout.sync = true
+
+def fast(argv)
+  options = { days: nil, single_price: nil, seed: Securities::Sim::Config::SEED }
+  OptionParser.new do |o|
+    o.on("--days N", Integer) { |v| options[:days] = v }
+    o.on("--single-price MODE", %w[on off]) { |v| options[:single_price] = (v == "on") }
+    o.on("--seed S", Integer) { |v| options[:seed] = v }
+  end.parse!(argv)
+  abort "--days N 이 필요하다" unless options[:days]
+
+  puts JSON.generate(Securities::Sim::Fast.call(**options))
+rescue Securities::Sim::Fast::NotEmpty => e
+  abort e.message
+end
+
+if ARGV.first == "fast"
+  ARGV.shift
+  fast(ARGV)
+else
+  daemon = Securities::Sim::Daemon.new(logger: Logger.new($stdout))
+  %w[TERM INT].each { |signal| Signal.trap(signal) { daemon.stop! } }
+  daemon.run
+end

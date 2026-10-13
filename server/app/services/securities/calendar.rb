@@ -9,6 +9,20 @@ module Securities
 
     module_function
 
+    # 첫 장(Seed::FIRST_MARKET_DAY)부터 through 까지 빠진 날의 행을 영업일 규칙(Seed.business_day?)으로 넣는다.
+    # 있는 행은 건드리지 않는다(ON CONFLICT DO NOTHING). 두 번 불러도 행이 같다. 넣은 행 수를 돌려준다.
+    def extend!(through:)
+      first = Seed::FIRST_MARKET_DAY
+      return 0 if through < first
+
+      have = MarketDay.where(trade_date: first..through).pluck(:trade_date).to_set
+      rows = (first..through).reject { |day| have.include?(day) }
+                             .map { |day| { trade_date: day, business_day: Seed.business_day?(day) } }
+      return 0 if rows.empty?
+
+      MarketDay.insert_all(rows).length # insert_all 기본이 ON CONFLICT DO NOTHING
+    end
+
     # date 다음(date 자신 제외) 첫 영업일.
     def next_business_day(date)
       days_from(date + 1, offset: 0, count: 1).first

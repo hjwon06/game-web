@@ -146,10 +146,15 @@ module Securities
       end
     end
 
+    # 영업일 규칙(시뮬레이터): 월~금. 달력 행 · 적정가 · 의도가 전부 이 한 함수를 본다.
+    def business_day?(date)
+      !(date.saturday? || date.sunday?)
+    end
+
     def market_days
       (0...MARKET_DAYS).map do |n|
         day = FIRST_MARKET_DAY + n
-        { trade_date: day, business_day: !(day.saturday? || day.sunday?) }
+        { trade_date: day, business_day: business_day?(day) }
       end
     end
   end

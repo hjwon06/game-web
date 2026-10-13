@@ -20,11 +20,11 @@ module Securities
 
       module_function
 
-      # 휴장일 · 달력 밖이면 빈 목록. 시각 순이다.
+      # 휴장일 · 첫 장 이전이면 빈 목록. 시각 순이다. 30일 상한은 없다(영업일 규칙 Seed.business_day?).
       def for_day(date:, seed:)
+        return [] unless date >= Seed::FIRST_MARKET_DAY && Seed.business_day?(date)
+
         plan, fair = context(seed)
-        day = plan[:market_days].find { |d| d[:trade_date] == date }
-        return [] unless day && day[:business_day]
 
         Builder.new(date: date, seed: seed, plan: plan, fair: fair).call
       end

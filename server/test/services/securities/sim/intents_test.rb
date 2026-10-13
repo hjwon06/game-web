@@ -93,10 +93,39 @@ class Securities::Sim::IntentsTest < ActiveSupport::TestCase
                      forward.at(asset_code: "VELEC", date: TUE, minute: 5)
   end
 
-  test "T1 휴장일과 달력 밖은 빈 목록" do
+  test "T1 휴장일과 첫 장 이전은 빈 목록" do
     assert_empty day(SAT)
     assert_empty day(Date.new(2026, 11, 8))
-    assert_empty day(Date.new(2027, 1, 4))
+    assert_empty day(Date.new(2027, 1, 3)) # 일요일
+    assert_empty day(Date.new(2026, 10, 30)) # 금요일이지만 첫 장(11-02) 이전
+  end
+
+  test "T1 30일 상한이 없다: 11-30 뒤 영업일도 1000 개이고 주말은 빈 목록이다" do
+    far = Date.new(2026, 12, 15)
+
+    assert_equal Securities::Sim::Config::ORDERS_PER_DAY, day(far).size
+    assert_equal Securities::Sim::Config::ORDERS_PER_DAY, day(Date.new(2027, 1, 4)).size
+    assert_equal "sim:#{SEED}:2026-12-15:0", day(far).first.client_key
+    assert_empty day(Date.new(2026, 12, 19)) # 토
+    assert_empty day(Date.new(2026, 12, 20)) # 일
+  end
+
+  test "T1 FairValue 가 30일 경계(12-01 → 12-02)에서 끊기지 않는다" do
+    fair = Securities::Sim::FairValue.new(seed: SEED)
+    close = ->(date) { fair.at(asset_code: "VELEC", date: date, minute: 390) }
+    open = ->(date) { fair.at(asset_code: "VELEC", date: date, minute: 0) }
+    tue = Date.new(2026, 12, 1)
+    wed = Date.new(2026, 12, 2)
+
+    ratio = open.call(wed) / close.call(tue)
+    assert_not_equal 1.0, ratio, "다음 날 시작은 전날 끝에 밤 잡음이 붙은 값이다"
+    assert_in_delta 1.0, ratio, Securities::Sim::Config::OVERNIGHT_VOL
+    assert_not_equal 72_000.0, open.call(wed), "첫 장 기준가로 되돌아가지 않았다"
+    fri = Date.new(2026, 12, 4)
+    mon = Date.new(2026, 12, 7)
+    assert_in_delta 1.0, open.call(mon) / close.call(fri), Securities::Sim::Config::OVERNIGHT_VOL, "금 → 월 도 밤 잡음 하나"
+    assert_nothing_raised { fair.at(asset_code: "VGAME", date: Date.new(2027, 6, 1), minute: 100) }
+    assert_raises(ArgumentError) { fair.at(asset_code: "VELEC", date: Date.new(2026, 12, 5), minute: 0) } # 토
   end
 
   test "T2 한쪽만: 같은 (계좌, 종목)에 매수와 매도가 함께 없고 매도 계좌는 개시 보유가 있다" do

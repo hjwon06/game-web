@@ -12,7 +12,6 @@ module Securities
         @seed = seed
         plan ||= Seed.plan(seed: seed)
         @bases = plan[:assets].select { |a| a[:kind] == "equity" }.to_h { |a| [a[:code], a[:base_price]] }
-        @days = plan[:market_days].select { |d| d[:business_day] }.map { |d| d[:trade_date] }.sort
         @paths = {}
       end
 
@@ -24,14 +23,21 @@ module Securities
       private
 
       # 길이 MARKET_MINUTES + 1. [0] = 그날 시작, [390] = 그날 끝.
+      # 영업일은 Seed.business_day? 규칙이라 달력 상한이 없다. 첫 장부터 그 날까지 앞에서 차례로 쌓는다(재귀 깊이 없음).
       def path(code, date)
-        index = @days.index(date) or raise ArgumentError, "#{date} 는 영업일이 아니다"
+        return @paths[[code, date]] if @paths.key?([code, date])
+
+        raise ArgumentError, "#{date} 는 영업일이 아니다" unless date >= Seed::FIRST_MARKET_DAY && Seed.business_day?(date)
         raise ArgumentError, "#{code} 는 종목이 아니다" unless @bases.key?(code)
 
-        @paths[[code, date]] ||= begin
-          start = index.zero? ? @bases.fetch(code).to_f : overnight(code, date, path(code, @days[index - 1]).last)
-          walk(code, date, start)
+        chain_to(date).reduce(nil) do |previous, day|
+          @paths[[code, day]] ||= walk(code, day, previous ? overnight(code, day, previous.last) : @bases.fetch(code).to_f)
         end
+      end
+
+      # 첫 장부터 date 까지의 영업일(오름차순).
+      def chain_to(date)
+        (Seed::FIRST_MARKET_DAY..date).select { |day| Seed.business_day?(day) }
       end
 
       def overnight(code, date, previous_end)
