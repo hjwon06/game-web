@@ -1,5 +1,6 @@
 # 주문. seq 는 DB 시퀀스가 매기는 접수 순서다(시간 우선 비교는 seq 로 한다).
-# reject_reason 은 rejected 일 때만 값이 있다(DB CHECK orders_reject_reason_status_check).
+# reject_reason 은 rejected 일 때만 값이 있고, rejected 면 반드시 있다(DB CHECK orders_reject_reason_status_check,
+# (status = 'rejected') = (reject_reason IS NOT NULL) — 양방향이다).
 module Securities
   class Order < Record
     self.table_name = "orders"

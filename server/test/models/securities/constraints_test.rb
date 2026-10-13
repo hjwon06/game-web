@@ -65,6 +65,13 @@ class Securities::ConstraintsTest < ActiveSupport::TestCase
     ["orders.filled_qty 음수", CHECK, "orders_filled_qty_check", -> { insert(:orders, order(filled_qty: -1)) }],
     ["orders.status 범위 밖", CHECK, "orders_status_check", -> { insert(:orders, order(status: "open")) }],
     ["orders.account_id 가 없는 계좌", FK, "Key (account_id)=", -> { insert(:orders, order(account_id: 0)) }],
+    # 양방향: rejected 면 사유가 반드시 있고, 사유가 있으면 rejected 다(orders_reject_reason_status_check).
+    ["orders rejected 인데 reject_reason NULL", CHECK, "orders_reject_reason_status_check",
+     -> { insert(:orders, order(status: "rejected")) }],
+    ["orders 접수인데 reject_reason 있음", CHECK, "orders_reject_reason_status_check",
+     -> { insert(:orders, order(reject_reason: "tick")) }],
+    ["orders.reject_reason 범위 밖", CHECK, "orders_reject_reason_check",
+     -> { insert(:orders, order(status: "rejected", reject_reason: "other")) }],
 
     ["executions.price 0", CHECK, "executions_price_check", -> { insert(:executions, execution(price: 0)) }],
     ["executions.qty 0", CHECK, "executions_qty_check", -> { insert(:executions, execution(qty: 0)) }],
@@ -96,6 +103,13 @@ class Securities::ConstraintsTest < ActiveSupport::TestCase
     %w[assets accounts positions holds orders executions settlements ledger_entries market_days].each do |table|
       assert_operator count(table), :>=, 1, "#{table} 에 정상 행이 들어가지 않았다"
     end
+  end
+
+  test "거절 주문은 사유와 함께라면 들어간다(위 양방향 위반 테스트의 기준선)" do
+    id = insert(:orders, order(status: "rejected", reject_reason: "insufficient"))
+
+    row = conn.uncached { conn.select_one("SELECT status, reject_reason FROM orders WHERE id = #{id.to_i}") }
+    assert_equal %w[rejected insufficient], [row["status"], row["reject_reason"]]
   end
 
   test "도우미 자체 검사: 쿼리 캐시를 켜도 같은 INSERT 두 번째는 DB 가 거부한다" do
