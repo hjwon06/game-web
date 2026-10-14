@@ -14,7 +14,8 @@ const SNAP_MS = 2000, PULL = .3, QUEUE_MAX = 600;
 // board: 지금 화면에 적용된 board · boardTime: 그 market_time(ms) · ver: board 가 바뀔 때마다 +1
 // orders/execs/runs: 아직 흘려보내지 않은 새 주문 · 체결 · 결제 run(flow.js · trucks.js 가 비운다)
 export const S = { clock: null, board: [], boardSig: '', boardTime: null, ver: 0, settlements: [], seq: null, exec: null,
-  orders: [], execs: [], runs: [], ok: false, err: false };
+  orders: [], execs: [], runs: [], ok: false, err: false,
+  shown: { clock: null, board: [], today: null, reconcile: null } }; // 재생 시각에 맞춰 적용된 카드용 값
 
 let anchor = null;  // { mt(시장 ms), speed, at(화면 시계 ms) }
 let frozen = null;  // 멈춘 재생 시각(시장 ms)
@@ -69,6 +70,8 @@ let settleInit = false, shownOnce = false;
 
 function show(q, P) {
   if (q.sig !== S.boardSig) { S.boardSig = q.sig; S.board = q.board; S.ver++; }
+  // 카드(ui.js)가 읽는 값. 시계가 null 인 응답은 거래일을 몰라 0 으로 비어 오므로 지난 값을 지우지 않고 둔다
+  if (q.clock) S.shown = { clock: q.clock, board: q.board, today: q.today, reconcile: q.reconcile };
   S.settlements = q.settlements; S.boardTime = isFinite(q.mt) ? q.mt : S.boardTime;
   q.settlements.forEach(s => {
     if (s.status !== 'settled' || seenSettle.has(s.settle_date)) return;
@@ -95,7 +98,8 @@ export function apply(body, now = clockNow()) {
   const sig = JSON.stringify(body.board.map(r => [r.code, r.last_price, r.change, r.open_buy_qty, r.open_sell_qty, r.open_orders]));
   const cmt = body.clock && !body.clock.stale ? ms(body.clock.market_time) : null;
   const snap = { mt: cmt != null ? cmt : (queue.length ? queue[queue.length - 1].mt : -Infinity), speed: speedNow(),
-    board: body.board, sig, settlements: Array.isArray(body.settlements) ? body.settlements : [] };
+    board: body.board, sig, settlements: Array.isArray(body.settlements) ? body.settlements : [],
+    clock: body.clock || null, today: body.today || null, reconcile: body.reconcile == null ? null : body.reconcile };
   if (!shownOnce) show(snap, null); // 첫 응답은 맞출 이전 상태가 없다: 바로 보인다
   else { queue.push(snap); if (queue.length > QUEUE_MAX) queue.splice(0, queue.length - QUEUE_MAX).forEach(q => show(q, null)); }
   S.ok = true;

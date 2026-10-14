@@ -6,13 +6,81 @@
 <meta name="color-scheme" content="only light">
 <title>증권 거리 3D</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&amp;display=swap">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{min-height:100dvh;height:100%;overflow:hidden;background:#EEF1F4;font-family:Pretendard,sans-serif;color:#1A1A2E;word-break:keep-all}
 canvas#s3d{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
 #ui{position:fixed;inset:0;pointer-events:none}
 #ui>*{pointer-events:auto}
-.s3d-label{font:600 12px/1 Pretendard,sans-serif;color:#1E3A5F;background:#FFF;border:1px solid #E5E7EB;border-radius:4px;padding:3px 6px;white-space:nowrap}
+.s3d-label{font:600 12px/1 Pretendard,sans-serif;color:#1A1A2E;background:#FFF;border:1px solid #E5E7EB;border-radius:4px;padding:3px 6px;white-space:nowrap}
+/* 화면 카드(src/s3d/ui*.js). 네이비는 로고 글자 · 단계 칩 · 시간표 띠의 지금 구간 세 곳뿐이다 */
+#ui{pointer-events:none}
+.u-num{font-family:Outfit,Pretendard,sans-serif;font-variant-numeric:tabular-nums}
+.u-lab{font-size:12px;font-weight:500;color:#6B7280;font-style:normal}
+.u-card{position:fixed;background:#FFF;border:1px solid #E5E7EB;border-radius:14px;box-shadow:none;padding:16px;pointer-events:auto;font-size:14px}
+.u-top{position:fixed;top:0;left:0;right:0;height:56px;display:flex;align-items:center;gap:12px;padding:0 16px;background:#FFF;border-bottom:1px solid #E5E7EB;pointer-events:auto;min-width:0}
+.u-logo{font-size:20px;font-weight:700;color:#1E3A5F;white-space:nowrap}
+.u-sub{font-size:12px;color:#6B7280;white-space:nowrap}
+.u-spacer{flex:1}
+.u-chip{font-size:14px;font-weight:600;border-radius:8px;padding:5px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.u-chip[hidden]{display:none}
+.u-stage{background:#1E3A5F;color:#FFF}
+.u-gray{background:#F3F4F6;color:#1A1A2E}
+.u-real{font-size:14px;color:#6B7280}
+.u-timecard{left:16px;top:72px;width:380px;display:flex;flex-direction:column;gap:6px}
+.u-clock{display:flex;align-items:baseline;gap:4px;line-height:1}
+.u-hm{font-family:Outfit,Pretendard,sans-serif;font-weight:600;font-size:96px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.u-sec{font-family:Outfit,Pretendard,sans-serif;font-size:24px;font-weight:500;color:#6B7280;font-variant-numeric:tabular-nums}
+.u-date{font-size:16px;font-weight:600}
+.u-next,.u-speed{font-size:14px;color:#1A1A2E}
+.u-band{position:relative;display:flex;gap:1px;height:12px;margin-top:6px}
+.u-band i{display:block;height:100%;background:#E5E7EB;border-radius:4px;min-width:2px}
+.u-band i:nth-child(even){background:#D1D5DB}
+.u-band i.on{background:#1E3A5F}
+.u-mark{position:absolute;top:-4px;width:2px;height:20px;margin-left:-1px;background:#1A1A2E;border-radius:4px}
+.u-timecard.is-stopped .u-hm,.u-timecard.is-stopped .u-sec,.u-timecard.is-stopped .u-date,.u-timecard.is-stopped .u-next,.u-timecard.is-stopped .u-speed{color:#9CA3AF}
+.u-bottom{display:contents}
+.u-board{right:16px;top:72px;width:420px;display:flex;flex-direction:column;gap:2px}
+.u-head{display:flex;align-items:center;justify-content:space-between;min-height:32px}
+.u-title{font-size:16px;font-weight:700}
+.u-fold{display:none;min-height:48px;min-width:48px;padding:0 12px;border:1px solid #E5E7EB;border-radius:8px;background:#FFF;color:#1A1A2E;font:600 14px Pretendard,sans-serif}
+.u-row{display:grid;grid-template-columns:1fr auto auto;column-gap:12px;row-gap:4px;align-items:baseline;padding:8px 0;border-top:1px solid #E5E7EB}
+.u-name{font-size:16px;font-weight:600}
+.u-px{font-size:20px;font-weight:600;text-align:right}
+.u-rt{font-size:14px;font-weight:600;min-width:84px;text-align:right}
+.u-vol{display:flex;gap:6px;align-items:baseline;font-size:14px}
+.u-q{grid-column:2/-1;display:flex;flex-direction:column;gap:3px;min-width:200px}
+.u-bar-q{display:block;height:8px;border-radius:4px;background:#2563EB;overflow:hidden}
+.u-bar-q b{display:block;height:100%;width:100%;background:#C0392B;transform-origin:left center;transform:scaleX(.5)}
+.u-qn{display:flex;justify-content:space-between;font-size:14px}
+.u-buy{color:#C0392B}.u-sell{color:#2563EB}
+.u-board.is-folded .u-row{display:none}
+.u-today{left:16px;bottom:16px;width:380px;display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+.u-it{display:flex;flex-direction:column;gap:2px;min-width:0}
+.u-it b{font-size:16px;font-weight:600}
+.u-fl{position:relative;display:inline-block}
+.u-fl::after{content:'';position:absolute;inset:-2px -4px;border-radius:4px;background:var(--fc,#6B7280);opacity:0;pointer-events:none}
+.u-fl.flash::after{animation:u-flash .4s ease-out}
+@keyframes u-flash{from{opacity:.18}to{opacity:0}}
+@media (prefers-reduced-motion:reduce){.u-fl.flash::after{animation:none}}
+@media (max-width:640px){
+  .u-top{height:52px;padding:0 12px;gap:8px}
+  .u-sub,.u-real,.u-top.is-stopped .u-stage{display:none}
+  .u-long{display:none}
+  .u-timecard{left:8px;right:8px;top:60px;width:auto;padding:12px}
+  .u-hm{font-size:56px}
+  .u-bottom{position:fixed;left:8px;right:8px;bottom:8px;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+  .u-bottom>*{position:static;width:auto;pointer-events:auto}
+  .u-board{padding:8px 12px}
+  .u-fold{display:block}
+  .u-row{grid-template-columns:1fr auto auto;padding:6px 0}
+  .u-row .u-vol,.u-row .u-q{display:none}
+  .u-px{font-size:18px}
+  .u-rt{min-width:72px}
+  .u-today{grid-template-columns:repeat(3,1fr);gap:8px;padding:10px 12px}
+  .u-it b{font-size:14px}
+}
 </style>
 <script type="importmap">
 {"imports":{"three":"/vendor/three-0.170.0/three.module.min.js","three/addons/":"/vendor/three-0.170.0/addons/"}}

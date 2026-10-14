@@ -11,6 +11,7 @@ import { createFlow } from './flow.js';
 import { createPiles } from './piles.js';
 import { createTrucks } from './trucks.js';
 import { createBoard } from './board.js';
+import { createUi } from './ui_index.js';
 
 const capture = new URLSearchParams(location.search).get('capture') === '1';
 const canvas = document.getElementById('s3d');
@@ -41,11 +42,13 @@ initData(clock.now);
 
 const labels = createLabels(scene);
 const flow = createFlow(street), piles = createPiles(street), trucks = createTrucks(street), board = createBoard(street);
+const ui = createUi(document.getElementById('ui'));
 
 function frame() {
   const P = playTime(clock.now());
   advance(P); // 쌓아 둔 board · settlements 중 재생 시각이 지난 것을 먼저 적용한다
   flow.tick(P); piles.tick(); trucks.tick(P); board.tick();
+  ui.tick(P);
   controls.update();
   renderer.render(scene, camera);
   labels.render(scene, camera);
@@ -82,12 +85,12 @@ if (capture) { // 실시간 폴링 없음: 기록한 응답을 feed 로 그 순�
   window.__s3d = {
     step(ms = 16) { clock.advance(ms); frame(); return clock.now(); },
     feed(body) { apply(body, clock.now()); frame(); },
-    now: () => clock.now(), scene, camera, state,
+    now: () => clock.now(), scene, camera, state, ui: () => ui.state(playTime(clock.now())),
   };
   frame();
 } else {
   startPolling();
-  window.__s3d = { now: () => clock.now(), state };
+  window.__s3d = { now: () => clock.now(), state, ui: () => ui.state(playTime(clock.now())) };
   (function loop() {
     requestAnimationFrame(loop);
     frame();
