@@ -6,15 +6,17 @@
 import * as THREE from 'three';
 import { boxGeo } from '../c3d/models.js';
 import { S } from './data.js';
-import { HOUSES, HOUSE_N, DOOR_GAP, AISLE_X, EX, STOCKS, STOCK_IDX, REJECT_COLOR, nodes, mk, at } from './layout.js';
+import { HOUSES, HOUSE, HOUSE_N, DOOR_GAP, AISLE_X, EX, STOCKS, STOCK_IDX, REJECT_COLOR, nodes, mk, at } from './layout.js';
 
 const CAP = 240;           // InstancedMesh 마다 최대 토큰 수. 넘치면 오래된 것부터 뺀다
 const FLOOR = .06;
+const LIFT = .5;           // 바닥에서 띄운 높이(토큰 2배 크기에 맞춰)
 
-// 집 → 북쪽 출입 틈 → 도로(j3) → 증권사(y 좌표 = 길 위의 높이는 tick 에서 준다)
+// 집 → 집 열 사이 통로(길 쪽 옆 틈) → 북쪽 골목 → 가운데 길 → 도로(j3) → 증권사. 지붕 · 벽을 지나지 않는다.
 function toBroker(house) {
   const h = HOUSES[((house % HOUSE_N) + HOUSE_N) % HOUSE_N], gz = h.z - DOOR_GAP;
-  return [[h.x, h.z - .75], [h.x, gz], [AISLE_X, gz], [AISLE_X, 15], [AISLE_X, 12.5], ...nodes('j3', 'office')];
+  const gx = h.x + (AISLE_X > h.x ? 1 : -1) * (HOUSE.w / 2 + .375); // 옆 틈의 가운데
+  return [[gx, h.z], [gx, gz], [AISLE_X, gz], [AISLE_X, 15], [AISLE_X, 12.5], ...nodes('j3', 'office')];
 }
 // 증권사 → 거래소 출입구 → 종목 칸 앞
 function toExchange(stock) {
@@ -40,8 +42,8 @@ const rejectColor = new THREE.Color(REJECT_COLOR);
 
 export function createFlow(parent) {
   const white = new THREE.MeshStandardMaterial({ color: 0xFFFFFF, roughness: .75 });
-  const boxes = new THREE.InstancedMesh(boxGeo(.3, .3, .3), white, CAP);
-  const discs = new THREE.InstancedMesh(new THREE.CylinderGeometry(.24, .24, .07, 10), white, CAP);
+  const boxes = new THREE.InstancedMesh(boxGeo(.64, .64, .64), white, CAP);
+  const discs = new THREE.InstancedMesh(new THREE.CylinderGeometry(.35, .35, .1, 12), white, CAP);
   for (const m of [boxes, discs]) {
     m.name = m === boxes ? 'tokens-box' : 'tokens-disc';
     m.count = 0; m.castShadow = true; m.frustumCulled = false;
@@ -93,7 +95,7 @@ export function createFlow(parent) {
     if (P == null) { boxes.count = discs.count = 0; shown = { order: 0, reject: 0, exec: 0 }; return; }
     boxList = boxList.filter(k => (P - k.t0) / k.dur < 1.5);   // 다 난 토큰은 치운다
     discList = discList.filter(k => (P - k.t0) / k.dur < 1.5);
-    const a = place(boxes, boxList, P, .2, .25), b = place(discs, discList, P, .12, .15);
+    const a = place(boxes, boxList, P, LIFT, .25), b = place(discs, discList, P, LIFT, .15);
     shown = { order: a.order, reject: a.reject, exec: b.exec };
   }
 

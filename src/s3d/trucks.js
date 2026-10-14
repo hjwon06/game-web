@@ -2,12 +2,12 @@
 // 서 있는 동안(출발 전 · 돌아온 뒤) 도크 셔터가 열린다. 시작 시각 = 그 결제의 settled_at(가상 시각). 위치는 P 의 함수.
 import { dockDoor, setShutter } from '../c3d/models.js';
 import { loadTrucks, truck, TRUCK_LEN } from '../c3d/kenney.js';
-import { S, speedNow } from './data.js';
+import { S } from './data.js';
 import { CLEARING_DOCKS, byId, nodes, mk, at, head, lerpA, ease, clamp01, AISLE_X } from './layout.js';
 
 const RUN_MS = 10000;      // 한 번의 실시간
 // 트럭 k 의 일정(실시간 초): 출발 · 동네 도착 · 동네 출발 · 도크 도착
-const PLAN = [[.6, 4.0, 5.4, 8.8], [1.1, 4.5, 5.9, 9.3]];
+const PLAN = [[.6, 4.0, 5.4, 8.8], [1.1, 4.5, 5.9, 9.2]]; // 돌아와 셔터가 다 열린 뒤(≤9.6) 마지막 0.4초에 닫힌다
 const STOP_Z = [22.4, 18.8]; // 동네 안 길(x 12~14.4)에 한 대씩 앞뒤로 선다
 const SHUT_S = .4;           // 셔터가 여닫히는 시간(초)
 const SOUTH_Y = 27.9;        // 결제원 남쪽 길
@@ -31,19 +31,16 @@ export function createTrucks(parent) {
     docks.forEach(d => { d.obj = truck('truck'); d.obj.visible = false; parent.add(d.obj); });
   }, e => console.error('[s3d] truck load failed', e));
 
-  const seen = new Set(), runs = [];
-  let inited = false, shown = { visible: 0, shutter: docks.map(() => 0) };
+  const runs = [];
+  let total = 0, lastEnd = -Infinity, shown = { visible: 0, shutter: docks.map(() => 0) };
 
+  // data.js 가 재생 시각이 market_time 을 지난 결제만 넘긴다. 앞 run 이 안 끝났으면 끝난 뒤 출발(대기열).
   function watch(P) {
-    if (!S.ok) return;
-    S.settlements.forEach(s => {
-      if (s.status !== 'settled' || seen.has(s.settle_date)) return;
-      seen.add(s.settle_date);
-      if (!inited) return; // 처음 받은 목록은 이미 지난 일이다
-      const t0 = s.settled_at ? Date.parse(s.settled_at) : P;
-      runs.push({ date: s.settle_date, t0: isNaN(t0) ? P : t0, dur: RUN_MS * speedNow() });
+    S.runs.splice(0).forEach(e => {
+      const t0 = Math.max(e.t0 == null ? P : e.t0, lastEnd), dur = RUN_MS * (e.speed > 0 ? e.speed : 1);
+      runs.push({ date: e.date, t0, dur });
+      lastEnd = t0 + dur; total++;
     });
-    inited = true;
   }
 
   // sec(실시간 초)에서 트럭 k 의 자세와 셔터 값
@@ -59,14 +56,15 @@ export function createTrucks(parent) {
       h = lerpA(lerpA(0, head(back, s, 1.6), ease(clamp01(s / 1.5))), 0, ease(clamp01((s - (back.len - ll)) / ll))); // 동네에서 돌아서고, 도크에서 후미를 문 쪽으로
       shut = 0;
     } else { p = back.pts.at(-1); h = 0; shut = clamp01((sec - b1) / SHUT_S); }
+    // 시작에 0.4초 열리고, 끝에서 0.4초에 걸쳐 닫힌다(한 프레임에 닫히지 않는다)
+    shut = Math.min(shut, clamp01(sec / SHUT_S), clamp01((RUN_MS / 1000 - sec) / SHUT_S));
     return { p, h, shut };
   }
 
   function tick(P) {
     if (P == null) return;
     watch(P);
-    let run = null;
-    runs.forEach(r => { const u = (P - r.t0) / r.dur; if (u >= 0 && u <= 1 && (!run || r.t0 > run.t0)) run = r; });
+    const run = runs.find(r => { const u = (P - r.t0) / r.dur; return u >= 0 && u <= 1; }) || null; // run 은 겹치지 않는다
     while (runs.length > 8 && (P - runs[0].t0) / runs[0].dur > 1) runs.shift();
     let visible = 0;
     docks.forEach((d, k) => {
@@ -83,5 +81,5 @@ export function createTrucks(parent) {
     shown = { visible, shutter: docks.map(d => Math.round(d.v * 100) / 100) };
   }
 
-  return { tick, state: () => ({ ...shown, runs: seen.size }) };
+  return { tick, state: () => ({ ...shown, runs: total }) };
 }

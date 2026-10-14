@@ -1,8 +1,8 @@
-// 건물: 흰 벽 #F8FAFC + 네이비 띠 #1E3A5F. 증권사는 높은 사무동, 거래소 · 결제원은 지붕 없는 상자(안이 보인다), 집은 몸통 + 회색 지붕 InstancedMesh.
+// 건물: 흰 벽 #F8FAFC + 네이비 띠 #1E3A5F. 증권사는 높은 사무동, 거래소 · 결제원은 지붕 없는 상자(안이 보인다), 집은 몸통 + 회청색 지붕 + 문 띠 InstancedMesh, 빈 자리에는 나무.
 import * as THREE from 'three';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { mat, boxGeo } from '../c3d/models.js';
-import { BUILDINGS, OPEN_WALL, NAVY, WALL, HOUSES, HOUSE, NEIGHBOR, BOARD } from './layout.js';
+import { BUILDINGS, OPEN_WALL, NAVY, WALL, HOUSES, HOUSE, LOTS, NEIGHBOR, BOARD } from './layout.js';
 
 const wall = mat(WALL, .9), band = mat(NAVY, .7);
 
@@ -45,21 +45,38 @@ function building(b) {
   return g;
 }
 
-// 집 40채: 몸통 · 지붕 · 띠 각각 InstancedMesh 하나(집마다 메시를 따로 만들지 않는다)
+// 집 40채: 몸통 #F3F4F6 · 지붕 #8A96A3 · 남쪽 면 문 자리(어두운 띠) 각각 InstancedMesh 하나(집마다 메시를 따로 만들지 않는다)
 function houses() {
   const n = HOUSES.length, { w, d, h } = HOUSE;
-  const body = new THREE.InstancedMesh(boxGeo(w, h, d), wall, n);
-  const roofGeo = new THREE.ConeGeometry(.98, .55, 4).rotateY(Math.PI / 4);
-  const roof = new THREE.InstancedMesh(roofGeo, mat(0x9CA3AF, .9), n);
-  const stripe = new THREE.InstancedMesh(boxGeo(w + .04, .1, d + .04), band, n);
+  const body = new THREE.InstancedMesh(boxGeo(w, h, d), mat(0xF3F4F6, .9), n);
+  const roofGeo = new THREE.ConeGeometry(.8, .5, 4).rotateY(Math.PI / 4);
+  const roof = new THREE.InstancedMesh(roofGeo, mat(0x8A96A3, .9), n);
+  const door = new THREE.InstancedMesh(boxGeo(.34, .5, .05), mat(0x3B4252, .8), n);
   const o = new THREE.Object3D();
   HOUSES.forEach((hs, i) => {
     o.position.set(hs.x, .06 + h / 2, hs.z); o.updateMatrix(); body.setMatrixAt(i, o.matrix);
-    o.position.set(hs.x, .06 + h * .55, hs.z); o.updateMatrix(); stripe.setMatrixAt(i, o.matrix);
-    o.position.set(hs.x, .06 + h + .27, hs.z); o.updateMatrix(); roof.setMatrixAt(i, o.matrix);
+    o.position.set(hs.x, .06 + .25, hs.z + d / 2 + .02); o.updateMatrix(); door.setMatrixAt(i, o.matrix);
+    o.position.set(hs.x, .06 + h + .25, hs.z); o.updateMatrix(); roof.setMatrixAt(i, o.matrix);
   });
-  for (const m of [body, roof, stripe]) { m.castShadow = m.receiveShadow = true; m.name = 'houses'; }
-  return [body, stripe, roof];
+  for (const m of [body, roof, door]) { m.castShadow = m.receiveShadow = true; m.name = 'houses'; }
+  return [body, door, roof];
+}
+
+// 빈 qc · util 자리의 나무: 줄기 · 잎 각각 낮은 분할 InstancedMesh 하나. 크기는 인덱스로만 달라진다(결정적).
+function trees() {
+  const pts = [];
+  LOTS.forEach(l => { for (let j = 0; j < l.nz; j++) for (let i = 0; i < l.nx; i++) pts.push([l.x + i * l.dx, l.z + j * l.dz]); });
+  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(.07, .09, .6, 5), mat(0x8B6F47, .9), pts.length);
+  const crown = new THREE.InstancedMesh(new THREE.ConeGeometry(.42, 1.1, 6), mat(0x4E8F5F, .9), pts.length);
+  const o = new THREE.Object3D();
+  pts.forEach(([x, z], i) => {
+    const s = .8 + ((i * 7) % 5) * .08;
+    o.scale.setScalar(s);
+    o.position.set(x, .06 + .3 * s, z); o.updateMatrix(); trunk.setMatrixAt(i, o.matrix);
+    o.position.set(x, .06 + (.6 + .5) * s, z); o.updateMatrix(); crown.setMatrixAt(i, o.matrix);
+  });
+  for (const m of [trunk, crown]) { m.castShadow = true; m.name = 'trees'; }
+  return [trunk, crown];
 }
 
 export function createBuildings() {
@@ -67,6 +84,7 @@ export function createBuildings() {
   group.name = 'buildings';
   BUILDINGS.forEach(b => group.add(building(b)));
   houses().forEach(m => group.add(m));
+  trees().forEach(m => group.add(m));
   return group;
 }
 

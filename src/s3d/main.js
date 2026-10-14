@@ -6,7 +6,7 @@ import { createScene, fitCampus } from '../c3d/scene.js';
 import { createGround } from '../c3d/ground.js';
 import { CENTER } from './layout.js';
 import { createBuildings, createLabels } from './buildings.js';
-import { initData, startPolling, playTime, isFrozen, S } from './data.js';
+import { initData, startPolling, apply, advance, playTime, isFrozen, S } from './data.js';
 import { createFlow } from './flow.js';
 import { createPiles } from './piles.js';
 import { createTrucks } from './trucks.js';
@@ -44,6 +44,7 @@ const flow = createFlow(street), piles = createPiles(street), trucks = createTru
 
 function frame() {
   const P = playTime(clock.now());
+  advance(P); // 쌓아 둔 board · settlements 중 재생 시각이 지난 것을 먼저 적용한다
   flow.tick(P); piles.tick(); trucks.tick(P); board.tick();
   controls.update();
   renderer.render(scene, camera);
@@ -66,24 +67,26 @@ function countTriangles() {
 }
 
 const iso = ms => (ms == null ? null : new Date(ms).toISOString());
-// 루미 검증용: {playback, phase, tokens:{order,reject,exec}, piles:{종목 코드: 상자 수}, trucks, triangles}
+// 루미 검증용: {playback(ISO), frozen, running, board_time(ISO), phase, tokens:{order,reject,exec}, piles:{종목 코드: 상자 수}, trucks, triangles}
 const state = () => {
   const P = playTime(clock.now());
   return {
-    playback: { time: iso(P), frozen: isFrozen(), running: P != null && !isFrozen() },
+    playback: iso(P), frozen: isFrozen(), running: P != null && !isFrozen(),
+    board_time: iso(S.boardTime),
     phase: S.clock ? S.clock.phase : null,
     tokens: flow.state(), piles: piles.state(), trucks: trucks.state(), triangles: countTriangles(),
   };
 };
 
-startPolling();
-if (capture) {
+if (capture) { // 실시간 폴링 없음: 기록한 응답을 feed 로 그 순간의 화면 시계에 넣는다
   window.__s3d = {
     step(ms = 16) { clock.advance(ms); frame(); return clock.now(); },
+    feed(body) { apply(body, clock.now()); frame(); },
     now: () => clock.now(), scene, camera, state,
   };
   frame();
 } else {
+  startPolling();
   window.__s3d = { now: () => clock.now(), state };
   (function loop() {
     requestAnimationFrame(loop);

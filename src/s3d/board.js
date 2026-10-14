@@ -48,8 +48,8 @@ export function createBoard(parent) {
       g.font = '600 34px Pretendard, sans-serif';
       g.fillText(v.rate, 790, mid);
       g.font = '500 24px Pretendard, sans-serif';
-      g.fillStyle = DOWN; g.fillText('매수 ' + v.buy, W - 24, mid - 18);
-      g.fillStyle = UP; g.fillText('매도 ' + v.sell, W - 24, mid + 18);
+      g.fillStyle = UP; g.fillText('매수 ' + v.buy, W - 24, mid - 18);   // 한국 관례: 매수 빨강 · 매도 파랑
+      g.fillStyle = DOWN; g.fillText('매도 ' + v.sell, W - 24, mid + 18);
     });
     tex.needsUpdate = true;
   }

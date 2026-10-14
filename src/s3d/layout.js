@@ -36,7 +36,9 @@ export const HOUSE_N = 40;
 const COLS = [6.4, 8.25, 10.1, 15.1, 16.95, 18.8, 20.65, 22.5];
 const ROW_Z = [17.4, 19.5, 21.6, 23.7, 25.8];
 export const HOUSES = Array.from({ length: HOUSE_N }, (_, i) => ({ i, x: COLS[i % 8], z: ROW_Z[Math.floor(i / 8)] }));
-export const HOUSE = { w: 1.3, d: 1.3, h: .9 };
+export const HOUSE = { w: 1.1, d: 1.1, h: .9 }; // 열 사이 틈 0.75 — 지름 0.7 원판이 지나간다
+// 비운 건물 자리(공장 util · qc): 나무를 심는다. 도로(z 26.5 · 27.9)를 피해 qc 는 북쪽 띠만 쓴다.
+export const LOTS = [{ x: 37.6, z: 2.7, nx: 4, nz: 4, dx: 1.1, dz: 1.1 }, { x: 28.8, z: 24.2, nx: 5, nz: 2, dx: 1.1, dz: 0.9 }];
 export const DOOR_GAP = 1.05; // 집 앞 골목: 집 중심에서 북쪽으로 이만큼
 export const NEIGHBOR = { x: HALL.x, y: HALL.y, w: HALL.w, d: HALL.d, cx: HALL.x + HALL.w / 2, cz: HALL.y + HALL.d / 2 };
 
