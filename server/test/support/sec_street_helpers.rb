@@ -15,6 +15,10 @@ module SecStreetHelpers
     Securities::Clock.market_time(@street_now, started_at: STARTED, first_day: DAY)
   end
 
+  def market_at(real)
+    Securities::Clock.market_time(real, started_at: STARTED, first_day: DAY)
+  end
+
   def street(params = {}, headers = {})
     get API, params: params, headers: headers
     response.parsed_body

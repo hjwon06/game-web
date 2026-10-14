@@ -6,6 +6,7 @@ module Api
     class_attribute :state_path, default: Securities::Sim::Config::STATE_PATH
     class_attribute :now_source, default: -> { Time.current }
     class_attribute :cache_store, default: nil # nil 이면 Rails.cache
+    class_attribute :reconcile_source, default: nil # nil 이면 Reconcile.call(테스트가 예외 주입)
 
     rescue_from Securities::StreetRead::BadCursor do |error|
       render json: { error: "bad_cursor", param: error.param }, status: :bad_request
@@ -13,7 +14,9 @@ module Api
 
     def show
       now = now_source.call
-      read = Securities::StreetRead.new(state_path: state_path, now: now, cache: cache_store || Rails.cache)
+      options = { state_path: state_path, now: now, cache: cache_store || Rails.cache }
+      options[:reconcile] = reconcile_source if reconcile_source
+      read = Securities::StreetRead.new(**options)
       payload = read.call(after_seq: params[:after_seq], after_exec: params[:after_exec])
       return unless stale?(etag: Digest::SHA1.hexdigest(JSON.generate(payload)))
 

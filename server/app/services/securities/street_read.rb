@@ -10,7 +10,7 @@ module Securities
   class StreetRead
     WINDOW_SECONDS = 120 # 커서가 없을 때 가상 지금에서 거슬러 올라가는 폭
     PAGE_LIMIT = 300
-    STALE_SECONDS = 60 # 가상 지금 − cursor 가 이보다 크면 데몬이 멈춘 것으로 본다
+    STALE_REAL_SECONDS = 15 # cursor 가 "실시간 지금 − 이 초"의 가상 시각보다 앞서 있으면 데몬이 멈춘 것으로 본다(배속과 무관)
     SETTLEMENT_COUNT = 3
     RECONCILE_TTL = 10.seconds
     RECONCILE_RACE_TTL = 5.seconds
@@ -30,10 +30,11 @@ module Securities
 
     Snapshot = Struct.new(:market_time, :phase, :trade_date, :speed_now, :cursor, :stale)
 
-    def initialize(state_path:, now:, cache:)
+    def initialize(state_path:, now:, cache:, reconcile: Reconcile.method(:call))
       @state_path = Pathname(state_path)
       @now = now
       @cache = cache
+      @reconcile = reconcile
     end
 
     def call(after_seq: nil, after_exec: nil)
@@ -80,9 +81,20 @@ module Securities
       ahead = Clock.market_time(real + 1, started_at: started, first_day: first)
       cursor = parse_state_cursor(state)
       Snapshot.new(market, Phase.at(market), trade_date_of(market), speed_of(ahead.to_r - market.to_r), cursor,
-                   cursor.nil? || (market.to_r - cursor.to_r) > STALE_SECONDS)
+                   stale?(cursor, started, first))
     rescue ArgumentError, Calendar::Missing # 시계가 시작 전이거나 달력이 모자라다 = 시계를 읽을 수 없다
       nil
+    end
+
+    # 실시간 기준이다. 가상 초로 재면 배속(장중 12 · 밤 약 204)에 따라 같은 지연이 다르게 보인다.
+    # 지금 − 15초가 시작 전이면(막 켬) cursor 가 있는 한 멈춘 것으로 보지 않는다.
+    def stale?(cursor, started, first)
+      return true if cursor.nil?
+
+      limit = @now - STALE_REAL_SECONDS
+      return false if limit < started
+
+      cursor.to_r < Clock.market_time(limit, started_at: started, first_day: first).to_r
     end
 
     def parse_state_cursor(state)
@@ -242,8 +254,11 @@ module Securities
 
       @cache.fetch("securities:street:reconcile:#{day.iso8601}", expires_in: RECONCILE_TTL,
                                                                   race_condition_ttl: RECONCILE_RACE_TTL) do
-        Reconcile.call(as_of: day).size
+        @reconcile.call(as_of: day).size
       end
+    rescue StandardError => e # 대사 하나가 응답 전체를 죽이지 않게. 블록이 예외를 내면 캐시에는 아무것도 안 남는다
+      Rails.logger.warn("[street] reconcile 실패: #{e.class}: #{e.message}")
+      nil
     end
   end
 end

@@ -5,7 +5,7 @@ require_relative "../../support/sec_street_helpers"
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
 # 거리 읽기 API. 시계는 주입한다: 실시간 = STARTED + k 초, 가상 = 11-02 08:30 + 12k 초(장중). k = 465 → 가상 10:03:00.
-# 변이 검사: stale 부등호 → T2 60초 경계 · 직전 영업일 → T2 08:10 · 열린 상태 목록 → T3 board · ETag 에 server_time → T5.
+# 변이 검사: stale 부등호 <= → T2 15초 경계 · 15 → 1500 → T2 장중 · reconcile rescue → T3 reconcile 예외 · 직전 영업일 → T2 08:10 · 열린 상태 목록 → T3 board · ETag 에 server_time → T5.
 class SecStreetControllerTest < ActionDispatch::IntegrationTest
   include SecStreetHelpers
 
@@ -46,17 +46,55 @@ class SecStreetControllerTest < ActionDispatch::IntegrationTest
     assert_equal({ "orders" => 0, "executions" => 0, "value" => 0, "rejected" => rejected, "cancelled" => 0 }, body["today"])
   end
 
-  test "T2 장중: continuous · speed_now 12 · 거래일 · cursor. stale 는 60초 초과부터(60초 아님 · 61초 · cursor 없음)" do
+  test "T2 장중: continuous · speed_now 12 · 거래일 · cursor. stale 는 실시간 15초 기준(정확히 15초 아님 · 1초(가상) 앞 · cursor 없음)" do
     write_state(cursor: market_now - 30)
     clock = street["clock"]
     assert_equal ["2026-11-02T10:03:00.000+09:00", "continuous", 12, "2026-11-02", "2026-11-02T10:02:30.000+09:00", false],
                  clock.values_at("market_time", "phase", "speed_now", "trade_date", "cursor", "stale")
-    write_state(cursor: market_now - 60)
+    limit = market_at(@street_now - 15) # 가상 09:57:00
+    write_state(cursor: limit)
     assert_equal false, street["clock"]["stale"]
-    write_state(cursor: market_now - 61)
+    write_state(cursor: limit - 1)
     assert_equal true, street["clock"]["stale"]
+    write_state(cursor: market_now - 12) # 실시간 1초 뒤
+    assert_equal false, street["clock"]["stale"]
     write_state
     assert_equal [nil, true], street["clock"].values_at("cursor", "stale")
+  end
+
+  test "T2 밤(약 204배속): cursor 가 실시간 1초 뒤(가상 약 204초)여도 stale 가 아니고, 실시간 16초 뒤면 stale 다" do
+    @street_now = STARTED + 2100 + Rational(300 * 60_000, 61_200) # 가상 11-03 08:10, 마감 뒤 밤
+    write_state(cursor: market_at(@street_now - 1))
+    clock = street["clock"]
+    assert_operator clock["speed_now"], :>, 200
+    assert_equal false, clock["stale"]
+    write_state(cursor: market_at(@street_now - 16))
+    assert_equal true, street["clock"]["stale"]
+  end
+
+  test "T2 막 켬: 지금 − 15초가 시작 전이면 cursor 가 있는 한 stale 가 아니다(cursor 없음은 stale)" do
+    @street_now = STARTED + 10
+    write_state(cursor: market_at(STARTED))
+    assert_equal false, street["clock"]["stale"]
+    write_state
+    assert_equal true, street["clock"]["stale"]
+  end
+
+  test "T3 reconcile 이 예외를 내면 200 이고 reconcile 은 null, 나머지는 그대로이며 캐시에 남지 않는다" do
+    build_day
+    calls = 0
+    Api::SecStreetController.reconcile_source = ->(**) { (calls += 1) == 1 ? raise("대사 깨짐") : [] }
+    body = street
+
+    assert_response :ok
+    assert_nil body["reconcile"]
+    assert_equal KEYS.sort, body.keys.sort
+    assert_equal %w[VELEC VBIO VBANK VCONS VGAME], body["board"].map { |r| r["code"] }
+    assert_equal 12, body["today"]["orders"]
+    assert_equal 0, street["reconcile"] # (주입이 [] 를 돌려준다) 실패가 캐시되지 않아 다음 요청이 다시 계산한다
+    assert_equal 2, calls
+  ensure
+    Api::SecStreetController.reconcile_source = nil
   end
 
   test "T2 08:30 전과 휴장일은 직전 영업일이다(가상 08:10 · 08:30 정각 · 토요일 정오)" do
