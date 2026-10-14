@@ -28,10 +28,20 @@ const md = iso => { // 'YYYY-MM-DD' → '11월 2일 월'
   return `${+m[2]}월 ${+m[3]}일 ${WD[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()]}`;
 };
 
+// 단계는 재생 시각으로 정한다(서버 clock.phase 는 재생보다 실시간 6초 앞선다). 시각 기준은 Phase 표와 같다:
+// 08:30 장전 단일가 · 09:00 장중 · 15:20 종가 단일가 · 15:30 장 마감. 재생 날짜가 거래일(clock.trade_date)이 아니면 휴장.
+export function phaseAt(P, tradeDate) {
+  if (P == null) return null;
+  const t = kst(P);
+  if (tradeDate && `${t.y}-${p2(t.mo)}-${p2(t.d)}` !== String(tradeDate).slice(0, 10)) return 'closed';
+  const m = t.h * 60 + t.mi;
+  return m < 8 * 60 + 30 ? 'closed' : m < 9 * 60 ? 'pre_open' : m < 15 * 60 + 20 ? 'continuous' : m < 15 * 60 + 30 ? 'closing' : 'closed';
+}
+
 // P: 재생 시각(시장 ms | null), real: 실제 시각(ms)
 export function model(P, real) {
   const sh = S.shown, c = sh.clock, t = P == null ? null : kst(P);
-  const phase = c ? c.phase : null;
+  const phase = phaseAt(P, c && c.trade_date);
   const stopped = S.ok && (!S.clock || !!S.clock.stale || isFrozen());
   const hm = t ? `${p2(t.h)}:${p2(t.mi)}` : '--:--';
   const rows = STOCKS.map(s => {
@@ -50,7 +60,7 @@ export function model(P, real) {
   return {
     ok: S.ok, stopped, conn: S.err, stage: phase ? PHASE_LABEL[phase] || phase : null, phase,
     seg: phase ? SEG_OF[phase] : null,
-    mark: t ? (((t.h * 60 + t.mi + t.s / 60 - START_MIN) % DAY_MIN) + DAY_MIN) % DAY_MIN / DAY_MIN : 0,
+    mark: !t ? null : (((t.h * 60 + t.mi + t.s / 60 - START_MIN) % DAY_MIN) + DAY_MIN) % DAY_MIN / DAY_MIN,
     hm, sec: t ? p2(t.s) : '--',
     date: md(c && c.trade_date) || (t ? `${t.mo}월 ${t.d}일 ${t.wd}` : '–'),
     next: phase ? NEXT[phase] || '–' : '–',

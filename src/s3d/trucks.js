@@ -7,7 +7,8 @@ import { CLEARING_DOCKS, byId, nodes, mk, at, head, lerpA, ease, clamp01, AISLE_
 
 const RUN_MS = 10000;      // 한 번의 실시간
 // 트럭 k 의 일정(실시간 초): 출발 · 동네 도착 · 동네 출발 · 도크 도착
-const PLAN = [[.6, 4.0, 5.4, 8.8], [1.1, 4.5, 5.9, 9.2]]; // 돌아와 셔터가 다 열린 뒤(≤9.6) 마지막 0.4초에 닫힌다
+// 셔터: 0~0.4 열림 → 다 열림 → 출발 0.4초 전부터 닫힘 / 도착 후 0.4초 열림 → 다 열림 → 9.6~10 닫힘. 구간이 겹치지 않고 다 열림이 구간마다 0.4초 이상.
+const PLAN = [[1.4, 4.0, 5.2, 8.4], [1.6, 4.4, 5.6, 8.8]];
 const STOP_Z = [22.4, 18.8]; // 동네 안 길(x 12~14.4)에 한 대씩 앞뒤로 선다
 const SHUT_S = .4;           // 셔터가 여닫히는 시간(초)
 const SOUTH_Y = 27.9;        // 결제원 남쪽 길
@@ -47,7 +48,7 @@ export function createTrucks(parent) {
   function pose(d, k, sec) {
     const [o0, o1, b0, b1] = PLAN[k], { out, back } = d;
     let p, h, shut;
-    if (sec < o0) { p = out.pts[0]; h = 0; shut = 1 - clamp01((sec - (o0 - SHUT_S)) / SHUT_S); }
+    if (sec < o0) { p = out.pts[0]; h = 0; shut = Math.min(clamp01(sec / SHUT_S), 1 - clamp01((sec - (o0 - SHUT_S)) / SHUT_S)); }
     else if (sec < o1) { const s = (sec - o0) / (o1 - o0) * out.len; p = at(out, s); h = head(out, s, 1.6); shut = 0; }
     else if (sec < b0) { p = out.pts[out.pts.length - 1]; h = 0; shut = 0; }
     else if (sec < b1) {
@@ -55,9 +56,7 @@ export function createTrucks(parent) {
       p = at(back, s);
       h = lerpA(lerpA(0, head(back, s, 1.6), ease(clamp01(s / 1.5))), 0, ease(clamp01((s - (back.len - ll)) / ll))); // 동네에서 돌아서고, 도크에서 후미를 문 쪽으로
       shut = 0;
-    } else { p = back.pts.at(-1); h = 0; shut = clamp01((sec - b1) / SHUT_S); }
-    // 시작에 0.4초 열리고, 끝에서 0.4초에 걸쳐 닫힌다(한 프레임에 닫히지 않는다)
-    shut = Math.min(shut, clamp01(sec / SHUT_S), clamp01((RUN_MS / 1000 - sec) / SHUT_S));
+    } else { p = back.pts.at(-1); h = 0; shut = Math.min(clamp01((sec - b1) / SHUT_S), clamp01((RUN_MS / 1000 - sec) / SHUT_S)); }
     return { p, h, shut };
   }
 

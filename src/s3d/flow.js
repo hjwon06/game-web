@@ -12,11 +12,12 @@ const CAP = 240;           // InstancedMesh 마다 최대 토큰 수. 넘치면 
 const FLOOR = .06;
 const LIFT = .5;           // 바닥에서 띄운 높이(토큰 2배 크기에 맞춰)
 
-// 집 → 집 열 사이 통로(길 쪽 옆 틈) → 북쪽 골목 → 가운데 길 → 도로(j3) → 증권사. 지붕 · 벽을 지나지 않는다.
+// 집 남쪽 문 앞 → 집 열 사이 통로(길 쪽 옆 틈) → 북쪽 골목 → 가운데 길 → 도로(j3) → 증권사. 지붕 · 벽을 지나지 않는다.
 function toBroker(house) {
   const h = HOUSES[((house % HOUSE_N) + HOUSE_N) % HOUSE_N], gz = h.z - DOOR_GAP;
   const gx = h.x + (AISLE_X > h.x ? 1 : -1) * (HOUSE.w / 2 + .375); // 옆 틈의 가운데
-  return [[gx, h.z], [gx, gz], [AISLE_X, gz], [AISLE_X, 15], [AISLE_X, 12.5], ...nodes('j3', 'office')];
+  const dz = h.z + HOUSE.d / 2 + .2; // 문(남쪽 면) 앞 골목
+  return [[h.x, dz], [gx, dz], [gx, gz], [AISLE_X, gz], [AISLE_X, 15], [AISLE_X, 12.5], ...nodes('j3', 'office')];
 }
 // 증권사 → 거래소 출입구 → 종목 칸 앞
 function toExchange(stock) {

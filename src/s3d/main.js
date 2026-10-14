@@ -12,6 +12,7 @@ import { createPiles } from './piles.js';
 import { createTrucks } from './trucks.js';
 import { createBoard } from './board.js';
 import { createUi } from './ui_index.js';
+import { phaseAt } from './ui.js';
 
 const capture = new URLSearchParams(location.search).get('capture') === '1';
 const canvas = document.getElementById('s3d');
@@ -76,7 +77,7 @@ const state = () => {
   return {
     playback: iso(P), frozen: isFrozen(), running: P != null && !isFrozen(),
     board_time: iso(S.boardTime),
-    phase: S.clock ? S.clock.phase : null,
+    phase: phaseAt(P, S.shown.clock && S.shown.clock.trade_date),
     tokens: flow.state(), piles: piles.state(), trucks: trucks.state(), triangles: countTriangles(),
   };
 };

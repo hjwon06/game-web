@@ -15,7 +15,7 @@ canvas#s3d{position:fixed;inset:0;width:100%;height:100%;display:block;touch-act
 #ui>*{pointer-events:auto}
 .s3d-label{font:600 12px/1 Pretendard,sans-serif;color:#1A1A2E;background:#FFF;border:1px solid #E5E7EB;border-radius:4px;padding:3px 6px;white-space:nowrap}
 /* 화면 카드(src/s3d/ui*.js). 네이비는 로고 글자 · 단계 칩 · 시간표 띠의 지금 구간 세 곳뿐이다 */
-#ui{pointer-events:none}
+.u-mark[hidden]{display:none}
 .u-num{font-family:Outfit,Pretendard,sans-serif;font-variant-numeric:tabular-nums}
 .u-lab{font-size:12px;font-weight:500;color:#6B7280;font-style:normal}
 .u-card{position:fixed;background:#FFF;border:1px solid #E5E7EB;border-radius:14px;box-shadow:none;padding:16px;pointer-events:auto;font-size:14px}
@@ -69,7 +69,11 @@ canvas#s3d{position:fixed;inset:0;width:100%;height:100%;display:block;touch-act
   .u-sub,.u-real,.u-top.is-stopped .u-stage{display:none}
   .u-long{display:none}
   .u-timecard{left:8px;right:8px;top:60px;width:auto;padding:12px}
-  .u-hm{font-size:56px}
+  .u-timecard{gap:2px}
+  .u-hm{font-size:96px}
+  .u-sec{font-size:20px}
+  .u-next{font-size:12px}
+  .u-speed,.u-legend{display:none}
   .u-bottom{position:fixed;left:8px;right:8px;bottom:8px;display:flex;flex-direction:column;gap:8px;pointer-events:none}
   .u-bottom>*{position:static;width:auto;pointer-events:auto}
   .u-board{padding:8px 12px}

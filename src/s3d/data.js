@@ -66,7 +66,7 @@ function applyClock(c, now) {
 
 // ---- 쌓아 둔 스냅샷(board · settlements)을 재생 시각에 맞춰 적용 ----
 const queue = [], seenSettle = new Set();
-let settleInit = false, shownOnce = false;
+let settleInit = false, shownOnce = false, lastMt = null; // lastMt: 마지막으로 아는 market_time(ms)
 
 function show(q, P) {
   if (q.sig !== S.boardSig) { S.boardSig = q.sig; S.board = q.board; S.ver++; }
@@ -97,10 +97,12 @@ export function apply(body, now = clockNow()) {
   if (typeof body.last_exec === 'number') S.exec = Math.max(S.exec == null ? 0 : S.exec, body.last_exec);
   const sig = JSON.stringify(body.board.map(r => [r.code, r.last_price, r.change, r.open_buy_qty, r.open_sell_qty, r.open_orders]));
   const cmt = body.clock && !body.clock.stale ? ms(body.clock.market_time) : null;
-  const snap = { mt: cmt != null ? cmt : (queue.length ? queue[queue.length - 1].mt : -Infinity), speed: speedNow(),
+  if (cmt != null) lastMt = cmt;
+  // stale · clock null 응답은 마지막으로 아는 market_time 에 붙인다(−Infinity 로 대기열을 건너뛰지 않는다)
+  const snap = { mt: lastMt != null ? lastMt : NaN, speed: speedNow(),
     board: body.board, sig, settlements: Array.isArray(body.settlements) ? body.settlements : [],
     clock: body.clock || null, today: body.today || null, reconcile: body.reconcile == null ? null : body.reconcile };
-  if (!shownOnce) show(snap, null); // 첫 응답은 맞출 이전 상태가 없다: 바로 보인다
+  if (!shownOnce || lastMt == null) show(snap, null); // 첫 응답 · 시각을 한 번도 모르는 응답은 맞출 기준이 없다: 바로 보인다
   else { queue.push(snap); if (queue.length > QUEUE_MAX) queue.splice(0, queue.length - QUEUE_MAX).forEach(q => show(q, null)); }
   S.ok = true;
 }

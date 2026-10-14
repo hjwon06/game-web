@@ -82,10 +82,17 @@ export function buildDom(root) {
   Object.values(rows).forEach(c => Object.values(c).forEach(e => { if (e.classList.contains('u-num')) e.classList.add('u-fl'); }));
   k.todaycard.querySelectorAll('.u-num').forEach(e => e.classList.add('u-fl'));
 
+  let stoppedHm = null;
   function render(m) {
     show(k.stage, !!m.stage); if (m.stage) plain(k.stage, m.stage);
     show(k.stopped, m.stopped);
-    if (m.stopped) k.stopped.innerHTML = `<span class="u-long">시뮬레이터 </span>멈춤 · 마지막 <span class="u-long">가상 시각 </span>${m.hm}`;
+    if (m.stopped && stoppedHm !== m.hm) { // 내용이 바뀔 때만 다시 쓴다
+      stoppedHm = m.hm;
+      k.stopped.replaceChildren(...[['시뮬레이터 ', 'u-long'], ['멈춤 · 마지막 ', null], ['가상 시각 ', 'u-long'], [m.hm, null]].map(([t, c]) => {
+        if (!c) return document.createTextNode(t);
+        const s = document.createElement('span'); s.className = c; s.textContent = t; return s;
+      }));
+    }
     show(k.conn, m.conn);
     k.top.classList.toggle('is-stopped', m.stopped);
     plain(k.real, m.real);
@@ -94,7 +101,8 @@ export function buildDom(root) {
     plain(k.hm, m.hm); plain(k.sec, ':' + m.sec); plain(k.date, m.date); plain(k.next, m.next);
     plain(k.speed, `실제 1초 = 가상 ${m.speed}초`);
     barSegs.forEach((s, i) => s.classList.toggle('on', i === m.seg));
-    k.mark.style.left = (m.mark * 100).toFixed(3) + '%';
+    show(k.mark, m.mark != null);
+    if (m.mark != null) k.mark.style.left = (m.mark * 100).toFixed(3) + '%';
 
     m.rows.forEach(r => {
       const c = rows[r.code];
