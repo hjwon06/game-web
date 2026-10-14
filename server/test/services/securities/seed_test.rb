@@ -66,6 +66,24 @@ class Securities::SeedTest < ActiveSupport::TestCase
     assert held.all? { |n| n <= 3 }
   end
 
+  test "종목 보유는 금액 기준이다: 보유마다 수량 × 기준가가 100만~2천만 원 안이고 종목끼리 금액이 맞다" do
+    prices = Securities::Seed::EQUITIES.to_h { |code, _, price| [code, price] }
+    min = Securities::Seed::HOLD_VALUE_MIN
+    max = Securities::Seed::HOLD_VALUE_MAX
+    stocks = Securities::Seed.plan(seed: 42)[:positions].reject { |p| p[:asset_code] == Securities::Asset::CASH_CODE }
+
+    assert_operator stocks.size, :>, 100
+    stocks.each do |p|
+      price = prices.fetch(p[:asset_code])
+      assert_operator p[:qty] * price, :<=, max, "#{p[:account_code]} #{p[:asset_code]} 보유 금액이 상한을 넘는다"
+      assert_operator (p[:qty] + 1) * price, :>, min, "#{p[:account_code]} #{p[:asset_code]} 보유 금액이 하한에 못 미친다"
+    end
+
+    totals = stocks.group_by { |p| p[:asset_code] }.transform_values { |v| v.sum { |p| p[:qty] * prices.fetch(p[:asset_code]) } }
+    assert_equal prices.keys.sort, totals.keys.sort
+    assert_operator totals.values.max.to_f / totals.values.min, :<, 5
+  end
+
   test "거래일 30일은 2026-11-02 부터이고 토 · 일만 휴장이다" do
     Securities::Seed.run!(seed: 42)
     days = Securities::MarketDay.order(:trade_date).to_a

@@ -5,6 +5,10 @@
 #
 # 개시 잔고는 원장으로 만든다: 예탁 → 투자자 항목이 개시 settlement(2026-10-30, settled)에 묶이고
 # positions 는 그 합이다. 예탁은 출처라 positions 행이 없다.
+#
+# 종목 보유는 수량이 아니라 금액(100만~2천만 원, 10만 원 단위)을 뽑아 기준가로 나눈 몫이다(최소 1주).
+# 수량을 뽑으면 싼 종목은 주문 금액(50만~500만 원)에 비해 파는 물량이 금방 바닥나기 때문이다.
+# 시뮬레이터 규칙: 매도 의도는 이 보유 수량을 넘지 못하므로(Sim::Intents), 종목끼리 보유 금액이 맞아야 매도 쪽이 마르지 않는다.
 module Securities
   module Seed
     DEFAULT_SEED = 42
@@ -21,7 +25,10 @@ module Securities
     CASH_MAX = 100_000_000
     CASH_STEP = 100_000
     MAX_HOLDINGS = 3
-    MAX_HOLD_QTY = 100
+    HOLD_VALUE_MIN = 1_000_000
+    HOLD_VALUE_MAX = 20_000_000
+    HOLD_VALUE_STEP = 100_000
+    HOLD_VALUE_STEPS = (HOLD_VALUE_MAX - HOLD_VALUE_MIN) / HOLD_VALUE_STEP
 
     # [코드, 이름, 기준가(원)]. 전부 가상이다.
     EQUITIES = [
@@ -124,8 +131,14 @@ module Securities
     def draw_holdings(rng)
       cash = CASH_MIN + (rng.rand(0..((CASH_MAX - CASH_MIN) / CASH_STEP)) * CASH_STEP)
       codes = EQUITIES.map(&:first)
+      base_prices = EQUITIES.to_h { |code, _, price| [code, price] }
       picked = codes.sample(rng.rand(0..MAX_HOLDINGS), random: rng).sort_by { |c| codes.index(c) }
-      { cash: cash, stocks: picked.map { |code| [code, rng.rand(1..MAX_HOLD_QTY)] } }
+      { cash: cash, stocks: picked.map { |code| [code, hold_qty(rng.rand(0..HOLD_VALUE_STEPS), base_prices.fetch(code))] } }
+    end
+
+    # 금액 ÷ 기준가의 몫, 최소 1주.
+    def hold_qty(step_index, base_price)
+      [(HOLD_VALUE_MIN + (step_index * HOLD_VALUE_STEP)) / base_price, 1].max
     end
 
     # [계좌코드, 자산코드, 수량] 로 펼친다(현금 먼저, 종목은 EQUITIES 순서).
