@@ -8,6 +8,7 @@ Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 
 # 변이 검사: stale 부등호 <= → T2 15초 경계 · 15 → 1500 → T2 장중 · reconcile rescue → T3 reconcile 예외 · 직전 영업일 → T2 08:10 · 열린 상태 목록 → T3 board · ETag 에 server_time → T5.
 class SecStreetControllerTest < ActionDispatch::IntegrationTest
   include SecStreetHelpers
+  include ActiveSupport::Testing::TimeHelpers
 
   KEYS = %w[server_time clock board today orders last_seq executions last_exec settlements reconcile].freeze
 
@@ -270,13 +271,15 @@ class SecStreetControllerTest < ActionDispatch::IntegrationTest
     open_auctions
     write_state(cursor: market_now)
     fill = ->(count) { count.times { put_order(@a1, "buy", "VELEC", 72_000, 1, at(10, 1, 30)) } }
+    miss = hit30 = hit300 = body = nil
 
-    fill.call(30)
-    miss = count_queries { street }
-    hit30 = count_queries { street }
-    fill.call(270)
-    body = nil
-    hit300 = count_queries { body = street }
+    freeze_time do # 대사 캐시 TTL(10초)이 서버 부하의 실시간에 걸리지 않게 시각을 세운다
+      fill.call(30)
+      miss = count_queries { street }
+      hit30 = count_queries { street }
+      fill.call(270)
+      hit300 = count_queries { body = street }
+    end
 
     assert_equal 300, body["orders"].size
     assert_equal hit30, hit300
