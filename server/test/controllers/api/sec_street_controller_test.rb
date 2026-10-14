@@ -1,16 +1,15 @@
 require "test_helper"
 require "tmpdir"
+require_relative "../../support/sec_street_helpers"
 
 Securities::Record.name # securities 풀이 트랜잭션 픽스처 설정보다 먼저 만들어지게 상수를 미리 로드한다
 
 # 거리 읽기 API. 시계는 주입한다: 실시간 = STARTED + k 초, 가상 = 11-02 08:30 + 12k 초(장중). k = 465 → 가상 10:03:00.
 # 변이 검사: stale 부등호 → T2 60초 경계 · 직전 영업일 → T2 08:10 · 열린 상태 목록 → T3 board · ETag 에 server_time → T5.
 class SecStreetControllerTest < ActionDispatch::IntegrationTest
-  KST = ActiveSupport::TimeZone["Asia/Seoul"]
-  STARTED = Time.utc(2026, 10, 1, 0, 0, 0)
-  DAY = Date.new(2026, 11, 2)
+  include SecStreetHelpers
+
   KEYS = %w[server_time clock board today orders last_seq executions last_exec settlements reconcile].freeze
-  API = "/api/sec/street".freeze
 
   setup do
     @dir = Dir.mktmpdir("sec_street")
@@ -26,79 +25,6 @@ class SecStreetControllerTest < ActionDispatch::IntegrationTest
   teardown do
     @saved.each { |k, v| Api::SecStreetController.public_send(:"#{k}=", v) }
     FileUtils.remove_entry(@dir)
-  end
-
-  def write_state(cursor: nil)
-    state = { "started_at" => STARTED.iso8601(9) }
-    state.merge!("cursor" => cursor.iso8601(9), "cursor_r" => cursor.to_r.to_s) if cursor
-    File.write(Api::SecStreetController.state_path, JSON.generate(state))
-  end
-
-  def market_now
-    Securities::Clock.market_time(@street_now, started_at: STARTED, first_day: DAY)
-  end
-
-  def street(params = {}, headers = {})
-    get API, params: params, headers: headers
-    response.parsed_body
-  end
-
-  def at(hour, min, sec = 0)
-    KST.local(2026, 11, 2, hour, min, sec)
-  end
-
-  def clock_at(real)
-    @street_now = real
-    street["clock"].values_at("market_time", "phase", "trade_date")
-  end
-
-  # 투자자 둘(VINV-001 = 집 0, VINV-006 = 집 1) · 5종목.
-  def build_market(cash: 10_000_000)
-    @cash = Securities::Asset.create!(code: "VKRW", name: "가상원화", kind: "cash")
-    @eq = Securities::Seed::EQUITIES.to_h do |code, name, price|
-      [code, Securities::Asset.create!(code: code, name: name, kind: "equity", base_price: price)]
-    end
-    @a1 = Securities::Account.create!(code: "VINV-001", name: "가상투자자 001", kind: "investor")
-    @a6 = Securities::Account.create!(code: "VINV-006", name: "가상투자자 006", kind: "investor")
-    Securities::Position.create!(account: @a1, asset: @cash, qty: cash)
-    { "VELEC" => 12, "VBIO" => 5 }.each { |code, qty| Securities::Position.create!(account: @a6, asset: @eq[code], qty: qty) }
-    @n = 0
-  end
-
-  def put_order(account, side, code, price, qty, time)
-    Securities::PlaceOrder.call(account: account, asset: @eq.fetch(code), side: side, order_type: "limit", qty: qty,
-                                price: price, client_key: "t-#{@n += 1}", at: time)
-  end
-
-  def open_auctions
-    %w[VELEC VBIO].each { |c| Securities::Auction.open!(asset: @eq[c], trade_date: DAY, at: at(9, 0, 20), single_price: true) }
-  end
-
-  # 손계산 대상. 주문 12(거절 4 · 취소 1) · 체결 3(시가 단일가 1 + 접속 2).
-  def build_day
-    build_market
-    put_order(@a1, "buy", "VELEC", 72_000, 1, at(8, 10)) # closed
-    put_order(@a1, "buy", "VELEC", 72_000, 1, at(8, 45)) # 장전 접수 → 시가 단일가 72,000 × 1
-    put_order(@a6, "sell", "VELEC", 72_000, 1, at(8, 46))
-    open_auctions
-    put_order(@a1, "buy", "VELEC", 72_000, 10, at(10, 0)) # 아래 4 체결 → 6 남음
-    put_order(@a1, "buy", "VBIO", 258_000, 2, at(10, 0, 10))
-    put_order(@a6, "sell", "VELEC", 72_000, 4, at(10, 1, 10))
-    put_order(@a6, "sell", "VBIO", 255_000, 2, at(10, 1, 20)) # 먼저 있던 매수가 258,000 × 2
-    put_order(@a6, "sell", "VELEC", 73_000, 5, at(10, 1, 30)) # 안 맞고 남는다
-    @cancelled = put_order(@a1, "buy", "VELEC", 71_000, 3, at(10, 1, 40))
-    put_order(@a1, "buy", "VELEC", 72_050, 1, at(10, 1, 45)) # tick
-    put_order(@a1, "buy", "VELEC", 94_000, 1, at(10, 1, 50)) # price_limit(상한 93,600)
-    put_order(@a1, "buy", "VELEC", 72_000, 1_000, at(10, 1, 55)) # insufficient
-    Securities::CancelOrder.call(order: @cancelled, at: at(10, 2, 0))
-    write_state(cursor: market_now)
-  end
-
-  def count_queries
-    count = 0
-    counter = ->(*, payload) { count += 1 unless %w[SCHEMA TRANSACTION].include?(payload[:name]) || payload[:cached] }
-    ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { yield }
-    count
   end
 
   test "T1 비로그인은 401 JSON, 로그인하면 200 이고 최상위 키가 이름 그대로 다 있다" do
@@ -179,6 +105,33 @@ class SecStreetControllerTest < ActionDispatch::IntegrationTest
     window = street # 10:01:00 이후: 주문 7 · 체결 2
     assert_equal [7, 2], [window["orders"].size, window["executions"].size]
     assert_equal [Securities::Order.maximum(:seq), Securities::Execution.maximum(:id)], window.values_at("last_seq", "last_exec")
+  end
+
+  test "T3 house 경계: VINV-005 는 0, VINV-010 은 1 이다(번호 / 5 면 1 · 2)" do
+    build_market
+    open_auctions
+    { "VINV-005" => 1, "VINV-010" => 2 }.each do |code, qty|
+      account = Securities::Account.create!(code: code, name: "가상투자자 #{code[-3..]}", kind: "investor")
+      Securities::Position.create!(account: account, asset: @cash, qty: 10_000_000)
+      put_order(account, "buy", "VBIO", 255_000, qty, at(10, 0))
+    end
+    write_state(cursor: market_now)
+    houses = street(after_seq: "0", after_exec: "0")["orders"].to_h { |o| [o["qty"], o["house"]] }
+
+    assert_equal({ 1 => 0, 2 => 1 }, houses)
+  end
+
+  test "T3 같은 종목 같은 날 체결가가 달라도 last_price · change 는 나중 체결이다(72,000 → 72,100)" do
+    build_market
+    open_auctions
+    put_order(@a1, "buy", "VELEC", 72_000, 1, at(10, 0))
+    put_order(@a6, "sell", "VELEC", 72_000, 1, at(10, 0, 10))
+    put_order(@a1, "buy", "VELEC", 72_100, 1, at(10, 1))
+    put_order(@a6, "sell", "VELEC", 72_100, 1, at(10, 1, 10))
+    write_state(cursor: market_now)
+    velec = street["board"].first
+
+    assert_equal [72_000, 72_100, 100, 2, 144_100], velec.values_at("base_price", "last_price", "change", "volume", "value")
   end
 
   test "T3 settlements 최근 3건(날짜 내림) · 원장 행 수 · reconcile 어긋남 수" do
