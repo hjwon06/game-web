@@ -27,6 +27,8 @@ Rails.application.routes.draw do
   get "campus", to: "home#campus"
   get "campus3d", to: "home#campus3d"
 
+  draw :securities
+
   get "v/:ver/*path", to: "static#show", format: false
 
   root "home#show"

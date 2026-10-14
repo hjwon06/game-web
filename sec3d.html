@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="only light">
+<title>증권 거리 3D</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100dvh;height:100%;overflow:hidden;background:#EEF1F4;font-family:Pretendard,sans-serif;color:#1A1A2E;word-break:keep-all}
+canvas#s3d{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#ui{position:fixed;inset:0;pointer-events:none}
+#ui>*{pointer-events:auto}
+</style>
+</head>
+<body>
+<canvas id="s3d"></canvas>
+<div id="ui"></div>
+<script type="module" src="src/s3d/main.js"></script>
+</body>
+</html>
