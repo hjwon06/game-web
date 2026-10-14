@@ -159,17 +159,20 @@ class SecStreetControllerTest < ActionDispatch::IntegrationTest
     assert_equal({ 1 => 0, 2 => 1 }, houses)
   end
 
-  test "T3 같은 종목 같은 날 체결가가 달라도 last_price · change 는 나중 체결이다(72,000 → 72,100)" do
+  test "T3 같은 종목 같은 날 last_price · change 는 가격이 아니라 나중 체결이다(72,300 → 71,900 → 72,100)" do
+    # 마지막 값이 최고가도 최저가도 첫 체결도 아니어야 MAX · MIN · ASC 변이가 전부 실패한다
     build_market
     open_auctions
-    put_order(@a1, "buy", "VELEC", 72_000, 1, at(10, 0))
-    put_order(@a6, "sell", "VELEC", 72_000, 1, at(10, 0, 10))
-    put_order(@a1, "buy", "VELEC", 72_100, 1, at(10, 1))
-    put_order(@a6, "sell", "VELEC", 72_100, 1, at(10, 1, 10))
+    put_order(@a1, "buy", "VELEC", 72_300, 1, at(10, 0))
+    put_order(@a6, "sell", "VELEC", 72_300, 1, at(10, 0, 10))
+    put_order(@a1, "buy", "VELEC", 71_900, 1, at(10, 1))
+    put_order(@a6, "sell", "VELEC", 71_900, 1, at(10, 1, 10))
+    put_order(@a1, "buy", "VELEC", 72_100, 1, at(10, 2))
+    put_order(@a6, "sell", "VELEC", 72_100, 1, at(10, 2, 10))
     write_state(cursor: market_now)
     velec = street["board"].first
 
-    assert_equal [72_000, 72_100, 100, 2, 144_100], velec.values_at("base_price", "last_price", "change", "volume", "value")
+    assert_equal [72_000, 72_100, 100, 3, 216_300], velec.values_at("base_price", "last_price", "change", "volume", "value")
   end
 
   test "T3 settlements 최근 3건(날짜 내림) · 원장 행 수 · reconcile 어긋남 수" do

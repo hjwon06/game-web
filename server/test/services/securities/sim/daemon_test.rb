@@ -202,7 +202,8 @@ class Securities::Sim::DaemonTest < ActiveSupport::TestCase
     Securities::Seed.run!(seed: Securities::Sim::Config::SEED)
     sim = daemon(Securities::Sim::Runner.new(seed: Securities::Sim::Config::SEED))
     pools = []
-    callback = ->(*, payload) { pools << payload[:connection]&.pool }
+    mine = Thread.current # 구독은 프로세스 전체라 다른 스레드가 남긴 SQL 은 거른다
+    callback = ->(*, payload) { pools << payload[:connection]&.pool if Thread.current.equal?(mine) }
 
     result = ActiveSupport::Notifications.subscribed(callback, "sql.active_record") { sim.tick(STARTED + 60) }
 
