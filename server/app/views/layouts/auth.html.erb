@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title><%= content_for(:title) || "1공장" %> — 1공장</title>
+  <title><%= content_for(:title) || (ENV["SEC_STREET"].present? ? "증권 거리" : "1공장") %> — <%= ENV["SEC_STREET"].present? ? "증권 거리" : "1공장" %></title>
   <%= csrf_meta_tags %>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -76,6 +76,10 @@
 <body>
   <div class="auth">
     <section class="auth-intro" aria-label="소개">
+<% if ENV["SEC_STREET"].present? %>
+      <h1 class="auth-name">증권 거리</h1>
+      <p class="auth-desc">가상 종목 5개의 주문 · 체결 · 결제를 시뮬레이터 규칙으로 돌리는 가상 시장입니다</p>
+<% else %>
       <h1 class="auth-name">1공장</h1>
       <p class="auth-desc">기계 12대의 가동·정지·고장과 생산량을 한 화면에서 보고 조작하는 공장 관제 화면입니다.</p>
       <div class="tiles" aria-hidden="true">
@@ -84,6 +88,7 @@
         <i class="tile" style="--tc:3;--tr:8"></i>
         <i class="tile" style="--tc:3;--tr:9"></i>
       </div>
+<% end %>
     </section>
     <main class="auth-main">
       <%= yield %>
